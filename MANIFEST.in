@@ -1,0 +1,29 @@
+# Include the README and license files
+include README.md
+include LICENSE
+
+# Include the requirements and changelog files
+include requirements.txt
+include CHANGELOG.md
+
+# Include the entire docs folder and its contents
+graft docs
+
+# Include all files under the src directory (if using src layout)
+graft src
+
+# Include tests folder and all its contents
+graft tests
+
+# Include configuration files
+include setup.cfg
+include pyproject.toml
+
+# Exclude Python bytecode and cache files anywhere
+global-exclude *.py[cod]
+global-exclude __pycache__
+
+# Exclude editor and system files
+global-exclude .DS_Store
+global-exclude *.swp
+global-exclude *.bak
