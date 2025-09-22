@@ -4,15 +4,19 @@ First off, thank you for considering contributing! 🎉
 All types of contributions are welcome and appreciated, whether it's reporting bugs, suggesting features, improving documentation, or submitting code.
 
 ## Table of Contents
-- [Code of Conduct](#code-of-conduct)
-- [How to Contribute](#how-to-contribute)
-- [Reporting Bugs](#reporting-bugs)
-- [Suggesting Enhancements](#suggesting-enhancements)
-- [Your First Code Contribution](#your-first-code-contribution)
-- [Style Guidelines](#style-guidelines)
-- [Commit Messages](#commit-messages)
-- [Getting Help](#getting-help)
-- [Joining the Project Team](#joining-the-project-team)
+
+- [Contributing to This Project](#contributing-to-this-project)
+  - [Table of Contents](#table-of-contents)
+  - [Code of Conduct](#code-of-conduct)
+  - [How to Contribute](#how-to-contribute)
+    - [Reporting Bugs](#reporting-bugs)
+    - [Suggesting Enhancements](#suggesting-enhancements)
+    - [Submitting Code Changes (Pull Requests)](#submitting-code-changes-pull-requests)
+  - [Your First Code Contribution](#your-first-code-contribution)
+  - [Style Guidelines](#style-guidelines)
+  - [Commit Messages](#commit-messages)
+  - [Getting Help](#getting-help)
+  - [Joining the Project Team](#joining-the-project-team)
 
 ---
 
@@ -26,6 +30,7 @@ By participating, you are expected to uphold this code.
 ## How to Contribute
 
 ### Reporting Bugs
+
 - Search existing issues to see if the problem has already been reported.
 - Provide a clear and descriptive title.
 - Include a detailed description of the problem, including steps to reproduce it.
@@ -33,11 +38,13 @@ By participating, you are expected to uphold this code.
 - Provide any relevant logs or error messages.
 
 ### Suggesting Enhancements
+
 - Check if the enhancement has been suggested before.
 - Use a clear title and detailed description including the use case and benefits.
 - Link related issues or pull requests if possible.
 
 ### Submitting Code Changes (Pull Requests)
+
 1. Fork the repository and clone your fork locally.
 2. Create a new branch for your change (`git checkout -b feature/my-feature`).
 3. Make your changes following the coding style guidelines.
@@ -51,7 +58,8 @@ By participating, you are expected to uphold this code.
 
 ## Your First Code Contribution
 
-If this is your first code contribution, welcome! Here are some tips:  
+If this is your first code contribution, welcome! Here are some tips:
+
 - Start with small, manageable issues like typo fixes or documentation improvements.
 - Don't hesitate to ask questions on how to get started or about the project structure.
 
@@ -78,7 +86,8 @@ If this is your first code contribution, welcome! Here are some tips:
 
 ## Getting Help
 
-If you have questions or need assistance:  
+If you have questions or need assistance:
+
 - Check existing issues or discussions.
 - Use the project's communication channels (e.g., Slack, Discord, mailing list) if available.
 - Open an issue for support with a clear description of your problem.
