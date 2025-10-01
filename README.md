@@ -19,9 +19,6 @@
 *** https://www.markdownguide.org/basic-syntax/#reference-style-links
 -->
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/carloslihu/spbnclassify/ci.yml?branch=main)
-![PyPI Version](https://img.shields.io/pypi/v/spbnclassify)
-![License](https://img.shields.io/github/license/carloslihu/spbnclassify)
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
@@ -39,7 +36,8 @@
 <h3 align="center">spbnclassify</h3>
 
   <p align="center">
-    project_description
+    A powerful Python package built on top of [pybnesian](https://github.com/carloslihu/PyBNesian) that provides comprehensive tools for learning and performing inference with Semiparametric Bayesian Network Classifiers.
+    Designed for researchers and practitioners in machine learning, spbnclassify enables flexible probabilistic classification by combining the interpretability of Bayesian networks with the modeling power of parametric and nonparametric variables.
     <br />
     <a href="https://github.com/carloslihu/spbnclassify"><strong>Explore the docs »</strong></a>
     <br />
@@ -74,7 +72,7 @@
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
+    <!-- <li><a href="#acknowledgments">Acknowledgments</a></li> -->
   </ol>
 </details>
 
@@ -182,11 +180,11 @@ Don't forget to give the project a star! Thanks again!
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### Top contributors:
+<!-- ### Top contributors:
 
 <a href="https://github.com/carloslihu/spbnclassify/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=carloslihu/spbnclassify" alt="contrib.rocks image" />
-</a>
+</a> -->
 
 <!-- LICENSE -->
 
@@ -201,17 +199,18 @@ Distributed under the MIT License. See `LICENSE.txt` for more information.
 ## Contact
 
 Carlos Li Hu - [GitHub profile](https://github.com/carloslihu) - carloslihu96@gmail.com
+
 Project Link: [https://github.com/carloslihu/spbnclassify](https://github.com/carloslihu/spbnclassify)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- ACKNOWLEDGMENTS -->
 
-## Acknowledgments
+<!-- ## Acknowledgments
 
 - []()
 - []()
-- []()
+- []() -->
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
