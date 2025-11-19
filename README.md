@@ -26,17 +26,17 @@
 [![MIT License][license-shield]][license-url]
 [![LinkedIn][linkedin-shield]][linkedin-url]
 
-<!-- PROJECT LOGO -->
-<br />
+<!-- TODO: PROJECT LOGO -->
+<!-- <br />
 <div align="center">
   <a href="https://github.com/carloslihu/spbnclassify">
     <img src="images/logo.png" alt="Logo" width="80" height="80">
-  </a>
+  </a> -->
 
 <h3 align="center">spbnclassify</h3>
 
   <p align="center">
-    A powerful Python package built on top of [pybnesian](https://github.com/carloslihu/PyBNesian) that provides comprehensive tools for learning and performing inference with Semiparametric Bayesian Network Classifiers.
+    A powerful Python package built on top of <a href="https://github.com/carloslihu/PyBNesian"><strong>PyBNesian</strong></a> that provides comprehensive tools for learning and performing inference with Semiparametric Bayesian Network Classifiers.
     Designed for researchers and practitioners in machine learning, spbnclassify enables flexible probabilistic classification by combining the interpretability of Bayesian networks with the modeling power of parametric and nonparametric variables.
     <br />
     <a href="https://github.com/carloslihu/spbnclassify"><strong>Explore the docs »</strong></a>
@@ -80,7 +80,7 @@
 
 ## About The Project
 
-[![Product Name Screen Shot][product-screenshot]](https://example.com)
+<!-- [![Product Name Screen Shot][product-screenshot]](https://example.com) -->
 
 <!-- Here's a blank template to get started. To avoid retyping too much info, do a search and replace with your text editor for the following: `carloslihu`, `spbnclassify`, `twitter_handle`, `carlos-li-hu`, `gmail`, `carloslihu96`, `spbnclassify`, `project_description`, `MIT License` -->
 
@@ -110,43 +110,33 @@ To get a local copy up and running follow these simple example steps.
 
 ### Prerequisites
 
-This is an example of how to list things you need to use the software and how to install them.
+<!-- This is an example of how to list things you need to use the software and how to install them.
 
-- npm
+- pip
   ```sh
-  npm install npm@latest -g
-  ```
+  pip install spbnclassify
+  ``` -->
 
 ### Installation
 
-1. Get a free API Key at [https://example.com](https://example.com)
-2. Clone the repo
+1. Clone the repo
    ```sh
    git clone https://github.com/carloslihu/spbnclassify.git
    ```
-3. Install NPM packages
+2. Install NPM packages
    ```sh
-   npm install
-   ```
-4. Enter your API in `config.js`
-   ```js
-   const API_KEY = "ENTER YOUR API";
-   ```
-5. Change git remote url to avoid accidental pushes to base project
-   ```sh
-   git remote set-url origin carloslihu/spbnclassify
-   git remote -v # confirm the changes
+   pip install -r requirements.txt
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-<!-- USAGE EXAMPLES -->
+<!-- TODO: USAGE EXAMPLES -->
 
-## Usage
+<!-- ## Usage
 
 Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
 
-_For more examples, please refer to the [Documentation](https://example.com)_
+_For more examples, please refer to the [Documentation](https://example.com)_ -->
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -154,10 +144,9 @@ _For more examples, please refer to the [Documentation](https://example.com)_
 
 ## Roadmap
 
-- [ ] Feature 1
-- [ ] Feature 2
-- [ ] Feature 3
-  - [ ] Nested Feature
+- [ ] Gaussian Bayesian Network Classifiers
+- [ ] KDE Bayesian Network Classifiers
+- [ ] Semiparametric Bayesian Network Classifiers
 
 See the [open issues](https://github.com/carloslihu/spbnclassify/issues) for a full list of proposed features (and known issues).
 
