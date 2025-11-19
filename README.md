@@ -83,6 +83,9 @@
 <!-- [![Product Name Screen Shot][product-screenshot]](https://example.com) -->
 
 <!-- Here's a blank template to get started. To avoid retyping too much info, do a search and replace with your text editor for the following: `carloslihu`, `spbnclassify`, `twitter_handle`, `carlos-li-hu`, `gmail`, `carloslihu96`, `spbnclassify`, `project_description`, `MIT License` -->
+The Semiparametric Bayesian Network Classifier family is a novel framework combining parametric and nonparametric components to achieve an optimal balance between classification performance and computational efficiency.
+
+A research article describing the methodology and experimental results is currently under review. 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -144,9 +147,9 @@ _For more examples, please refer to the [Documentation](https://example.com)_ --
 
 ## Roadmap
 
-- [ ] Gaussian Bayesian Network Classifiers
-- [ ] KDE Bayesian Network Classifiers
-- [ ] Semiparametric Bayesian Network Classifiers
+- [x] Gaussian Bayesian Network Classifiers
+- [x] KDE Bayesian Network Classifiers
+- [x] Semiparametric Bayesian Network Classifiers
 
 See the [open issues](https://github.com/carloslihu/spbnclassify/issues) for a full list of proposed features (and known issues).
 
