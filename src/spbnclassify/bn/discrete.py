@@ -7,7 +7,6 @@ import pyagrum.causal as csl
 import pyagrum.lib.explain as expl
 import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
-import pyagrum.lib.shapley as shapley
 import pybnesian as pbn
 import pydot
 from matplotlib import pyplot as plt
@@ -162,7 +161,7 @@ class DiscreteBayesianNetwork(
         target: str,
         plot_file_path: Path | None = None,
         graph_file_path: Path | None = None,
-    ) -> tuple[dict, pydot.Dot]:
+    ) -> dict[str, float]:
         """
         Computes conditional SHAP (SHapley Additive exPlanations) values for a given target variable using a graphical model,
         generates visualizations of SHAP values and feature importances, and optionally saves the plots and a SHAP value graph to files.
@@ -317,11 +316,11 @@ class DiscreteBayesianNetwork(
         # RFE: Calculate it only for the Markov Blanket of the target
         gumshap = expl.ShapValues(self.graphic, target)
         node_shapvalue_dict = conditional(data, gumshap, plot_file_path)
+        # BUG: shapley.getShapValues not found in pyagrum.lib.shapley
+        # graph = shapley.getShapValues(self.graphic, node_shapvalue_dict)
+        # graph.write_pdf(graph_file_path)
 
-        graph = shapley.getShapValues(self.graphic, node_shapvalue_dict)
-        graph.write_pdf(graph_file_path)
-
-        return node_shapvalue_dict, graph
+        return node_shapvalue_dict
 
     def entropy_graph(self, graph_file_path: Path | None = None) -> pydot.Dot:
         """
