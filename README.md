@@ -84,8 +84,11 @@
 
 <!-- Here's a blank template to get started. To avoid retyping too much info, do a search and replace with your text editor for the following: `carloslihu`, `spbnclassify`, `twitter_handle`, `carlos-li-hu`, `gmail`, `carloslihu96`, `spbnclassify`, `project_description`, `MIT License` -->
 The Semiparametric Bayesian Network Classifier family is a novel framework combining parametric and nonparametric components to achieve an optimal balance between classification performance and computational efficiency.
+<p align="center">
+  <img src="images/SP-BNC.png" alt="SP-BNC diagram">
+</p>
 
-A research article describing the methodology and experimental results is currently under review. 
+A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found in [`this folder`](results/spbn-article).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
