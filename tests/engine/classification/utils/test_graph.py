@@ -9,7 +9,7 @@ from helpers.data import (
     generate_normal_data,
     generate_normal_data_classification,
 )
-from src.spbnclassify.utils import (
+from src.utils import (
     ConditionalMutualInformationGraph,
     ConditionalMutualInformationMatrix,
     Graph,

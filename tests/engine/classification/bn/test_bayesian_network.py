@@ -15,7 +15,7 @@ from helpers.data import (
     generate_non_normal_data,
     generate_normal_data,
 )
-from src.spbnclassify.bn import (
+from src.bn import (
     BayesianNetwork,
     DiscreteBayesianNetwork,
     GaussianBayesianNetwork,
