@@ -4,7 +4,8 @@ import numpy as np
 import pyarrow as pa
 import pybnesian as pbn
 import scipy.special
-from src.utils.constants import TRUE_CLASS_LABEL
+
+from ..utils.constants import TRUE_CLASS_LABEL
 
 # RFE: from tests.helpers.data import TRUE_CLASS_LABEL
 ISS_PRIOR_DISCRETE = 3  # Dirichlet prior for discrete CPDs

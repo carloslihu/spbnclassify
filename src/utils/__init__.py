@@ -7,6 +7,8 @@ from .constants import (
     PROB_DISCRETE_CONTINUOUS,
     PROB_DISCRETE_DISCRETE,
     PROB_GAUSSIAN,
+    TRUE_ANOMALY_LABEL,
+    TRUE_CLASS_LABEL,
 )
 from .generic import dict2html, extract_class_name, get_boxplot_threshold, safe_exp
 from .graph import (
@@ -25,6 +27,8 @@ __all__ = [
     "PROB_DISCRETE_CONTINUOUS",
     "PROB_DISCRETE_DISCRETE",
     "PROB_GAUSSIAN",
+    "TRUE_ANOMALY_LABEL",
+    "TRUE_CLASS_LABEL",
     "dict2html",
     "extract_class_name",
     "get_boxplot_threshold",

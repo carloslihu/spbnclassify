@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
-from src.utils.constants import TRUE_CLASS_LABEL
 
 from ..bn import (
     GaussianBayesianNetwork,
@@ -15,6 +14,7 @@ from ..utils import (
     PROB_DISCRETE_DISCRETE,
     PROB_GAUSSIAN,
 )
+from ..utils.constants import TRUE_CLASS_LABEL
 from .base import BaseBayesianNetworkClassifier
 from .probabilistic_model import FixedCLG, FixedDiscreteFactor, NormalMixtureCPD
 

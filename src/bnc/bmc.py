@@ -2,8 +2,6 @@ import numpy as np
 import pandas as pd
 import pybnesian as pbn
 from scipy.spatial.distance import jensenshannon
-from src.utils import safe_exp
-from src.utils.constants import TRUE_CLASS_LABEL
 
 from ..bn import (
     BayesianNetwork,
@@ -12,6 +10,8 @@ from ..bn import (
     SemiParametricBayesianNetwork,
     gaussian_jensen_shannon_divergence,
 )
+from ..utils import safe_exp
+from ..utils.constants import TRUE_CLASS_LABEL
 from .base import BaseMultiBayesianNetworkClassifier
 
 

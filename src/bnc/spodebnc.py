@@ -1,7 +1,7 @@
 import pandas as pd
 import pybnesian as pbn
-from src.utils.constants import TRUE_CLASS_LABEL
 
+from ..utils.constants import TRUE_CLASS_LABEL
 from .banc import (
     BaseBayesianNetworkClassifier,
     GaussianBayesianNetworkAugmentedNaiveBayes,

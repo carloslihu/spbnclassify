@@ -24,5 +24,5 @@ NODE_TYPE_COLOR_MAP = {
     pbn.CKDEType(): 0.2,  # BLUE
 }
 
-TRUE_CLASS_LABEL = "attack_label"
-TRUE_ANOMALY_LABEL = "binary_attack_label"
+TRUE_CLASS_LABEL = "class_label"
+TRUE_ANOMALY_LABEL = "anomaly_label"

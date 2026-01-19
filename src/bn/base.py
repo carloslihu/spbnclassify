@@ -10,10 +10,10 @@ import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 from scipy.optimize import differential_evolution
-from src.utils.constants import TRUE_ANOMALY_LABEL
-from src.utils.feature_selection import get_zero_variance_variables
 
 from ..utils import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP
+from ..utils.constants import TRUE_ANOMALY_LABEL
+from ..utils.feature_selection import get_zero_variance_variables
 
 
 class BayesianNetworkInterface:

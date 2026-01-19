@@ -1,7 +1,7 @@
 import pandas as pd
 import pybnesian as pbn
-from src.utils.constants import TRUE_ANOMALY_LABEL
 
+from ..utils.constants import TRUE_ANOMALY_LABEL
 from .base import BayesianNetwork
 
 
