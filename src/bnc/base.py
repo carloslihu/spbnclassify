@@ -10,8 +10,8 @@ import pyagrum as gum
 import pyagrum.lib.bn_vs_bn as gcm
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
-from src.spbnclassify.utils import dict2html, extract_class_name, safe_exp
-from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
+from src.utils import dict2html, extract_class_name, safe_exp
+from src.utils.constants import TRUE_CLASS_LABEL
 
 from ..bn import (
     BayesianNetwork,

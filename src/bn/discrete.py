@@ -10,7 +10,7 @@ import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 import pydot
 from matplotlib import pyplot as plt
-from src.spbnclassify.utils.constants import TRUE_ANOMALY_LABEL
+from src.utils.constants import TRUE_ANOMALY_LABEL
 
 from .base import BayesianNetwork
 from .utils import convert_arcs_to_names

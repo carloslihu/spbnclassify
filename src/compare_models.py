@@ -27,7 +27,7 @@ from rutile_ai.pipeline.evaluator.model_comparison import (
     plot_critical_difference_diagram,
     read_and_combine_experiment_results,
 )
-from src.spbnclassify.bn import bn_to_acronym
+from src.bn import bn_to_acronym
 
 EXPERIMENT_NAME = f"bnc"
 
