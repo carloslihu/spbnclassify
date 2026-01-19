@@ -145,7 +145,7 @@ class GaussianBayesianNetwork(
 
         # Initializes the mean and covariance matrices with ones for further multiplications. They are row vectors
         joint_mean = pd.DataFrame(
-            1, index=np.arange(1), columns=(["parent_0"] + self.nodes())
+            1, index=np.arange(0, 1), columns=(["parent_0"] + self.nodes())
         )
         joint_cov = pd.DataFrame(
             1, index=self.nodes(), columns=self.nodes(), dtype=float

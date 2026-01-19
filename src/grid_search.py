@@ -17,20 +17,17 @@ sys.path.append(str(RUTILE_AI_PATH))
 
 
 from rutile_ai import AnomalyPipeline, ClassifierPipeline, DataHandler
-from rutile_ai.engine.classification.bnc import (
-    SemiParametricBayesianNetworkAugmentedNaiveBayes,
-)
-from rutile_ai.engine.data.synthetic import DATASET_PATH, GROUND_TRUTH_MODELS_PATH
 from rutile_ai.module import Module
-from rutile_ai.utils import parse_gridsearch_arguments
+from rutile_ai.utils import GridSearchArgs
 
 # Disable mlflow logging
 logging.getLogger("mlflow").setLevel(logging.WARNING)
 # endregion Imports
 
+
 if __name__ == "__main__":
     # region Initialization
-    args = parse_gridsearch_arguments()
+    args = GridSearchArgs.parse()
     cross_validation_mode = args.n_splits > 0
     config_path = GRID_SEARCH_CONFIG_PATH / args.experiment_name
     grid_dict = json.load(
@@ -46,13 +43,19 @@ if __name__ == "__main__":
         )
     )
     grid = Module.flatten_dict(grid_dict)
+    grid_combinations = [
+        dict(zip(grid.keys(), combination))
+        for combination in itertools.product(*grid.values())
+    ]
+
     if args.classification:
         PipelineClass = ClassifierPipeline
     else:
         PipelineClass = AnomalyPipeline
-
-    for dataset_name in args.dataset_name:
+    # endregion Initialization
+    for dataset_name in args.dataset_names:
         try:
+            # region MLFlow and experiment setup
             print(f"RUNNING GRID SEARCH FOR {dataset_name}")
             experiment_path = Path(
                 RUTILE_AI_PATH
@@ -64,11 +67,9 @@ if __name__ == "__main__":
 
             mlflow.set_tracking_uri(str(os.getenv("MLFLOW_TRACKING_URI")))
             mlflow.set_experiment(full_experiment_identifier)
-            # endregion Initialization
+            # endregion MLFlow and experiment setup
 
             # region DataHandler
-            true_model = None
-            train_df = pd.DataFrame()
             match args.data_source:
                 case "local":
                     data_handler = DataHandler.from_path(dataset_name)
@@ -78,65 +79,31 @@ if __name__ == "__main__":
                         cross_validation_mode=cross_validation_mode,
                         max_train_data_size=args.max_train_data_size,
                     )
-                case "synthetic":
-                    true_model = SemiParametricBayesianNetworkAugmentedNaiveBayes.load(
-                        GROUND_TRUTH_MODELS_PATH / f"model_0.pkl"
-                    )
-
-                    train_path = DATASET_PATH / f"{dataset_name}.csv"
-                    test_path = DATASET_PATH / f"{dataset_name}_test.csv"
-                    # Infer dtypes from the train file
-
-                    sample_df = pd.read_csv(train_path, nrows=10)
-                    # Convert object types to category and float/int to float32
-                    dtype_map = {}
-                    for col in sample_df.columns:
-                        if sample_df[col].dtype == "object":
-                            dtype_map[col] = "category"
-                        elif pd.api.types.is_float_dtype(
-                            sample_df[col]
-                        ) or pd.api.types.is_integer_dtype(sample_df[col]):
-                            dtype_map[col] = "float32"
-
-                    train_df = pd.read_csv(train_path, dtype=dtype_map)
-                    test_df = pd.read_csv(test_path, dtype=dtype_map)
-                    data_part_dict = {
-                        "classifier_data": train_df,
-                        "test_data_dict": {"test_full": test_df},
-                    }
-                    data_handler = DataHandler(
-                        dataset_name,
-                        data_part_dict=data_part_dict,
-                    )
-
                 case _:
                     raise ValueError(
-                        f"Invalid data source: {args.data_source}. Choose 'synthetic', 'local', or 'public'."
+                        f"Invalid data source: {args.data_source}. Choose'local', or 'public'."
                     )
-
             # endregion DataHandler
 
             # region Grid search
-            keys, values = zip(*grid.items())
-            grid_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
-            experiment_data_dict_list = []
             experiment_start_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
             experiment_file_path = (
                 experiment_path
                 / f"{dataset_name}_experiment_results_{experiment_start_time}.csv"
             )
-            # For each grid point
+            experiment_data_dict_list = []
+
             for config_index, grid_point in enumerate(grid_combinations):
                 print(f"Grid point {config_index+1}/{len(grid_combinations)}")
                 grid_point_name = "_".join(map(str, grid_point.values()))
                 grid_point_path = experiment_path / grid_point_name
-
                 grid_point_path.mkdir(parents=True, exist_ok=True)
 
                 # Save the grid point configuration
                 grid_point_file_path = grid_point_path / "grid_point.json"
                 with open(grid_point_file_path, "w") as f:
                     json.dump(grid_point, f, indent=4)
+
                 # Update the fixed config with the grid point values
                 for nested_key, value in grid_point.items():
                     Module.update_nested_dict(
@@ -144,13 +111,11 @@ if __name__ == "__main__":
                     )
 
                 try:
-                    start_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-
                     # region Pipeline training and testing
+                    start_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
                     run_name = f"{grid_point_name}_{start_time}"
 
                     with mlflow.start_run(run_name=run_name):
-
                         pipeline = PipelineClass(
                             config_dict=fixed_config,
                             module_id=run_name,
@@ -168,7 +133,7 @@ if __name__ == "__main__":
                                 max_workers=args.max_workers,
                             )
                         else:
-                            # TODO: Add mlflow support
+                            # RFE: Add mlflow support
                             for run_index in tqdm(range(args.n_runs)):
                                 pipeline.train(
                                     data_handler=data_handler, should_retrain=True
@@ -180,51 +145,25 @@ if __name__ == "__main__":
                         # region MLFlow logging
                         params = pipeline.get_parameters(reduced_format=True)
                         metrics = pipeline.get_metrics(reduced_format=True)
-                        # TODO: Add in the future
-                        # if (
-                        #     "bayesian_classifier" in pipeline.modules
-                        #     and true_model
-                        #     and isinstance(true_model, BayesianNetwork)
-                        # ):
-                        #     engine_model = pipeline.modules[
-                        #         "bayesian_classifier"
-                        #     ].engine_model
-                        #     metrics["node_type_distance"] = node_type_distance(
-                        #         true_model,
-                        #         engine_model,
-                        #     )
 
-                        #     metrics["hamming_distance"] = hamming_distance(
-                        #         true_model,
-                        #         engine_model,
-                        #     )
-                        #     metrics["structural_hamming_distance"] = (
-                        #         structural_hamming_distance(
-                        #             true_model,
-                        #             pipeline.modules[
-                        #                 "bayesian_classifier"
-                        #             ].engine_model,
-                        #         )
-                        #     )
-                        #     true_log_likelihood = true_model.slogl(
-                        #         data_handler.test_data_dict["test_full"]
-                        #     )
-
-                        #     metrics["diff_log_likelihood"] = (
-                        #         true_log_likelihood - predicted_log_likelihood
-                        #     )
-
-                        params["n_splits"] = args.n_splits
-                        params["n_repeats"] = args.n_runs
-                        # Keep only metrics with keys starting with "cross_validation_avg/" or "cross_validation_std/"
-                        metrics = {
-                            k: v
-                            for k, v in metrics.items()
-                            if k.startswith("cross_validation_avg/")
-                        }
+                        if cross_validation_mode:
+                            params["n_splits"] = args.n_splits
+                            params["n_repeats"] = args.n_runs
+                            metrics = {
+                                k: v
+                                for k, v in metrics.items()
+                                if k.startswith("cross_validation_avg/")
+                                or k.startswith("cross_validation_std/")
+                            }
+                        else:
+                            # Keep all weighted average metrics
+                            metrics = {
+                                k: v for k, v in metrics.items() if "weighted avg/" in k
+                            }
 
                         mlflow.log_params(params)
                         mlflow.log_metrics(metrics)
+
                         image_path_dict = pipeline.get_image_path_dict()
                         for (
                             local_image_path,
@@ -233,6 +172,7 @@ if __name__ == "__main__":
                             remote_path = remote_image_path.parent
                             mlflow.log_artifact(str(local_image_path), str(remote_path))
                         # endregion MLFlow logging
+
                         experiment_data_dict = {
                             "experiment_name": args.experiment_name,
                             "grid_point_name": grid_point_name,
@@ -242,6 +182,7 @@ if __name__ == "__main__":
                         experiment_data_dict.update(metrics)
 
                         experiment_data_dict_list.append(experiment_data_dict)
+
                 except Exception as e:
                     logging.error(f"Error in grid point {grid_point_name}")
                     logging.error(f"Exception: {e}")
@@ -252,9 +193,9 @@ if __name__ == "__main__":
                     experiment_file_path,
                     index=False,
                 )
+
+            print(f"Grid search completed correctly.")
+        # endregion Grid search
         except Exception as e:
             logging.error(f"Error processing dataset {dataset_name}: {e}")
             continue
-
-    # endregion Grid search
-    print(f"Grid search completed.")
