@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import pyagrum as gum
 import pyagrum.causal as csl
-import pyagrum.lib.explain as expl
+import pyagrum.explain as expl
 import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 import pydot
 from matplotlib import pyplot as plt
-from rutile_ai.data_handler import TRUE_ANOMALY_LABEL
+from src.spbnclassify.utils.constants import TRUE_ANOMALY_LABEL
 
 from .base import BayesianNetwork
 from .utils import convert_arcs_to_names

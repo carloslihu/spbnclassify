@@ -23,3 +23,6 @@ NODE_TYPE_COLOR_MAP = {
     pbn.LinearGaussianCPDType(): 0.5,  # YELLOW
     pbn.CKDEType(): 0.2,  # BLUE
 }
+
+TRUE_CLASS_LABEL = "attack_label"
+TRUE_ANOMALY_LABEL = "binary_attack_label"

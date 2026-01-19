@@ -8,11 +8,7 @@ from helpers.data import (
     generate_non_normal_data_classification,
     generate_normal_data_classification,
 )
-
-# TODO: Remove rutile_ai dependency
-from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.bnc import (
-    BaseBayesianNetworkClassifier,
-)
+from src.spbnclassify.bnc import BaseBayesianNetworkClassifier
 
 
 class BaseTestBayesianNetworkClassifier(BaseTestBayesianNetwork):

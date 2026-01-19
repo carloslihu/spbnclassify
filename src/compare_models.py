@@ -17,9 +17,6 @@ CD_DIAGRAMS_RESULT_PATH = RESULT_PATH / "cd_diagrams"
 sys.path.append(str(RUTILE_AI_PATH))
 
 from rutile_ai.data_handler import DATASET_NAME_LIST
-from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.bn import (
-    bn_to_acronym,
-)
 from rutile_ai.pipeline.evaluator.model_comparison import (
     bold_best_cell,
     get_avg_std_metric_matrix,
@@ -30,6 +27,7 @@ from rutile_ai.pipeline.evaluator.model_comparison import (
     plot_critical_difference_diagram,
     read_and_combine_experiment_results,
 )
+from src.spbnclassify.bn import bn_to_acronym
 
 EXPERIMENT_NAME = f"bnc"
 

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 # TODO: Remove rutile_ai dependency
-from rutile_ai.data_handler import TRUE_CLASS_LABEL
+from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
 
 # Constants
 

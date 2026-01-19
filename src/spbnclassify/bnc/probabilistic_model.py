@@ -4,7 +4,7 @@ import numpy as np
 import pyarrow as pa
 import pybnesian as pbn
 import scipy.special
-from rutile_ai.data_handler import TRUE_CLASS_LABEL
+from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
 
 # RFE: from tests.helpers.data import TRUE_CLASS_LABEL
 ISS_PRIOR_DISCRETE = 3  # Dirichlet prior for discrete CPDs

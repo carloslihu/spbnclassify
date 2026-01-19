@@ -1,6 +1,6 @@
 import pandas as pd
 import pybnesian as pbn
-from rutile_ai.data_handler import TRUE_ANOMALY_LABEL
+from src.spbnclassify.utils.constants import TRUE_ANOMALY_LABEL
 
 from .base import BayesianNetwork
 
@@ -42,7 +42,8 @@ class SemiParametricBayesianNetwork(
             arcs (list[tuple[str, str]], optional): list of arcs. Defaults to [].
             node_types (list[tuple[str, pbn.FactorType]], optional): list of node types. Defaults to [].
             search_score (str): Search score to be used for the structure learning. The possible scores ((validate_options.cpp)) are:
-                - "cv-lik" (Cross-Validated likelihood)
+                - "cv-lik" (Cross-Validated likelihoo
+                d)
                 - "holdout-lik" (Hold-out likelihood)
                 - "validated-lik" (Validated likelihood with cross-validation). Defaults to "validated-lik".
             arc_blacklist (list[tuple[str, str]], optional): Arc blacklist (forbidden arcs). Defaults to [].

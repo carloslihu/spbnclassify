@@ -9,9 +9,7 @@ from helpers.data import (
     generate_normal_data,
     generate_normal_data_classification,
 )
-
-# TODO: Remove rutile_ai dependency
-from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.utils import (
+from src.spbnclassify.utils import (
     ConditionalMutualInformationGraph,
     ConditionalMutualInformationMatrix,
     Graph,

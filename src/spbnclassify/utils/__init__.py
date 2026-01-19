@@ -8,6 +8,7 @@ from .constants import (
     PROB_DISCRETE_DISCRETE,
     PROB_GAUSSIAN,
 )
+from .generic import dict2html, extract_class_name, get_boxplot_threshold, safe_exp
 from .graph import (
     ConditionalMutualInformationGraph,
     ConditionalMutualInformationMatrix,
@@ -24,6 +25,10 @@ __all__ = [
     "PROB_DISCRETE_CONTINUOUS",
     "PROB_DISCRETE_DISCRETE",
     "PROB_GAUSSIAN",
+    "dict2html",
+    "extract_class_name",
+    "get_boxplot_threshold",
+    "safe_exp",
     "ConditionalMutualInformationGraph",
     "ConditionalMutualInformationMatrix",
     "DirectedTree",

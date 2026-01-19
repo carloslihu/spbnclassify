@@ -1,10 +1,7 @@
 import pandas as pd
 import pybnesian as pbn
 from helpers.data import SUPER_PARENT, TRUE_CLASS_LABEL
-
-# TODO: Remove rutile_ai dependency
-from rutile_ai.data_handler import TRUE_CLASS_LABEL
-from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.bnc import (
+from src.spbnclassify.bnc import (
     GaussianAveragedOneDependenceEstimator,
     GaussianBayesianMultinet,
     GaussianBayesianNetworkAugmentedNaiveBayes,
@@ -15,6 +12,9 @@ from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.bnc import (
     GaussianSuperParentOneDependenceEstimator,
     GaussianTreeAugmentedNaiveBayes,
 )
+
+# TODO: Remove rutile_ai dependency
+from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
 
 from .test_bayesian_network_classifier import BaseTestGaussianBayesianNetworkClassifier
 

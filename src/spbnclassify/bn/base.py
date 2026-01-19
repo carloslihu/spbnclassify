@@ -9,9 +9,9 @@ import pyagrum as gum
 import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
-from rutile_ai.data_handler import TRUE_ANOMALY_LABEL
-from rutile_ai.engine.feature_selection import get_zero_variance_variables
 from scipy.optimize import differential_evolution
+from src.feature_selection import get_zero_variance_variables
+from src.spbnclassify.utils.constants import TRUE_ANOMALY_LABEL
 
 from ..utils import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP
 

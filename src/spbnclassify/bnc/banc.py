@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
-from rutile_ai.data_handler import TRUE_CLASS_LABEL
+from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
 
 from ..bn import (
     GaussianBayesianNetwork,

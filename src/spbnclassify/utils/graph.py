@@ -2,7 +2,6 @@ from typing import Sequence
 
 import pandas as pd
 import pybnesian as pbn
-from rutile_ai.module import Module
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.metrics import mutual_info_score
 
@@ -154,23 +153,23 @@ class Graph:
             # Else discard the edge
 
         minimum_cost = 0
-        Module.log_note(
-            3,
-            "Edges in the constructed MST",
-            category="DEBUG",
-        )
+        # Module.log_note(
+        #     3,
+        #     "Edges in the constructed MST",
+        #     category="DEBUG",
+        # )
         for u, v, weight in result:
             minimum_cost += weight
-            Module.log_note(
-                3,
-                f"{u} -- {v} == {weight}",
-                category="DEBUG",
-            )
-            Module.log_note(
-                3,
-                f"Minimum Spanning Tree: {minimum_cost}",
-                category="DEBUG",
-            )
+            # Module.log_note(
+            #     3,
+            #     f"{u} -- {v} == {weight}",
+            #     category="DEBUG",
+            # )
+            # Module.log_note(
+            #     3,
+            #     f"Minimum Spanning Tree: {minimum_cost}",
+            #     category="DEBUG",
+            # )
 
         self.result = result
         return minimum_cost

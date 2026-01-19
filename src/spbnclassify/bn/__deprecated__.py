@@ -359,9 +359,6 @@
 #             return pickle.load(f)
 
 # RFE: Añadir CPT calculation for DiscreteFactor
-# from rutile_ai.workflow.data_preparation.variables.nfstream_cols import (
-#     categorical_variables,
-# )
 # def bn_cpt(cpd):
 #     """Calculates the conditional probability table of a discrete node given its parents.
 

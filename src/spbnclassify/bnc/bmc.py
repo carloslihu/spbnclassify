@@ -1,10 +1,9 @@
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
-from rutile_ai.data_handler import TRUE_CLASS_LABEL
-from rutile_ai.engine.utils import safe_exp
-from rutile_ai.module import Module
 from scipy.spatial.distance import jensenshannon
+from src.spbnclassify.utils import safe_exp
+from src.spbnclassify.utils.constants import TRUE_CLASS_LABEL
 
 from ..bn import (
     BayesianNetwork,
@@ -54,10 +53,10 @@ class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
                 prediction_label=self.prediction_label,
             )
             filtered_X = data.loc[data[self.true_label] == k, self.feature_names_in_]
-            Module.log_note(
-                3,
-                f"Learning {k} BN with training data shape: {filtered_X.shape}",
-            )
+            # Module.log_note(
+            #     3,
+            #     f"Learning {k} BN with training data shape: {filtered_X.shape}",
+            # )
             self.bn_dict_[k].fit(filtered_X)
         return self
 

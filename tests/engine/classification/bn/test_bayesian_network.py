@@ -15,9 +15,7 @@ from helpers.data import (
     generate_non_normal_data,
     generate_normal_data,
 )
-
-# TODO: Remove rutile_ai dependency
-from rutile_ai.engine.classification.spbnclassify.src.spbnclassify.bn import (
+from src.spbnclassify.bn import (
     BayesianNetwork,
     DiscreteBayesianNetwork,
     GaussianBayesianNetwork,
