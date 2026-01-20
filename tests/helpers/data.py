@@ -15,7 +15,7 @@ SAMPLE_SIZE = 100
 
 N_NEIGHBORS = 3
 SEED = 0
-BN_SAVE_FOLDER_PATH = Path("/app/dev/rutile-ai/tests/helpers/models/")
+BN_SAVE_FOLDER_PATH = Path(__file__).parent / "models"
 
 
 def generate_normal_data(size: int, seed: int = SEED) -> pd.DataFrame:

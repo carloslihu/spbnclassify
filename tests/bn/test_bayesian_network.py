@@ -157,8 +157,10 @@ class BaseTestBayesianNetwork:
             raise NotImplementedError("bn_class and model_filename must be set")
 
         model_path = BN_SAVE_FOLDER_PATH / self.model_filename
+
         # Only create if doesn't exist or force_recreate is True
         if not model_path.exists() or force_recreate:
+            BN_SAVE_FOLDER_PATH.mkdir(parents=True, exist_ok=True)
             print(f"Creating and saving BN model: {self.model_filename}")
             bn = self.create_bn(data)
             bn.save(model_path)
@@ -175,7 +177,7 @@ class BaseTestBayesianNetwork:
         # Load the saved model to ensure it works correctly
         model_path = BN_SAVE_FOLDER_PATH / self.model_filename
         if not model_path.exists():
-            self.create_and_save_bn(data, force_recreate=True)
+            self.create_and_save_bn(data, force_recreate=False)
         bn = BayesianNetwork.load(model_path)
         return bn
 

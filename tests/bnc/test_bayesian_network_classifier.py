@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
-from engine.classification.bn import BaseTestBayesianNetwork
+from bn import BaseTestBayesianNetwork
 from helpers.data import (
     TRUE_CLASS_LABEL,
     generate_discrete_data_classification,

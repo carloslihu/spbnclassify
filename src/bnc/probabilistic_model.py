@@ -7,7 +7,7 @@ import scipy.special
 
 from ..utils.constants import TRUE_CLASS_LABEL
 
-# RFE: from tests.helpers.data import TRUE_CLASS_LABEL
+# RFE: from helpers.data import TRUE_CLASS_LABEL
 ISS_PRIOR_DISCRETE = 3  # Dirichlet prior for discrete CPDs
 ISS_PRIOR_NMM = 3  # Dirichlet prior for Normal Mixture CPDs
 
