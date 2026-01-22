@@ -88,7 +88,7 @@ The Semiparametric Bayesian Network Classifier family is a novel framework combi
   <img src="images/SP-BNC.png" alt="SP-BNC diagram">
 </p>
 
-A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found [here](https://github.com/carloslihu/spbnclassify/tree/main/results/spbn-article).
+A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found [here](results/spbnc-article).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
