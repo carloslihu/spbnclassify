@@ -88,7 +88,7 @@ The Semiparametric Bayesian Network Classifier family is a novel framework combi
   <img src="images/SP-BNC.png" alt="SP-BNC diagram">
 </p>
 
-A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found in [`this folder`](results/spbn-article).
+A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found [`here`](results/spbn-article/).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -153,6 +153,9 @@ _For more examples, please refer to the [Documentation](https://example.com)_ --
 - [x] Gaussian Bayesian Network Classifiers
 - [x] KDE Bayesian Network Classifiers
 - [x] Semiparametric Bayesian Network Classifiers
+- [ ] Discrete Bayesian Network Classifiers
+- [ ] Make the package pip-installable
+- [ ] Improve documentation
 
 See the [open issues](https://github.com/carloslihu/spbnclassify/issues) for a full list of proposed features (and known issues).
 
