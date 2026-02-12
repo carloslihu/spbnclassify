@@ -132,7 +132,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         """
         return "Gaussian " + BayesianNetworkAugmentedNaiveBayes.__str__(self)
 
-    # TODO: Implement
+    # TODO: Implement GBNC specific method
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
         return {}
 

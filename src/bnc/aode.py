@@ -101,9 +101,7 @@ class AveragedOneDependenceEstimator(BaseMultiBayesianNetworkClassifier):
     def logl(self, X: pd.DataFrame) -> np.ndarray:
         return np.log(self.predict_proba(X))
 
-    # # Unnecessary for the averaged one-dependence classifier
-    # def conditional_logl(self, data: pd.DataFrame, class_value: str) -> np.ndarray:
-    #     pass
+    # NOTE: conditional_logl unnecessary for the AODE
 
     def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
         """

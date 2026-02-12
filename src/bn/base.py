@@ -363,47 +363,6 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         out_data["log_likelihood"] = out_data[shared_pll_columns].sum(axis=1)
         return out_data
 
-    # RFE: score -> score_samples?
-    # RFE: bound score between 0 and 1?
-    def anomaly_score(self, data: pd.DataFrame) -> np.ndarray:
-        """Calculates the unbounded (anomaly) score of the data. It is the negative scaled log-likelihood of the data.
-        It is a value between 0 and infinity. The higher it is, the more anomalous the data is.
-
-        score = - log [P(n) - P(M)] = log(P(M)) - log(P(n))
-
-        Args:
-            data (pd.DataFrame): The data to calculate the score
-
-        Returns:
-            np.ndarray: The data with the scores
-        """
-        return self.max_logl_df["mrv_ell"].sum() - self.logl(data.astype(float))
-
-    def feature_anomaly_score(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Calculates the unbounded (anomaly) score of each feature in the data
-        score = - log [P(n) - P(M)] = log(P(M)) - log(P(n))
-
-        Args:
-            data (pd.DataFrame): The data to calculate the scores
-
-        Returns:
-            pd.DataFrame: The data with the feature scores
-        """
-        data = self.feature_logl(data)
-
-        new_columns = {}
-        for node in self.nodes():
-            max_logl_value = self.max_logl_df.loc[
-                self.max_logl_df["mrv"] == node, "mrv_ell"
-            ].values[0]
-            new_columns[f"{node}_score"] = max_logl_value - data[f"{node}_pll"]
-
-        # Use pd.concat to add all new columns at once
-        new_columns_df = pd.DataFrame(new_columns)
-        data = pd.concat([data, new_columns_df], axis=1)
-        data["anomaly_score"] = data[self.score_columns].sum(axis=1)
-        return data
-
     def predict_proba(
         self,
         X: pd.DataFrame,
@@ -423,56 +382,6 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
 
     def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
         return super().sample(sample_size, seed, ordered=True).to_pandas()
-
-    def explain(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Calculates the Feature anomaly scores of the data using log-likelihood scaling and obtaining the most relevant variable statistics.
-        Args:
-            data (pd.DataFrame): testing data containing self.nodes() columns
-
-        Returns:
-            pd.DataFrame: Dataframe containing the following columns:
-                - The original columns
-                - Anomaly score variables (<variable>_score)
-                - The Most Relevant Variable (MRV) and its anomaly score (mrv_score).
-                - The Most Relevant Variable (MRV) probability (mrv_prob).
-                - The Most Relevant Variable (MRV) contribution to the anomaly score (mrv_contribution).
-                - The expected value (mean) of the MRV (expected_mrv_value).
-        """
-
-        # Variable initialization
-        data.loc[:, "parent_0"] = 1
-        data = self.feature_anomaly_score(data)
-
-        # Explanation metrics
-        # Most Relevant Variable (Variable with the highest anomaly score)
-        data.loc[:, "mrv"] = (
-            data[self.score_columns]
-            .idxmax(axis=1)
-            .str.replace("_score$", "", regex=True)
-        )
-        # Auxiliary operations
-        data.loc[:, "cpd"] = data["mrv"].apply(self.cpd)
-        data.loc[:, "parents"] = data["cpd"].apply(
-            lambda x: ["parent_0"] + x.evidence()
-        )
-        # Most Relevant Variable's Score
-        data.loc[:, "mrv_score"] = data[self.score_columns].max(axis=1)
-        # Most Relevant Variable's probability (between 0 and 1) explaining how likely this value is for the MRV
-        data["mrv_prob"] = np.exp(-data["mrv_score"])
-        # Most Relevant Variable's contribution to the total score
-        data.loc[:, "mrv_contribution"] = data["mrv_score"] / data["anomaly_score"]
-
-        # Most Relevant Variable's expected value (mean of the Gaussian distribution)
-        # The mean can be calculated like the dot product of the parent values and its beta coefficients for each row
-        data.loc[:, "expected_mrv_value"] = data.apply(
-            self._calculate_expected_mrv_value,
-            axis=1,
-        )
-
-        # Remove extra columns
-        data.drop(columns=["parent_0", "parents", "cpd"], inplace=True)
-
-        return data
 
     # TODO: Rename to plot
     def show(self, ax: matplotlib.axes.Axes | None = None, file_name: str = "") -> None:
@@ -696,103 +605,194 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         # NOTE: Important to update the score_columns with the new structure
         self.score_columns = [n + "_score" for n in self.nodes()]
 
-    # RFE: Review the next functions
-    def _logl_objective_function(self, x: np.ndarray, node: str) -> float:
-        """Objective function to be maximized with the format:
-                fun(x, *args) -> float
-            This function evaluates the logCPD of a node with an instantiation of its parents
+    # RFE: Add in future
+    # def explain(self, data: pd.DataFrame) -> pd.DataFrame:
+    #     """Calculates the Feature anomaly scores of the data using log-likelihood scaling and obtaining the most relevant variable statistics.
+    #     Args:
+    #         data (pd.DataFrame): testing data containing self.nodes() columns
 
-        Args:
-            x (numpy.ndarray): 1-D array with shape (n,). We have n float values for each of an instantiation of a BN CPD (n = #node + #parents)
-            bn (pybnesian.BayesianNetworkBase): Fitted Bayesian network
-            node (str): Node of the CPD to be evaluated with its parents instantiation
+    #     Returns:
+    #         pd.DataFrame: Dataframe containing the following columns:
+    #             - The original columns
+    #             - Anomaly score variables (<variable>_score)
+    #             - The Most Relevant Variable (MRV) and its anomaly score (mrv_score).
+    #             - The Most Relevant Variable (MRV) probability (mrv_prob).
+    #             - The Most Relevant Variable (MRV) contribution to the anomaly score (mrv_contribution).
+    #             - The expected value (mean) of the MRV (expected_mrv_value).
+    #     """
 
-        Returns:
-            float: Log-likelihood of x given the BN CPD of a node
-        """
-        cpd = self.cpd(node)
-        parents = cpd.evidence()
-        columns = [node] + parents
+    #     # Variable initialization
+    #     data.loc[:, "parent_0"] = 1
+    #     data = self.feature_anomaly_score(data)
 
-        df = pd.DataFrame([x], columns=columns)
-        ll = cpd.logl(df)[0]
-        return ll
+    #     # Explanation metrics
+    #     # Most Relevant Variable (Variable with the highest anomaly score)
+    #     data.loc[:, "mrv"] = (
+    #         data[self.score_columns]
+    #         .idxmax(axis=1)
+    #         .str.replace("_score$", "", regex=True)
+    #     )
+    #     # Auxiliary operations
+    #     data.loc[:, "cpd"] = data["mrv"].apply(self.cpd)
+    #     data.loc[:, "parents"] = data["cpd"].apply(
+    #         lambda x: ["parent_0"] + x.evidence()
+    #     )
+    #     # Most Relevant Variable's Score
+    #     data.loc[:, "mrv_score"] = data[self.score_columns].max(axis=1)
+    #     # Most Relevant Variable's probability (between 0 and 1) explaining how likely this value is for the MRV
+    #     data["mrv_prob"] = np.exp(-data["mrv_score"])
+    #     # Most Relevant Variable's contribution to the total score
+    #     data.loc[:, "mrv_contribution"] = data["mrv_score"] / data["anomaly_score"]
 
-    # RFE: Add in future versions
-    def _calculate_max_logl(self, data: pd.DataFrame) -> None:
-        """Calculates the maximum log-likelihood of each node of a Bayesian network fitted from data
+    #     # Most Relevant Variable's expected value (mean of the Gaussian distribution)
+    #     # The mean can be calculated like the dot product of the parent values and its beta coefficients for each row
+    #     data.loc[:, "expected_mrv_value"] = data.apply(
+    #         self._calculate_expected_mrv_value,
+    #         axis=1,
+    #     )
 
-        Args:
-            data (DataFrame): Data used to fit the Bayesian network and to calculate the maximum log-likelihood of each node
+    #     # Remove extra columns
+    #     data.drop(columns=["parent_0", "parents", "cpd"], inplace=True)
 
-        Returns:
-            DataFrame: Table containing each node and its corresponding maximum log-likelihood value.
-        """
-        nodes = self.nodes()
-        mrv_ell = []
-        mrv_ev = []
+    #     return data
 
-        for node in nodes:
-            node_type = self.node_type(node).__str__()
-            cpd = self.cpd(node)
-            parents = cpd.evidence()
+    # RFE: bound score between 0 and 1?
+    # def anomaly_score(self, data: pd.DataFrame) -> np.ndarray:
+    #     """Calculates the unbounded (anomaly) score of the data. It is the negative scaled log-likelihood of the data.
+    #     It is a value between 0 and infinity. The higher it is, the more anomalous the data is.
 
-            if node_type == "LinearGaussianFactor":
-                # Gaussian evaluated at the mean
-                if type(self.cpd(node)) == pbn.CLinearGaussianCPD:
-                    # assignment = pbn.Assignment({self.true_label: "0"})
-                    # self.cpd(node).conditional_factor(assignment)
-                    # assignment = pbn.Assignment({self.true_label: "1"})
-                    # self.cpd(node).conditional_factor(assignment)
-                    ell = None
-                    ev = None
-                else:
-                    ell = -np.log(np.sqrt(2 * np.pi * self.cpd(node).variance))
-                    # ev mean depends on the parents instance values
-                    ev = None
-            elif node_type == "CKDEFactor":
-                bounds = [(data[node].min(), data[node].max())] + [
-                    (data[p].min(), data[p].max()) for p in parents
-                ]  # bounds of the search for each node and parent
-                # stochastic global optimization
-                result = differential_evolution(
-                    lambda x: -self._logl_objective_function(x, node), bounds=bounds
-                )
+    #     score = - log [P(n) / P(M)] = log(P(M)) - log(P(n))
 
-                ev = result.x[0]
-                # We were minimizing -f(x), so we have to change the sign
-                ell = -result.fun
-            elif node_type == "DiscreteFactor":
-                ell = None
-                ev = None
-            else:
-                raise ValueError(f"Unknown node type: {node_type}")
-            mrv_ev.append(ev)
-            mrv_ell.append(ell)
+    #     Args:
+    #         data (pd.DataFrame): The data to calculate the score
 
-        self.max_logl_df = pd.DataFrame(
-            {
-                "mrv": nodes,
-                "mrv_ev": mrv_ev,
-                "mrv_ell": mrv_ell,
-            }
-        )
+    #     Returns:
+    #         np.ndarray: The data with the scores
+    #     """
+    #     max_logl = self.max_logl_df["mrv_ell"].sum()
+    #     logl = self.logl(data)
+    #     return max_logl - logl
 
-    def _calculate_expected_mrv_value(self, row: pd.Series) -> float:
-        """Calculates the expected value of the Most Relevant Variable (MRV) given the parents instantiation
+    # def feature_anomaly_score(self, data: pd.DataFrame) -> pd.DataFrame:
+    #     """Calculates the unbounded (anomaly) score of each feature in the data
+    #     score = - log [P(n) - P(M)] = log(P(M)) - log(P(n))
 
-        Args:
-            row (pd.Series): Row of the data containing the instantiation of the parents of the MRV
+    #     Args:
+    #         data (pd.DataFrame): The data to calculate the scores
 
-        Returns:
-            float: Expected value of the MRV given the parents instantiation
-        """
-        result = np.nan
-        if row["cpd"].type() == pbn.LinearGaussianCPDType():
-            result = row[row["parents"]].dot(row["cpd"].beta)
-        elif row["cpd"].type() == pbn.CKDEType():
-            result = self.max_logl_df.loc[
-                self.max_logl_df["mrv"] == row["mrv"], "mrv_ev"
-            ].values[0]
+    #     Returns:
+    #         pd.DataFrame: The data with the feature scores
+    #     """
+    #     data = self.feature_logl(data)
 
-        return result
+    #     new_columns = {}
+    #     for node in self.nodes():
+    #         max_logl_value = self.max_logl_df.loc[
+    #             self.max_logl_df["mrv"] == node, "mrv_ell"
+    #         ].values[0]
+    #         new_columns[f"{node}_score"] = max_logl_value - data[f"{node}_pll"]
+
+    #     # Use pd.concat to add all new columns at once
+    #     new_columns_df = pd.DataFrame(new_columns)
+    #     data = pd.concat([data, new_columns_df], axis=1)
+    #     data["anomaly_score"] = data[self.score_columns].sum(axis=1)
+    #     return data
+
+    # def _logl_objective_function(self, x: np.ndarray, node: str) -> float:
+    #     """Objective function to be maximized with the format:
+    #             fun(x, *args) -> float
+    #         This function evaluates the logCPD of a node with an instantiation of its parents
+
+    #     Args:
+    #         x (numpy.ndarray): 1-D array with shape (n,). We have n float values for each of an instantiation of a BN CPD (n = #node + #parents)
+    #         bn (pybnesian.BayesianNetworkBase): Fitted Bayesian network
+    #         node (str): Node of the CPD to be evaluated with its parents instantiation
+
+    #     Returns:
+    #         float: Log-likelihood of x given the BN CPD of a node
+    #     """
+    #     cpd = self.cpd(node)
+    #     parents = cpd.evidence()
+    #     columns = [node] + parents
+
+    #     df = pd.DataFrame([x], columns=columns)
+    #     ll = cpd.logl(df)[0]
+    #     return ll
+
+    # def _calculate_max_logl(self, data: pd.DataFrame) -> None:
+    #     """Calculates the maximum log-likelihood of each node of a Bayesian network fitted from data
+
+    #     Args:
+    #         data (DataFrame): Data used to fit the Bayesian network and to calculate the maximum log-likelihood of each node
+
+    #     Returns:
+    #         DataFrame: Table containing each node and its corresponding maximum log-likelihood value.
+    #     """
+    #     nodes = self.nodes()
+    #     mrv_ell = []
+    #     mrv_ev = []
+
+    #     for node in nodes:
+    #         node_type = self.node_type(node).__str__()
+    #         cpd = self.cpd(node)
+    #         parents = cpd.evidence()
+
+    #         if node_type == "LinearGaussianFactor":
+    #             # Gaussian evaluated at the mean
+    #             if type(self.cpd(node)) == pbn.CLinearGaussianCPD:
+    #                 # assignment = pbn.Assignment({self.true_label: "0"})
+    #                 # self.cpd(node).conditional_factor(assignment)
+    #                 # assignment = pbn.Assignment({self.true_label: "1"})
+    #                 # self.cpd(node).conditional_factor(assignment)
+    #                 ell = None
+    #                 ev = None
+    #             else:
+    #                 ell = -np.log(np.sqrt(2 * np.pi * self.cpd(node).variance))
+    #                 # ev mean depends on the parents instance values
+    #                 ev = None
+    #         elif node_type == "CKDEFactor":
+    #             bounds = [(data[node].min(), data[node].max())] + [
+    #                 (data[p].min(), data[p].max()) for p in parents
+    #             ]  # bounds of the search for each node and parent
+    #             # stochastic global optimization
+    #             result = differential_evolution(
+    #                 lambda x: -self._logl_objective_function(x, node), bounds=bounds
+    #             )
+
+    #             ev = result.x[0]
+    #             # We were minimizing -f(x), so we have to change the sign
+    #             ell = -result.fun
+    #         elif node_type == "DiscreteFactor":
+    #             ell = None
+    #             ev = None
+    #         else:
+    #             raise ValueError(f"Unknown node type: {node_type}")
+    #         mrv_ev.append(ev)
+    #         mrv_ell.append(ell)
+
+    #     self.max_logl_df = pd.DataFrame(
+    #         {
+    #             "mrv": nodes,
+    #             "mrv_ev": mrv_ev,
+    #             "mrv_ell": mrv_ell,
+    #         }
+    #     )
+
+    # def _calculate_expected_mrv_value(self, row: pd.Series) -> float:
+    #     """Calculates the expected value of the Most Relevant Variable (MRV) given the parents instantiation
+
+    #     Args:
+    #         row (pd.Series): Row of the data containing the instantiation of the parents of the MRV
+
+    #     Returns:
+    #         float: Expected value of the MRV given the parents instantiation
+    #     """
+    #     result = np.nan
+    #     if row["cpd"].type() == pbn.LinearGaussianCPDType():
+    #         result = row[row["parents"]].dot(row["cpd"].beta)
+    #     elif row["cpd"].type() == pbn.CKDEType():
+    #         result = self.max_logl_df.loc[
+    #             self.max_logl_df["mrv"] == row["mrv"], "mrv_ev"
+    #         ].values[0]
+
+    #     return result
