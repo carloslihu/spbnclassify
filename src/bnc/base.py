@@ -366,7 +366,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         self,
         source_class_name: str,
         target_class_name: str,
-        save_pdf: bool = False,
+        output_path: str | Path | None = None,
         sample_size: int = 1000,
         seed: int | None = None,
     ) -> tuple:
@@ -382,7 +382,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         Args:
             source_class_name (str): Name of the source class whose BN will be compared.
             target_class_name (str): Name of the target class whose BN will be compared.
-            save_pdf (bool, optional): If True, saves a PDF report of the structural comparison. Defaults to False.
+            output_path (str | Path | None, optional): Path to save the PDF report. If None, no PDF is saved. Defaults to None.
             sample_size (int, optional): Number of samples to use for parametric comparison. Defaults to 1000.
             seed (int | None, optional): Random seed for reproducibility. Defaults to None.
 
@@ -421,10 +421,12 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         # STRUCTURAL COMPARISON
         nd, sd, ntd, html_content = self._compare_bn_structure(bn1, bn2, graph1, graph2)
         # Generate PDF from HTML string
-        if save_pdf:
+        if output_path:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             pdfkit.from_string(
                 html_content,
-                f"output/bn_diff_{source_class_name}_{target_class_name}.pdf",
+                output_path,
             )
         # PARAMETRIC COMPARISON
         bn_distance = self._compare_bn_distribution(
@@ -458,7 +460,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         # Structural Comparison
         nodes1 = bn1.nodes()
         nodes2 = bn2.nodes()
-        shared_nodes_list = list(graph1.names().keys())
+        shared_nodes_list = list(graph1.names())  # type: ignore library
 
         # We compare the shared nodes
         nd = node_presence_distance(nodes1, nodes2)
