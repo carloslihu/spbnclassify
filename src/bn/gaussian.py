@@ -130,7 +130,7 @@ class GaussianBayesianNetwork(
         data = pd.concat([X, y], axis=1)
         BayesianNetwork.fit(self, X, y)
         pbn.CLGNetwork.fit(self, data)
-        self._calculate_max_logl(X)
+        # self._calculate_max_logl(X)
         self.joint_gaussian_ = self._get_joint_gaussian()
         return self
 

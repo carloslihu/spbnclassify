@@ -675,7 +675,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
 
     # def feature_anomaly_score(self, data: pd.DataFrame) -> pd.DataFrame:
     #     """Calculates the unbounded (anomaly) score of each feature in the data
-    #     score = - log [P(n) - P(M)] = log(P(M)) - log(P(n))
+    #     score = - log [P(n) / P(M)] = log(P(M)) - log(P(n))
 
     #     Args:
     #         data (pd.DataFrame): The data to calculate the scores

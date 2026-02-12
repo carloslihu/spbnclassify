@@ -29,7 +29,11 @@ def get_zero_variance_variables(
 
     if len(numeric_variables) > 0 and X.shape[0] > 1:
         vt = VarianceThreshold(threshold=threshold)
-        vt.fit(X[numeric_variables])  # Removes all features with 0 variance
+        try:
+            vt.fit(X[numeric_variables])  # Removes all features with 0 variance
+        except ValueError:
+            print("All numeric features have 0 variance, so they will all be removed.")
+            return numeric_variables
 
         output_mask = vt.get_support()
         removable_variables = list(itertools.compress(numeric_variables, ~output_mask))
