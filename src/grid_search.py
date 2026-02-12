@@ -44,7 +44,7 @@ if __name__ == "__main__":
     )
     grid = Module.flatten_dict(grid_dict)
     grid_combinations = [
-        dict(zip(grid.keys(), combination))
+        dict(zip(list(grid.keys()), combination))
         for combination in itertools.product(*grid.values())
     ]
 
