@@ -156,6 +156,27 @@ class DiscreteBayesianNetwork(
             gumimage.exportInference(self.graphic, str(model_file.with_suffix(".pdf")))
         return html_str
 
+    def export_infer(self, inference_file: Path | None = None) -> dict:
+        ie = gum.LazyPropagation(self.graphic)
+        ie.makeInference()
+        # TODO: Close format
+        result_dict = {}
+        result_dict["structure"] = self.graphic.arcs()
+        result_dict["parameters"] = {}
+        for var_id, variable_name in enumerate(self.graphic.names()):  # type: ignore library
+            var = self.graphic.variable(variable_name)
+            labels = var.labels()
+
+            post = ie.posterior(variable_name)
+            result_dict["parameters"][var_id] = {
+                "variable_name": variable_name,
+                "probabilities": dict(zip(labels, post.tolist())),
+            }
+
+        # TODO: Save the inference result_dicts to the inference_json file in a structured format (e.g., JSON) for later use or analysis.
+
+        return result_dict
+
     # TODO: Save the plots
     def conditional_shap(
         self,
