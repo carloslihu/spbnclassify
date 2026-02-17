@@ -133,34 +133,17 @@ class DiscreteBayesianNetwork(
     def infer(
         self,
         evidence: dict[str, float] = {},
-        targets: set[str] = set(),
-        model_file: Path | None = None,
-    ) -> str:
+        inference_file: Path | None = None,
+    ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence and target nodes.
         Args:
             evidence (dict[str, pydot.Dot], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
             targets (set[str], optional): A set of node names for which to compute the inference results. Defaults to an empty set.
-            model_file (Path | None, optional): If provided, exports the HTML inference results to this file.
+            inference_file (Path | None, optional): If provided, exports the HTML inference results to this file.
         Returns:
             str: An HTML string representing the inference results.
         """
-        html_str = gnb.getInference(
-            self.graphic,
-            engine=None,
-            evs=evidence,
-            targets=targets,
-            size="12",
-        )
-
-        if model_file:
-            gumimage.exportInference(self.graphic, str(model_file.with_suffix(".pdf")))
-        return html_str
-
-    # TODO: Rename functions infer with export_infer
-    def export_infer(
-        self, evidence: dict[str, float] = {}, inference_file: Path | None = None
-    ) -> dict:
         ie = gum.LazyPropagation(self.graphic)
         ie.setEvidence(evidence)
         ie.makeInference()
@@ -177,9 +160,23 @@ class DiscreteBayesianNetwork(
                 "variable_name": variable_name,
                 "probabilities": dict(zip(labels, post.tolist())),
             }
+        # html_str = gnb.getInference(
+        #     self.graphic,
+        #     engine=ie,
+        #     evs=evidence,
+        #     targets=targets,
+        #     size="12",
+        # )
         if inference_file:
             with open(inference_file.with_suffix(".json"), "w") as f:
                 json.dump(result_dict, f, indent=4)
+            gumimage.exportInference(
+                model=self.graphic,
+                filename=str(inference_file.with_suffix(".pdf")),
+                engine=ie,
+                evs=evidence,
+            )
+
         return result_dict
 
     # TODO: Save the plots
