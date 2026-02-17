@@ -133,14 +133,14 @@ class DiscreteBayesianNetwork(
     def infer(
         self,
         evidence: dict[str, float] = {},
-        inference_file: Path | None = None,
+        file_path: Path | None = None,
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence and target nodes.
         Args:
             evidence (dict[str, pydot.Dot], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
             targets (set[str], optional): A set of node names for which to compute the inference results. Defaults to an empty set.
-            inference_file (Path | None, optional): If provided, exports the HTML inference results to this file.
+            file_path (Path | None, optional): If provided, exports the HTML inference results to this file.
         Returns:
             str: An HTML string representing the inference results.
         """
@@ -167,24 +167,24 @@ class DiscreteBayesianNetwork(
         #     targets=targets,
         #     size="12",
         # )
-        if inference_file:
-            with open(inference_file.with_suffix(".json"), "w") as f:
+        if file_path:
+            with open(file_path.with_suffix(".json"), "w") as f:
                 json.dump(result_dict, f, indent=4)
             gumimage.exportInference(
                 model=self.graphic,
-                filename=str(inference_file.with_suffix(".pdf")),
+                filename=str(file_path.with_suffix(".pdf")),
                 engine=ie,
                 evs=evidence,
             )
 
         return result_dict
 
-    # TODO: Save the plots
     def conditional_shap(
         self,
         data: pd.DataFrame,
         target: str,
         target_value: str | int | float | bool | None = None,
+        file_path: Path | None = None,  # TODO: Save the plots
     ) -> dict[str, float]:
         # TODOC
         """
@@ -199,9 +199,8 @@ class DiscreteBayesianNetwork(
             Input data for which to compute conditional SHAP values.
         target : str
             The name of the target variable for SHAP analysis.
-        plot_file_path : Path or None, optional
+        file_path : Path or None, optional
             File path to save the SHAP value plot. If None, the plot is displayed instead of being saved.
-        graph_file_path : Path or None, optional
             File path to save the SHAP value graph as a PDF.
         Returns
         -------
@@ -209,7 +208,7 @@ class DiscreteBayesianNetwork(
             - node_shapvalue_dict : dict
                 Dictionary mapping each feature (column name) to its mean absolute conditional SHAP value.
             - graph : pydot.Dot
-                A graph object representing the SHAP value structure, saved as a PDF if `graph_file_path` is provided.
+                A graph object representing the SHAP value structure, saved as a PDF if `file_path` is provided.
         Notes
         -----
         - The target variable is a black node.
@@ -238,7 +237,7 @@ class DiscreteBayesianNetwork(
 
         return node_shapvalue_dict
 
-    def entropy_graph(self, graph_file_path: Path | None = None) -> pydot.Dot:
+    def entropy_graph(self, file_path: Path | None = None) -> pydot.Dot:
         """
         Generates and optionally saves an entropy information graph for the current Bayesian network.
 
@@ -247,7 +246,7 @@ class DiscreteBayesianNetwork(
         If a file path is provided, the resulting graph is saved as a PDF.
 
         Args:
-            graph_file_path (Path | None, optional): The file path where the generated graph PDF should be saved.
+            file_path (Path | None, optional): The file path where the generated graph PDF should be saved.
                 If None, the graph is not saved to disk.
 
         Returns:
@@ -277,15 +276,15 @@ class DiscreteBayesianNetwork(
             )
         else:
             graph = result
-        if graph_file_path:
-            graph.write_pdf(graph_file_path)
+        if file_path:
+            graph.write_pdf(file_path)
         return graph
 
     def conditional_independence_test(
         self,
         data: pd.DataFrame,
         target: str | None = None,
-        plot_file_path: Path | None = None,
+        file_path: Path | None = None,
     ) -> dict[tuple[str, str, tuple[str]], float]:
         """
         Performs conditional independence tests for pairs of variables in the given DataFrame.
@@ -296,7 +295,7 @@ class DiscreteBayesianNetwork(
         Args:
             data (pd.DataFrame): The input data containing variables to test for conditional independence.
             target (str | None, optional): An optional target variable to condition on. Defaults to None.
-            plot_file_path (Path | None, optional): If provided, saves a plot of the results to this file path. Defaults to None.
+            file_path (Path | None, optional): If provided, saves a plot of the results to this file path. Defaults to None.
         Returns:
             dict[tuple[str, str, tuple[str]], float]: A dictionary where keys are tuples representing
                 (variable1, variable2, conditioning_set), and values are the corresponding p-values
@@ -310,9 +309,9 @@ class DiscreteBayesianNetwork(
         ci_pvalue_dict = expl.independenceListForPairs(
             self.graphic, data, target=target
         )
-        if plot_file_path:
+        if file_path:
             plt.tight_layout()  # Adjust layout to prevent cutoff
-            plt.savefig(plot_file_path, bbox_inches="tight", dpi=300)
+            plt.savefig(file_path, bbox_inches="tight", dpi=300)
         return ci_pvalue_dict
 
     def counterfactual(
