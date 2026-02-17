@@ -224,17 +224,36 @@ class DiscreteBayesianNetwork(
         node_shapvalue_dict = conditionalExplanation.importances
 
         if target_value is not None:
+            # TODO: local explanations
             # Local explanations
             # explnb.waterfall(explanation=localExpl, y=target_value)  # type: ignore library
-
             # Global explanations
             explnb.beeswarm(explanation=conditionalExplanation, y=target_value)  # type: ignore library
+            if file_path:
+                plt.savefig(
+                    file_path.parent / f"{file_path.stem}_beeswarm.png",
+                    bbox_inches="tight",
+                    dpi=300,
+                )
+                plt.close()
             explnb.showShapValues(self.graphic, conditionalExplanation, y=target_value)  # type: ignore library
-
+            # TODO: This graph is not saved
+            # if file_path:
+            #     plt.savefig(
+            #         file_path.parent / f"{file_path.stem}_shap_values.png",
+            #         bbox_inches="tight",
+            #         dpi=300,
+            #     )
+            #     plt.close()
         # Local/Global explanations
-        # Without specifying a target
         explnb.bar(explanation=conditionalExplanation, y=target_value)  # type: ignore library
-
+        if file_path:
+            plt.savefig(
+                file_path.parent / f"{file_path.stem}_bar.png",
+                bbox_inches="tight",
+                dpi=300,
+            )
+            plt.close()
         return node_shapvalue_dict
 
     def entropy_graph(self, file_path: Path | None = None) -> pydot.Dot:
@@ -377,6 +396,7 @@ class DiscreteBayesianNetwork(
             whatif=whatif,
             values=values,
         )
+        # TODO: Save plots
         # gnb.showProba(pot)
         # gnb.showInference(
         #     pot.observationalBN(), size="10", evs={"education": 0, "salary": "86"}
