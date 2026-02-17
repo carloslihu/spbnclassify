@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -156,12 +157,16 @@ class DiscreteBayesianNetwork(
             gumimage.exportInference(self.graphic, str(model_file.with_suffix(".pdf")))
         return html_str
 
-    def export_infer(self, inference_file: Path | None = None) -> dict:
+    # TODO: Rename functions infer with export_infer
+    def export_infer(
+        self, evidence: dict[str, float] = {}, inference_file: Path | None = None
+    ) -> dict:
         ie = gum.LazyPropagation(self.graphic)
+        ie.setEvidence(evidence)
         ie.makeInference()
-        # TODO: Close format
+
         result_dict = {}
-        result_dict["structure"] = self.graphic.arcs()
+        result_dict["structure"] = list(self.graphic.arcs())  # type: ignore library
         result_dict["parameters"] = {}
         for var_id, variable_name in enumerate(self.graphic.names()):  # type: ignore library
             var = self.graphic.variable(variable_name)
@@ -172,9 +177,9 @@ class DiscreteBayesianNetwork(
                 "variable_name": variable_name,
                 "probabilities": dict(zip(labels, post.tolist())),
             }
-
-        # TODO: Save the inference result_dicts to the inference_json file in a structured format (e.g., JSON) for later use or analysis.
-
+        if inference_file:
+            with open(inference_file.with_suffix(".json"), "w") as f:
+                json.dump(result_dict, f, indent=4)
         return result_dict
 
     # TODO: Save the plots
