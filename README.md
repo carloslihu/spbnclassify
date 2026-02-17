@@ -153,7 +153,7 @@ _For more examples, please refer to the [Documentation](https://example.com)_ --
 - [x] Gaussian Bayesian Network Classifiers
 - [x] KDE Bayesian Network Classifiers
 - [x] Semiparametric Bayesian Network Classifiers
-- [ ] Discrete Bayesian Network Classifiers
+- [x] Discrete Bayesian Network Classifiers
 - [ ] Make the package pip-installable
 - [ ] Improve documentation
 
