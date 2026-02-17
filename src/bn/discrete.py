@@ -156,12 +156,12 @@ class DiscreteBayesianNetwork(
             gumimage.exportInference(self.graphic, str(model_file.with_suffix(".pdf")))
         return html_str
 
+    # TODO: Save the plots
     def conditional_shap(
         self,
         data: pd.DataFrame,
         target: str,
-        plot_file_path: Path | None = None,
-        graph_file_path: Path | None = None,
+        target_value: str | int | float | bool | None = None,
     ) -> dict[str, float]:
         # TODOC
         """
@@ -193,146 +193,25 @@ class DiscreteBayesianNetwork(
         - The most important variable to explain the prediction of the target is a pink node.
         - The least important variable to explain the prediction of the target is a blue node.
         """
-        # DEPRECATED
-        # def _plotResults(
-        #     gumshap,
-        #     results: pd.DataFrame,
-        #     v: pd.DataFrame,
-        #     plot: bool = True,
-        #     plot_importance: bool = True,
-        #     percentage: bool = False,
-        # ):
-        #     """
-        #     Overrides the default expl.ShapValues._plotResults method to customize the visualization of SHAP values.
-        #     Plots SHAP analysis results, including a beeswarm plot of SHAP values and/or a feature importance bar plot.
-
-        #     Parameters:
-        #         gumshap: object
-        #             An object with plotting methods `_plot_beeswarm_` and `_plot_importance`.
-        #         results: pandas.DataFrame
-        #             DataFrame containing SHAP values for each feature (columns) and sample (rows).
-        #         v: pandas.DataFrame
-        #             DataFrame of feature values, aligned with `results` columns.
-        #         plot: bool, optional (default=True)
-        #             Whether to display the SHAP values distribution (beeswarm) plot.
-        #         plot_importance: bool, optional (default=True)
-        #             Whether to display the feature importance bar plot.
-        #         percentage: bool, optional (default=False)
-        #             If True, show feature importance as percentages; otherwise, show raw values.
-
-        #     Returns:
-        #         None
-
-        #     Notes:
-        #         - At least one of `plot` or `plot_importance` must be True to generate a plot.
-        #         - The function customizes figure size and layout based on the number of features and selected plots.
-        #         - Plots are rendered using matplotlib.
-        #     """
-        #     ax1 = ax2 = None
-        #     if plot and plot_importance:
-        #         # Improved figure sizing and layout
-        #         fig = plt.figure(figsize=(16, max(8, 0.6 * len(results.columns))))
-        #         fig.suptitle("SHAP Analysis Results", fontsize=16, fontweight="bold")
-        #         ax1 = fig.add_subplot(1, 2, 1)
-        #         ax2 = fig.add_subplot(1, 2, 2)
-        #         # Add spacing between subplots
-        #         plt.subplots_adjust(wspace=0.5, top=0.9)
-        #     elif plot:
-        #         fig = plt.figure(figsize=(10, max(6, 0.6 * len(results.columns))))
-        #         ax1 = fig.add_subplot(1, 1, 1)
-        #     elif plot_importance:
-        #         fig = plt.figure(figsize=(8, 6))
-        #         ax2 = fig.add_subplot(1, 1, 1)
-
-        #     if plot:
-        #         shap_dict = results.to_dict(orient="list")
-        #         sorted_dict = dict(
-        #             sorted(
-        #                 shap_dict.items(),
-        #                 key=lambda x: sum(abs(i) for i in x[1]) / len(x[1]),
-        #             )
-        #         )
-        #         data = np.array([sorted_dict[key] for key in sorted_dict])
-        #         features = list(sorted_dict.keys())
-        #         v = v[features]
-        #         colors = v.transpose().to_numpy()
-
-        #         # Improved beeswarm plot with better styling
-        #         gumshap._plot_beeswarm_(data, colors, 250, 1.5, features, ax=ax1)
-        #         if ax1:
-        #             ax1.set_title(
-        #                 "SHAP Values Distribution",
-        #                 fontsize=14,
-        #                 fontweight="bold",
-        #                 pad=20,
-        #             )
-        #             ax1.grid(True, alpha=0.3)
-        #             ax1.set_xlabel("SHAP Value", fontsize=12)
-        #             # Improve y-axis labels
-        #             ax1.tick_params(axis="y", labelsize=10)
-        #             ax1.tick_params(axis="x", labelsize=10)
-
-        #     if plot_importance:
-        #         gumshap._plot_importance(results, percentage, ax=ax2)
-        #         if ax2:
-        #             ax2.set_title(
-        #                 "Feature Importance", fontsize=14, fontweight="bold", pad=20
-        #             )
-        #             ax2.grid(True, alpha=0.3)
-        #             ax2.tick_params(axis="both", labelsize=10)
-        #             if percentage:
-        #                 ax2.set_xlabel("Mean(|SHAP Value|) (%)", fontsize=12)
-        #             else:
-        #                 ax2.set_xlabel("Mean(|SHAP Value|)", fontsize=12)
-
-        # def conditional(data, gumshap, plot_file_path):
-        #     """
-        #     # NOTE: Overrides the default expl.ShapValues.conditional method to customize the visualization of SHAP values.
-        #     Computes conditional SHAP values using the provided gumshap object, plots the results, and optionally saves the plot to a file.
-        #     Args:
-        #         data (pd.DataFrame): The input data for which to compute conditional SHAP values.
-        #         gumshap: An object with a `_conditional` method for computing SHAP values and plotting capabilities.
-        #         plot_file_path (str or None): The file path to save the plot. If None, the plot is displayed instead.
-        #     Returns:
-        #         dict: A dictionary mapping each column name to the mean absolute conditional SHAP value.
-        #     Side Effects:
-        #         - Generates and displays or saves a plot of the SHAP values.
-        #         - Closes the current matplotlib figure after plotting.
-        #     """
-
-        #     results, v = gumshap._conditional(data)
-        #     res = {}
-
-        #     for col in results.columns:
-        #         res[col] = abs(results[col].astype(float)).mean()
-
-        #     _plotResults(gumshap, results, v)  # type: ignore library
-
-        #     if plot_file_path is not None:
-        #         plt.savefig(plot_file_path)
-        #     else:
-        #         plt.show()
-        #     plt.close()
-        #     return res
 
         # RFE: Calculate it only for the Markov Blanket of the target
-
         conditionalExplainer = expl.ConditionalShapValues(
             self.graphic, target, logit=True
         )
         conditionalExplanation = conditionalExplainer.compute(data=(data, False))
         node_shapvalue_dict = conditionalExplanation.importances
 
-        # gumshap = expl.ShapValues(self.graphic, target)
-        # node_shapvalue_dict = conditional(data, gumshap, plot_file_path)
-        # graph = shapley.getShapValues(self.graphic, node_shapvalue_dict)
-        # graph.write_pdf(graph_file_path)
-        # TODO: Adapt the rest of plots and saving
-        # explnb.beeswarm(explanation=conditionalExplanation, y=1)
+        if target_value is not None:
+            # Local explanations
+            # explnb.waterfall(explanation=localExpl, y=target_value)  # type: ignore library
+
+            # Global explanations
+            explnb.beeswarm(explanation=conditionalExplanation, y=target_value)  # type: ignore library
+            explnb.showShapValues(self.graphic, conditionalExplanation, y=target_value)  # type: ignore library
+
+        # Local/Global explanations
         # Without specifying a target
-        # explnb.bar(explanation=conditionalExplanation)
-        # explnb.bar(explanation=conditionalExplanation, y=1, percentage=True)
-        # explnb.showShapValues(self.graphic, conditionalExplanation)
+        explnb.bar(explanation=conditionalExplanation, y=target_value)  # type: ignore library
 
         return node_shapvalue_dict
 
