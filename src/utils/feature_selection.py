@@ -25,7 +25,7 @@ def get_zero_variance_variables(
         list: list with all the features that have a variance lower than the threshold
     """
     removable_variables = []
-    numeric_variables = X[input_variables].select_dtypes(include=float).columns.tolist()
+    numeric_variables = list(X[input_variables].select_dtypes(include=float).columns)
 
     if len(numeric_variables) > 0 and X.shape[0] > 1:
         vt = VarianceThreshold(threshold=threshold)
