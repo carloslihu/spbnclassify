@@ -254,6 +254,49 @@ class DiscreteBayesianNetwork(
             plt.close()
         return node_shapvalue_dict
 
+    def conditional_shall(
+        self,
+        data: pd.DataFrame,
+        file_path: Path | None = None,
+    ) -> dict[str, float]:
+        conditionalExplainer = expl.ConditionalShallValues(
+            bn=self.graphic, background=(data, False), log=True
+        )
+        conditionalExplanation = conditionalExplainer.compute(data=(data, False), N=100)
+        # localExpl = conditionalExplainer.compute((train.iloc[0], False))
+        # localExpl._values
+        feature_importances = conditionalExplanation.importances
+        # Global explanations
+        explnb.beeswarm(explanation=conditionalExplanation)
+        if file_path:
+            plt.savefig(
+                file_path.parent / f"{file_path.stem}_beeswarm.png",
+                bbox_inches="tight",
+                dpi=300,
+            )
+            plt.close()
+        # Local/Global explanations
+        explnb.bar(explanation=conditionalExplanation)
+        # explnb.bar(explanation=localExpl)
+        if file_path:
+            plt.savefig(
+                file_path.parent / f"{file_path.stem}_bar.png",
+                bbox_inches="tight",
+                dpi=300,
+            )
+            plt.close()
+        # TODO: local explanations
+        # explnb.waterfall(explanation=localExpl)
+        # if file_path:
+        #     plt.savefig(
+        #         file_path.parent / f"{file_path.stem}_waterfall.png",
+        #         bbox_inches="tight",
+        #         dpi=300,
+        #     )
+        #     plt.close()
+
+        return feature_importances
+
     def entropy_graph(self, file_path: Path | None = None) -> pydot.Dot:
         """
         Generates and optionally saves an entropy information graph for the current Bayesian network.
