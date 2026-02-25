@@ -273,6 +273,7 @@ class SemiParametricBayesianMultinet(BayesianMultinet):
         sample_size: int = 1000,
         seed: int | None = None,
     ) -> float:
+        # TODO: Check if the sampling size is enough to get a good estimation of the distribution
         # We sample from the source and target BNs
         source_sample = self.bn_dict_[source_class_name].sample(sample_size, seed)[
             shared_nodes_list

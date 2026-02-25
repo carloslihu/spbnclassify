@@ -184,9 +184,8 @@ class DiscreteBayesianNetwork(
         data: pd.DataFrame,
         target: str,
         target_value: str | int | float | bool | None = None,
-        file_path: Path | None = None,  # TODO: Save the plots
+        file_path: Path | None = None,
     ) -> dict[str, float]:
-        # TODOC
         """
         Computes conditional SHAP (SHapley Additive exPlanations) values for a given target variable using a graphical model,
         generates visualizations of SHAP values and feature importances, and optionally saves the plots and a SHAP value graph to files.
@@ -199,16 +198,15 @@ class DiscreteBayesianNetwork(
             Input data for which to compute conditional SHAP values.
         target : str
             The name of the target variable for SHAP analysis.
+        target_value : str | int | float | bool | None, optional
+            The specific target value to analyze. If provided, generates additional visualizations for this value. Defaults to None.
         file_path : Path or None, optional
             File path to save the SHAP value plot. If None, the plot is displayed instead of being saved.
             File path to save the SHAP value graph as a PDF.
         Returns
         -------
-        tuple[dict, pydot.Dot]
-            - node_shapvalue_dict : dict
-                Dictionary mapping each feature (column name) to its mean absolute conditional SHAP value.
-            - graph : pydot.Dot
-                A graph object representing the SHAP value structure, saved as a PDF if `file_path` is provided.
+        dict[str, float]
+            Dictionary mapping each feature (column name) to its mean absolute conditional SHAP value.
         Notes
         -----
         - The target variable is a black node.
@@ -224,10 +222,6 @@ class DiscreteBayesianNetwork(
         node_shapvalue_dict = conditionalExplanation.importances
 
         if target_value is not None:
-            # TODO: local explanations
-            # Local explanations
-            # explnb.waterfall(explanation=localExpl, y=target_value)  # type: ignore library
-            # Global explanations
             explnb.beeswarm(explanation=conditionalExplanation, y=target_value)  # type: ignore library
             if file_path:
                 plt.savefig(
@@ -245,6 +239,10 @@ class DiscreteBayesianNetwork(
             #         dpi=300,
             #     )
             #     plt.close()
+            # TODO: local explanations
+            # Local explanations
+            # explnb.waterfall(explanation=localExpl, y=target_value)  # type: ignore library
+            # Global explanations
         # Local/Global explanations
         explnb.bar(explanation=conditionalExplanation, y=target_value)  # type: ignore library
         if file_path:
@@ -340,7 +338,7 @@ class DiscreteBayesianNetwork(
         whatif: str | set[str],
         values: dict[str, str | int | float] | None = None,
     ) -> gum.Tensor:
-        # TODO: For meaningful counterfactual inference about specific individuals, unobserved variables are essential to capture individual heterogeneity.
+        # NOTE: For meaningful counterfactual inference about specific individuals, unobserved variables are essential to capture individual heterogeneity.
         def distribution_mean(pot: gum.Tensor) -> float | np.ndarray:
             """
             Calculates the mean (expected value) of a discrete probability distribution represented by a pyAgrum Tensor.
