@@ -146,7 +146,15 @@ class DiscreteBayesianNetwork(
         """
         ie = gum.LazyPropagation(self.graphic)
         ie.setEvidence(evidence)
+
+        # Calculate the posterior distribution for all variables given the evidence
         ie.makeInference()
+
+        # MPE (Most Probable Explanation)
+        mpe, mpe_log_prob = ie.mpeLog2Posterior()
+        print(
+            f"The most probable explanation for observation {evidence} is \n - the configuration {mpe} \n - for a log probability of {mpe_log_prob:.6f}"
+        )
 
         result_dict = {}
         result_dict["structure"] = list(self.graphic.arcs())  # type: ignore library
@@ -160,13 +168,6 @@ class DiscreteBayesianNetwork(
                 "variable_name": variable_name,
                 "probabilities": dict(zip(labels, post.tolist())),
             }
-        # html_str = gnb.getInference(
-        #     self.graphic,
-        #     engine=ie,
-        #     evs=evidence,
-        #     targets=targets,
-        #     size="12",
-        # )
         if file_path:
             with open(file_path.with_suffix(".json"), "w") as f:
                 json.dump(result_dict, f, indent=4)
