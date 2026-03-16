@@ -215,3 +215,6 @@ __marimo__/
 *.pkl
 *.txt
 *.bifxml
+
+# Ignore output directories
+src/out/
