@@ -152,9 +152,9 @@ class DiscreteBayesianNetwork(
 
         # MPE (Most Probable Explanation)
         mpe, mpe_log_prob = ie.mpeLog2Posterior()
-        print(
-            f"The most probable explanation for observation {evidence} is \n - the configuration {mpe} \n - for a log probability of {mpe_log_prob:.6f}"
-        )
+        # print(
+        #     f"The most probable explanation for observation {evidence} is \n - the configuration {mpe} \n - for a log probability of {mpe_log_prob:.6f}"
+        # )
 
         result_dict = {}
         result_dict["structure"] = list(self.graphic.arcs())  # type: ignore library
