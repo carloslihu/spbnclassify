@@ -136,13 +136,16 @@ To get a local copy up and running follow these simple example steps.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-<!-- TODO: USAGE EXAMPLES -->
-
-<!-- ## Usage
+## Usage
+<!--
 
 Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
 
 _For more examples, please refer to the [Documentation](https://example.com)_ -->
+   ```sh
+   cd src
+   bash full-grid-search.sh
+   ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
