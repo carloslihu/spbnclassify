@@ -17,7 +17,7 @@ sys.path.append(str(RUTILE_AI_PATH))
 
 from rutile_ai.data_handler import DATASET_NAME_LIST
 from rutile_ai.engine.classification.spbnclassify.src.bn import bn_to_acronym
-from rutile_ai.pipeline.evaluator.model_comparison import (
+from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison import (
     bold_best_cell,
     get_avg_std_metric_matrix,
     get_metric_matrix,
