@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
 # TODO: Remove dependence
@@ -26,6 +25,7 @@ from rutile_ai.pipeline.evaluator.model_comparison import (
     get_model_structure,
     get_ranking_matrix,
     plot_critical_difference_diagram,
+    plot_sp_structure_boxplot,
     read_and_combine_experiment_results,
 )
 
@@ -139,150 +139,13 @@ if __name__ == "__main__":
                 f"Warning: {na_rows} row(s) with NaN values removed from metric matrix for metric: {simple_metric_name} with dataset(s): {na_row_indices}"
             )
         metric_matrix_df = metric_matrix_df.dropna()
-        # RFE: Refactor in function
-        # Boxplot for SemiParametric models by Structure
-        sp_parametric = "SP"
-        labels = []
-        boxplot_data = []
 
-        # For each Structure, plot a boxplot of the metric values for Parametric == SP
-        fig, ax = plt.subplots(figsize=(10, 6))
-        for col in metric_matrix_df.columns:
-            parametric = col.split("-")[0]
-            structure = col.split("-")[1]
-            if parametric != sp_parametric:
-                continue
-
-            boxplot_data.append(metric_matrix_df[col].values)
-            labels.append(col)  # Use just the structure name for cleaner labels
-
-        if boxplot_data:
-            # Create boxplot with improved styling
-            bp = ax.boxplot(
-                boxplot_data,
-                patch_artist=True,
-                showmeans=True,
-                meanline=True,
-                # notch=True,
-            )
-
-            # Color scheme for academic papers (colorblind-friendly)
-            colors = [
-                "#1f77b4",
-                "#ff7f0e",
-                "#2ca02c",
-                "#d62728",
-                "#9467bd",
-                "#8c564b",
-                "#e377c2",
-            ]
-
-            # Style the boxplot elements
-            for i, (patch, median, mean) in enumerate(
-                zip(bp["boxes"], bp["medians"], bp["means"])
-            ):
-                patch.set_facecolor(colors[i % len(colors)])
-                patch.set_alpha(0.7)
-                patch.set_edgecolor("black")
-                patch.set_linewidth(1.2)
-
-                # Style median line
-                median.set_color("black")
-                median.set_linewidth(2)
-
-                # Style mean line
-                mean.set_color("red")
-                mean.set_linewidth(2)
-                mean.set_linestyle("--")
-
-            # Style whiskers and caps
-            for whisker in bp["whiskers"]:
-                whisker.set_color("black")
-                whisker.set_linewidth(1.5)
-                whisker.set_linestyle("-")
-
-            for cap in bp["caps"]:
-                cap.set_color("black")
-                cap.set_linewidth(1.5)
-
-            # Style outliers
-            for flier in bp["fliers"]:
-                flier.set_marker("o")
-                flier.set_markerfacecolor("red")
-                flier.set_markeredgecolor("red")
-                flier.set_markersize(4)
-                flier.set_alpha(0.6)
-
-            # Beautify the y-axis label for better readability
-            beautified_label = simple_metric_name.replace("_", " ").title()
-            if beautified_label == "Roc Auc":
-                beautified_label = "ROC AUC"
-            elif beautified_label == "Log Likelihood":
-                beautified_label = "Log-Likelihood"
-
-            # Set labels and title
-            ax.set_xlabel("Model", fontsize=12, fontweight="bold")
-            ax.set_ylabel(beautified_label, fontsize=12, fontweight="bold")
-
-            # Set x-tick labels
-            ax.set_xticks(range(1, len(labels) + 1))
-            ax.set_xticklabels(labels, fontsize=11, rotation=0)
-
-            # Improve tick formatting
-            ax.tick_params(axis="both", which="major", labelsize=10)
-            ax.tick_params(axis="x", which="major", pad=5)
-
-            # Extend y-axis above 1.0 to accommodate legend
-            ax.set_ylim(bottom=-0.05, top=1.1)  # Or use top=1.05 for less space
-
-            # Set background and grid
-            ax.set_facecolor("white")
-            ax.grid(
-                True,
-                which="major",
-                axis="y",
-                linestyle="-",
-                linewidth=0.5,
-                color="gray",
-                alpha=0.3,
-            )
-            ax.set_axisbelow(True)
-
-            # Add legend for mean and median
-            from matplotlib.lines import Line2D
-
-            legend_elements = [
-                Line2D([0], [0], color="black", linewidth=2, label="Median"),
-                Line2D(
-                    [0], [0], color="red", linewidth=2, linestyle="--", label="Mean"
-                ),
-            ]
-            ax.legend(
-                handles=legend_elements,
-                loc="upper right",
-                fontsize=10,
-                frameon=True,
-                fancybox=True,
-                shadow=True,
-                framealpha=0.9,
-            )
-
-            # Adjust layout and add border
-            plt.tight_layout()
-            for spine in ax.spines.values():
-                spine.set_linewidth(1.2)
-                spine.set_color("black")
-
-            # Save with high DPI for publication quality
-            plt.savefig(
-                METRIC_MATRIX_RESULT_PATH
-                / f"{simple_metric_name}_sp_structure_boxplot.png",
-                dpi=300,
-                bbox_inches="tight",
-                facecolor="white",
-                edgecolor="none",
-            )
-            plt.close()
+        # Extract and plot SemiParametric models boxplot
+        plot_sp_structure_boxplot(
+            metric_matrix_df,
+            simple_metric_name,
+            METRIC_MATRIX_RESULT_PATH,
+        )
 
         # Aggregate mean and std of each column (model) in the metric matrix
         metric_means = metric_matrix_df.mean(axis=0)
