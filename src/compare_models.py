@@ -57,6 +57,8 @@ MODEL_NAME_LIST = [
     "SemiParametricKDependenceBayesian",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
+    # Baseline classifiers
+    # TODO
 ]
 
 MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in MODEL_NAME_LIST}

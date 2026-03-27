@@ -28,10 +28,44 @@ def get_model_structure(model_name):
 
 
 def read_and_combine_experiment_results(
-    experiment_name,
-    dataset_name_list,
-    pipeline_path,
-):
+    experiment_name: str,
+    dataset_name_list: list[str],
+    pipeline_path: Path,
+) -> pd.DataFrame:
+    """
+    Read and combine experiment results from multiple datasets into a single DataFrame.
+    This function aggregates CSV results from multiple datasets organized under a specified
+    experiment name within a pipeline directory structure. It formats dataset names for
+    presentation and creates additional computed columns.
+    Parameters
+    ----------
+    experiment_name : str
+        The name of the experiment directory to search for (prefixed with "gs_").
+    dataset_name_list : list[str]
+        A list of dataset names to process. Each dataset should have a corresponding
+        subdirectory in the pipeline path.
+    pipeline_path : Path
+        The root path where experiment results are organized by dataset name.
+        Expected structure: pipeline_path/dataset_name/gs_{experiment_name}/*.csv
+    Returns
+    -------
+    pd.DataFrame
+        A combined DataFrame containing all results from the processed datasets with:
+        - All original columns from individual CSV files
+        - "dataset_name" column: Formatted dataset name with proper capitalization
+        - "model_name" column: Concatenation of "parametric" and "structure" columns
+    Notes
+    -----
+    - Skips datasets with no CSV files (prints warning)
+    - Uses the lexicographically largest CSV filename when multiple CSV files exist
+    - Handles dataset name formatting by preserving uppercase acronyms and capitalizing
+      other parts, with special handling for possessive forms ('S -> 's)
+    Warnings
+    --------
+    - Prints a warning if no CSV files are found for a dataset
+    - Prints a message if multiple CSV files exist for a dataset
+    """
+
     all_data_list = []
     for dataset_name in dataset_name_list:
         experiment_result_path = pipeline_path / dataset_name / f"gs_{experiment_name}"
@@ -328,6 +362,34 @@ def plot_critical_difference_diagram(
 def plot_sp_structure_boxplot(
     metric_matrix_df: pd.DataFrame, simple_metric_name: str, output_dir: Path
 ) -> None:
+    """
+    Generate and save a boxplot comparing metric values across different structures
+    for semi-parametric (SP) models.
+    This function creates a publication-quality boxplot visualizing the distribution
+    of a specified metric across multiple model structures, filtering for only
+    semi-parametric models. The plot includes median lines, mean lines, and styled
+    outliers with a colorblind-friendly color scheme.
+    Args:
+        metric_matrix_df (pd.DataFrame): A DataFrame where column names follow the
+            naming convention "{Parametric}-{Structure}" (e.g., "SP-BN", "SP-TAN").
+            Column values should contain numeric metric values for each observation.
+        simple_metric_name (str): The name of the metric being visualized, used for
+            plot labels and output filename. Will be beautified by replacing underscores
+            with spaces. Special cases include "roc_auc" → "ROC AUC" and
+            "log_likelihood" → "Log-Likelihood".
+        output_dir (Path): The directory path where the output boxplot PNG image
+            will be saved.
+    Returns:
+        None: Saves the generated boxplot as a PNG file to the specified output
+            directory with the filename format "{metric_name}_sp_structure_boxplot.png".
+    Notes:
+        - Only filters and plots columns where the parametric type is "SP"
+        - Uses a colorblind-friendly palette with up to 7 distinct colors
+        - Median is shown as a solid black line; mean is shown as a dashed red line
+        - Outliers are displayed as red circles
+        - Saved image has 300 DPI for publication-quality output
+        - If no SP models are found in the data, no plot is generated
+    """
     # Boxplot for SemiParametric models by Structure
     sp_parametric = "SP"
     labels = []
@@ -468,7 +530,35 @@ def plot_sp_structure_boxplot(
         plt.close()
 
 
-def bold_best_cell(row, lower_better=False):
+def bold_best_cell(row: pd.Series, lower_better: bool = False) -> pd.Series:
+    """
+    Bold the best performing cell(s) in each row of a pandas Series.
+    This function identifies the best cell(s) based on mean values extracted from
+    "mean ± std" formatted strings, and applies LaTeX bold formatting to them.
+    When multiple cells have the same best mean, the one(s) with the lowest
+    standard deviation are bolded.
+    Parameters
+    ----------
+    row : pd.Series
+        A pandas Series where each cell contains a string in the format
+        "mean ± std" (e.g., "0.95 ± 0.02").
+    lower_better : bool, optional
+        If True, treats lower mean values as better (e.g., for error metrics).
+        If False (default), treats higher mean values as better (e.g., for accuracy).
+    Returns
+    -------
+    pd.Series
+        A copy of the input row with the best cell(s) wrapped in LaTeX bold
+        formatting using \\textbf{} notation.
+    Examples
+    --------
+    >>> row = pd.Series({'Model_A': '0.95 ± 0.02', 'Model_B': '0.92 ± 0.03'})
+    >>> bold_best_cell(row, lower_better=False)
+    Model_A    \\textbf{0.95 ± 0.02}
+    Model_B                0.92 ± 0.03
+    dtype: object
+    """
+
     # Bold the best mean $\\pm$ std cell in each row
     # Extract means and stds from "mean $\\pm$ std" formatted strings
     def parse_mean_std(cell):
