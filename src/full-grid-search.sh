@@ -34,7 +34,7 @@ Notes:
 # Command for all datasets and models
 COMMAND="python3 grid_search.py \
     -c \
-    --experiment_name bnc \
+    --experiment_name random_forest \
     --data_source public \
     --n_splits 10 \
     --n_runs 5 \
@@ -42,16 +42,16 @@ COMMAND="python3 grid_search.py \
 LOG_FILE="grid_search_complete.log"
 
 # TODO: Parameterize datasets used
-# Command for new datasets and models
+# # Command for new datasets and models
 # COMMAND="python3 grid_search.py \
 #     -c \
 #     --experiment_name bnc_single \
 #     --data_source public \
-#     --dataset_name yeast \
-#     --n_splits 10 \
-#     --n_runs 5 \
+#     --dataset_name iris \
+#     --n_splits 2 \
+#     --n_runs 1 \
 #     --max_workers 25"
-# LOG_FILE="grid_search_bnc_single.log"
+# LOG_FILE="grid_search_single.log"
 # endregion
 
 # region Command execution

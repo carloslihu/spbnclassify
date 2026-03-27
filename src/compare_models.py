@@ -12,6 +12,7 @@ AVG_STD_RESULT_PATH = RESULT_PATH / "avg_std_tables"
 METRIC_MATRIX_RESULT_PATH = RESULT_PATH / "metric_matrices"
 RANKING_TABLES_RESULT_PATH = RESULT_PATH / "ranking_tables"
 CD_DIAGRAMS_RESULT_PATH = RESULT_PATH / "cd_diagrams"
+DATASET_DETAIL_PATH = RESULT_PATH / "dataset_details"
 
 sys.path.append(str(RUTILE_AI_PATH))
 
@@ -427,3 +428,8 @@ if __name__ == "__main__":
             multicolumn_format="c",
             position="htbp",
         )
+    # endregion Concat model rankings across all classification metrics
+
+    # region Training time analysis
+    # TODO
+    # endregion Training time analysis

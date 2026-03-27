@@ -59,7 +59,7 @@ if __name__ == "__main__":
             print(f"RUNNING GRID SEARCH FOR {dataset_name}")
             experiment_path = Path(
                 RUTILE_AI_PATH
-                / f"data/pipelines/{dataset_name}/gs_{args.experiment_name}/"
+                / f"data/pipelines/SPBNC/{dataset_name}/gs_{args.experiment_name}/"
             )
             full_experiment_identifier = (
                 f"{dataset_name}_{args.experiment_name}_gridsearch"
