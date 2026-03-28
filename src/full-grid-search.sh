@@ -34,7 +34,7 @@ Notes:
 # Command for all datasets and models
 COMMAND="python3 grid_search.py \
     -c \
-    --experiment_name random_forest \
+    --experiment_name bnc \
     --data_source public \
     --n_splits 10 \
     --n_runs 5 \

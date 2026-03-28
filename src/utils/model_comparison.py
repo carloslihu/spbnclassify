@@ -28,7 +28,7 @@ def get_model_structure(model_name):
 
 
 def read_and_combine_experiment_results(
-    experiment_name: str,
+    experiment_name_list: list[str],
     dataset_name_list: list[str],
     pipeline_path: Path,
 ) -> pd.DataFrame:
@@ -39,8 +39,8 @@ def read_and_combine_experiment_results(
     presentation and creates additional computed columns.
     Parameters
     ----------
-    experiment_name : str
-        The name of the experiment directory to search for (prefixed with "gs_").
+    experiment_name_list : list[str]
+        The names of the experiment directories to search for (prefixed with "gs_").
     dataset_name_list : list[str]
         A list of dataset names to process. Each dataset should have a corresponding
         subdirectory in the pipeline path.
@@ -68,46 +68,58 @@ def read_and_combine_experiment_results(
 
     all_data_list = []
     for dataset_name in dataset_name_list:
-        experiment_result_path = pipeline_path / dataset_name / f"gs_{experiment_name}"
-        csv_files = list(experiment_result_path.glob("*.csv"))
-        if not csv_files:
-            print(
-                f"Warning: No CSV files found in {experiment_result_path}, skipping this dataset."
+        for experiment_name in experiment_name_list:
+            experiment_result_path = (
+                pipeline_path / dataset_name / f"gs_{experiment_name}"
             )
-            continue
-        elif len(csv_files) > 1:
-            print(f"dataset {dataset_name} has multiple csv files")
-            # NOTE: we keep all csv files for now, as they may contain different results (e.g., from different runs or configurations)
-            # removable_csv = max(csv_files, key=lambda f: f.name)
-            # removable_csv.unlink()
-            # print(f"Removed {removable_csv} to ensure only one CSV file per dataset.")
+            csv_files = list(experiment_result_path.glob("*.csv"))
+            if not csv_files:
+                print(
+                    f"Warning: No CSV files found in {experiment_result_path}, skipping this dataset."
+                )
+                continue
+            elif len(csv_files) > 1:
+                print(f"dataset {dataset_name} has multiple csv files")
+                # NOTE: we keep all csv files for now, as they may contain different results (e.g., from different runs or configurations)
+                # removable_csv = max(csv_files, key=lambda f: f.name)
+                # removable_csv.unlink()
+                # print(f"Removed {removable_csv} to ensure only one CSV file per dataset.")
 
-        # Latest in lexicographical order
-        # NOTE: should be max in general
-        latest_csv = max(csv_files, key=lambda f: f.name)
-        dataset_result_df = pd.read_csv(latest_csv)
+            # Latest in lexicographical order
+            # NOTE: should be max in general
+            latest_csv = max(csv_files, key=lambda f: f.name)
+            dataset_result_df = pd.read_csv(latest_csv)
 
-        dataset_name_parts = dataset_name.split("_")
-        formatted_parts = []
-        for part in dataset_name_parts:
-            # Preserve acronyms that are already in uppercase
-            if part.isupper():
-                formatted_parts.append(part)
-            # Capitalize only the first letter of other parts
+            dataset_name_parts = dataset_name.split("_")
+            formatted_parts = []
+            for part in dataset_name_parts:
+                # Preserve acronyms that are already in uppercase
+                if part.isupper():
+                    formatted_parts.append(part)
+                # Capitalize only the first letter of other parts
+                else:
+                    formatted_parts.append(part.capitalize())
+            output_dataset_name = " ".join(formatted_parts).replace("'S", "'s")
+            # Add new columns efficiently and defragment the DataFrame
+            dataset_name_series = [output_dataset_name] * len(dataset_result_df)
+            if (
+                "parametric" in dataset_result_df.columns
+                and "structure" in dataset_result_df.columns
+            ):
+                model_name_series = (
+                    dataset_result_df["parametric"] + dataset_result_df["structure"]
+                )
             else:
-                formatted_parts.append(part.capitalize())
-        dataset_name = " ".join(formatted_parts).replace("'S", "'s")
-        # Add new columns efficiently and defragment the DataFrame
-        extra_cols = pd.DataFrame(
-            {
-                "dataset_name": [dataset_name] * len(dataset_result_df),
-                "model_name": dataset_result_df["parametric"]
-                + dataset_result_df["structure"],
-            },
-            index=dataset_result_df.index,
-        )
-        dataset_result_df = pd.concat([dataset_result_df, extra_cols], axis=1)
-        all_data_list.append(dataset_result_df)
+                model_name_series = dataset_result_df["experiment_name"]
+            extra_cols = pd.DataFrame(
+                {
+                    "dataset_name": dataset_name_series,
+                    "model_name": model_name_series,
+                },
+                index=dataset_result_df.index,
+            )
+            dataset_result_df = pd.concat([dataset_result_df, extra_cols], axis=1)
+            all_data_list.append(dataset_result_df)
     experiment_result_df = pd.concat(all_data_list, ignore_index=True)
     return experiment_result_df
 
@@ -209,7 +221,7 @@ def get_ranking_matrix(
         - Additional rows for the sum and average of ranks are appended to the table.
         - Model names are shortened using the `bn_to_acronym` function.
     """
-    formatted_results = metric_matrix_df[model_name_dict.values()].copy()
+    formatted_results = metric_matrix_df.copy()
     ranking_matrix_df = formatted_results.rank(
         axis=1,
         method="min",
@@ -284,23 +296,23 @@ def plot_critical_difference_diagram(
     label_color_dict = {
         label: (
             "#FFB300"  # Bright orange for SemiParametric (solution, stands out)
-            if str(label).startswith("SP")
+            if str(label).startswith("SP-")
             else (
                 "#1976D2"  # Blue for KDE (alternative)
-                if str(label).startswith("KDE")
+                if str(label).startswith("KDE-")
                 else (
                     "#388E3C"  # Green for Gaussian (alternative)
-                    if str(label).startswith("G")
+                    if str(label).startswith("G-")
                     else "#757575"  # Gray for others (alternative)
                 )
             )
         )
         for label in model_name_dict.values()
     }
-    scores = metric_matrix_df[list(model_name_dict.values())].values
+    scores = metric_matrix_df.values
     result = plot_critical_difference(
         scores=scores,
-        labels=list(model_name_dict.values()),
+        labels=metric_matrix_df.columns.tolist(),
         highlight=label_color_dict,
         lower_better=lower_better,  # higher metric is better
         test="wilcoxon",  # or nemenyi
@@ -391,16 +403,14 @@ def plot_sp_structure_boxplot(
         - If no SP models are found in the data, no plot is generated
     """
     # Boxplot for SemiParametric models by Structure
-    sp_parametric = "SP"
+    sp_parametric = "SP-"
     labels = []
     boxplot_data = []
 
     # For each Structure, plot a boxplot of the metric values for Parametric == SP
     fig, ax = plt.subplots(figsize=(10, 6))
     for col in metric_matrix_df.columns:
-        parametric = col.split("-")[0]
-        structure = col.split("-")[1]
-        if parametric != sp_parametric:
+        if not col.startswith(sp_parametric):
             continue
 
         boxplot_data.append(metric_matrix_df[col].values)

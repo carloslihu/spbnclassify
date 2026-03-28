@@ -30,7 +30,8 @@ from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison imp
     read_and_combine_experiment_results,
 )
 
-EXPERIMENT_NAME = f"bnc"
+# gs_<experiment_name> folder results
+EXPERIMENT_NAME_LIST = ["bnc", "RandomForest", "SVC", "XGBoost"]
 
 MODEL_NAME_LIST = [
     # Gaussian classifiers
@@ -58,7 +59,9 @@ MODEL_NAME_LIST = [
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
     # Baseline classifiers
-    # TODO
+    "RandomForest",
+    "SVC",
+    "XGBoost",
 ]
 
 MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in MODEL_NAME_LIST}
@@ -85,11 +88,11 @@ if __name__ == "__main__":
 
     # region Read and combine experiment results
     experiment_result_df = read_and_combine_experiment_results(
-        experiment_name=EXPERIMENT_NAME,
+        experiment_name_list=EXPERIMENT_NAME_LIST,
         dataset_name_list=DATASET_NAME_LIST,
         pipeline_path=PIPELINE_PATH,
     )
-    experiment_file_name = RESULT_PATH / f"{EXPERIMENT_NAME}_combined_results.csv"
+    experiment_file_name = RESULT_PATH / "gs_combined_results.csv"
     experiment_result_df.to_csv(experiment_file_name, index=False)
     # endregion Read and combine experiment results
 
@@ -131,6 +134,8 @@ if __name__ == "__main__":
         metric_matrix_df.to_csv(metric_file_name, index=True)
 
         # Ensure non-NaN values are present
+        # Drop columns with all NaN values
+        metric_matrix_df = metric_matrix_df.dropna(axis=1, how="all")
         # Drop rows with NaN values to ensure valid comparisons
         na_rows = metric_matrix_df.isna().any(axis=1).sum()
         na_row_indices = metric_matrix_df.index[
