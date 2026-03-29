@@ -13,7 +13,7 @@ FORMAT_DICT = {
 }
 
 
-# region Model Acronym Parameter and Structure Extraction Functions
+# region Model name parsing and formatting utilities
 def get_model_parameter(model_name):
     # Extract the first part before the hyphen in the model name
     return model_name.split("-")[0] if "-" in model_name else model_name
@@ -22,6 +22,27 @@ def get_model_parameter(model_name):
 def get_model_structure(model_name):
     # Extract the part after the first hyphen in the model name, or empty string if no hyphen
     return model_name.split("-", 1)[1] if "-" in model_name else ""
+
+
+def sci_fmt(x):
+    # Use scientific notation if abs(x) >= 1e4 or abs(x) < 1e-2 and not zero
+    if pd.isna(x):
+        return ""
+    if abs(x) >= 1e4 or (abs(x) < 1e-2 and x != 0):
+        return f"{x:.2e}"
+    else:
+        return f"{x:.2f}"
+
+
+# Format both mean and std in each cell using sci_fmt
+def format_mean_std_cell(cell):
+    try:
+        mean_str, std_str = cell.split(" $\\pm$ ")
+        mean_val = float(mean_str)
+        std_val = float(std_str)
+        return f"{sci_fmt(mean_val)} $\\pm$ {sci_fmt(std_val)}"
+    except Exception:
+        return cell
 
 
 # endregion
@@ -221,7 +242,7 @@ def get_ranking_matrix(
         - Additional rows for the sum and average of ranks are appended to the table.
         - Model names are shortened using the `bn_to_acronym` function.
     """
-    formatted_results = metric_matrix_df.copy()
+    formatted_results = metric_matrix_df[model_name_dict.values()].copy()
     ranking_matrix_df = formatted_results.rank(
         axis=1,
         method="min",
@@ -292,7 +313,7 @@ def plot_critical_difference_diagram(
     """
 
     # Generate the critical difference diagram on the provided axis
-
+    labels = list(model_name_dict.values())
     label_color_dict = {
         label: (
             "#FFB300"  # Bright orange for SemiParametric (solution, stands out)
@@ -307,12 +328,13 @@ def plot_critical_difference_diagram(
                 )
             )
         )
-        for label in model_name_dict.values()
+        for label in labels
     }
-    scores = metric_matrix_df.values
+    scores = metric_matrix_df[labels].values
+
     result = plot_critical_difference(
         scores=scores,
-        labels=metric_matrix_df.columns.tolist(),
+        labels=labels,
         highlight=label_color_dict,
         lower_better=lower_better,  # higher metric is better
         test="wilcoxon",  # or nemenyi

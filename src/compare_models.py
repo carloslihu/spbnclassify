@@ -9,7 +9,7 @@ DATA_PATH = RUTILE_AI_PATH / "data"
 PIPELINE_PATH = DATA_PATH / "pipelines" / "SPBNC"
 RESULT_PATH = DATA_PATH / "agg_results"
 AVG_STD_RESULT_PATH = RESULT_PATH / "avg_std_tables"
-METRIC_MATRIX_RESULT_PATH = RESULT_PATH / "metric_matrices"
+BOXPLOT_RESULT_PATH = RESULT_PATH / "boxplots"
 RANKING_TABLES_RESULT_PATH = RESULT_PATH / "ranking_tables"
 CD_DIAGRAMS_RESULT_PATH = RESULT_PATH / "cd_diagrams"
 DATASET_DETAIL_PATH = RESULT_PATH / "dataset_details"
@@ -20,6 +20,7 @@ from rutile_ai.data_handler import DATASET_NAME_LIST
 from rutile_ai.engine.classification.spbnclassify.src.bn import bn_to_acronym
 from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison import (
     bold_best_cell,
+    format_mean_std_cell,
     get_avg_std_metric_matrix,
     get_metric_matrix,
     get_model_parameter,
@@ -28,12 +29,13 @@ from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison imp
     plot_critical_difference_diagram,
     plot_sp_structure_boxplot,
     read_and_combine_experiment_results,
+    sci_fmt,
 )
 
 # gs_<experiment_name> folder results
 EXPERIMENT_NAME_LIST = ["bnc", "RandomForest", "SVC", "XGBoost"]
 
-MODEL_NAME_LIST = [
+BNC_MODEL_NAME_LIST = [
     # Gaussian classifiers
     "GaussianNaiveBayes",
     "GaussianSelectiveNaiveBayes",
@@ -58,13 +60,14 @@ MODEL_NAME_LIST = [
     "SemiParametricKDependenceBayesian",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
-    # Baseline classifiers
-    "RandomForest",
-    "SVC",
-    "XGBoost",
 ]
+BASELINE_MODEL_NAME_LIST = ["RandomForest", "SVC", "XGBoost"]
+MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
-MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in MODEL_NAME_LIST}
+BNC_MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in BNC_MODEL_NAME_LIST}
+MODEL_NAME_DICT = BNC_MODEL_NAME_DICT | {
+    name: name for name in BASELINE_MODEL_NAME_LIST
+}
 METRIC_CONFIG_DICT = {
     "cross_validation_avg/avg_metrics/weighted avg/accuracy": {"lower_better": False},
     "cross_validation_avg/avg_metrics/weighted avg/F1-score": {"lower_better": False},
@@ -82,7 +85,7 @@ CLASS_METRIC_LIST = ["accuracy", "F1-score", "AUC", "log_likelihood"]
 
 if __name__ == "__main__":
     AVG_STD_RESULT_PATH.mkdir(parents=True, exist_ok=True)
-    METRIC_MATRIX_RESULT_PATH.mkdir(parents=True, exist_ok=True)
+    BOXPLOT_RESULT_PATH.mkdir(parents=True, exist_ok=True)
     RANKING_TABLES_RESULT_PATH.mkdir(parents=True, exist_ok=True)
     CD_DIAGRAMS_RESULT_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -105,12 +108,12 @@ if __name__ == "__main__":
             simple_metric_name = "AUC"
         lower_better = METRIC_CONFIG_DICT[metric_name]["lower_better"]
 
-        metric_file_name = (
-            METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_matrix.csv"
-        )
-        summary_metric_latex_name = (
-            METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_summary.tex"
-        )
+        # metric_file_name = (
+        #     METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_matrix.csv"
+        # )
+        # summary_metric_latex_name = (
+        #     METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_summary.tex"
+        # )
         avg_std_csv_name = (
             AVG_STD_RESULT_PATH / f"{simple_metric_name}_avg_std_metric_matrix.csv"
         )
@@ -131,12 +134,10 @@ if __name__ == "__main__":
         metric_matrix_df = get_metric_matrix(
             experiment_result_df, MODEL_NAME_DICT, metric_name
         )
-        metric_matrix_df.to_csv(metric_file_name, index=True)
-
+        # metric_matrix_df.to_csv(metric_file_name, index=True)
         # Ensure non-NaN values are present
-        # Drop columns with all NaN values
+        # Drop columns with no Metric values at all (missing metric for all datasets for a model)
         metric_matrix_df = metric_matrix_df.dropna(axis=1, how="all")
-        # Drop rows with NaN values to ensure valid comparisons
         na_rows = metric_matrix_df.isna().any(axis=1).sum()
         na_row_indices = metric_matrix_df.index[
             metric_matrix_df.isna().any(axis=1)
@@ -152,64 +153,64 @@ if __name__ == "__main__":
         plot_sp_structure_boxplot(
             metric_matrix_df,
             simple_metric_name,
-            METRIC_MATRIX_RESULT_PATH,
+            BOXPLOT_RESULT_PATH,
         )
 
-        # Aggregate mean and std of each column (model) in the metric matrix
-        metric_means = metric_matrix_df.mean(axis=0)
-        metric_stds = metric_matrix_df.std(axis=0)
-        metric_summary_df = pd.DataFrame(
-            {"Model": metric_means.index, "Mean": metric_means, "STD": metric_stds}
-        )
-        metric_summary_df["Family"] = metric_summary_df["Model"].apply(
-            get_model_parameter
-        )
-        metric_summary_df["Model"] = metric_summary_df["Model"].apply(
-            get_model_structure
-        )
+        # # Aggregate mean and std of each column (model) in the metric matrix
+        # metric_means = metric_matrix_df.mean(axis=0)
+        # metric_stds = metric_matrix_df.std(axis=0)
+        # metric_summary_df = pd.DataFrame(
+        #     {"Model": metric_means.index, "Mean": metric_means, "STD": metric_stds}
+        # )
+        # metric_summary_df["Family"] = metric_summary_df["Model"].apply(
+        #     get_model_parameter
+        # )
+        # metric_summary_df["Model"] = metric_summary_df["Model"].apply(
+        #     get_model_structure
+        # )
 
-        # Retain original Structure and Parametric ordering in the pivot
-        structure_order = metric_summary_df["Model"].unique()
-        parametric_order = metric_summary_df["Family"].unique()
+        # # Retain original Structure and Parametric ordering in the pivot
+        # structure_order = metric_summary_df["Model"].unique()
+        # parametric_order = metric_summary_df["Family"].unique()
 
-        # Metric Summary
-        metric_summary_df = metric_summary_df.pivot(
-            index="Model",
-            columns="Family",
-            values=["Mean", "STD"],
-        )
-        # Reindex to preserve original order
-        metric_summary_df = metric_summary_df.reindex(index=structure_order)
-        metric_summary_df = metric_summary_df.reindex(columns=parametric_order, level=1)
+        # # Metric Summary
+        # metric_summary_df = metric_summary_df.pivot(
+        #     index="Model",
+        #     columns="Family",
+        #     values=["Mean", "STD"],
+        # )
+        # # Reindex to preserve original order
+        # metric_summary_df = metric_summary_df.reindex(index=structure_order).reindex(
+        #     columns=parametric_order, level=1
+        # )
 
-        # Combine mean and std into a single string per cell
-        metric_summary_df = metric_summary_df.apply(
-            lambda row: {
-                col: f"{row['Mean'][col]:.2f} $\\pm$ {row['STD'][col]:.2f}"
-                for col in row["Mean"].index
-            },
-            axis=1,
-            result_type="expand",
-        )
-        metric_summary_df.index.name = "Model"
-        metric_summary_df.columns.name = "Family"
-        latex_df = metric_summary_df.copy()
-        latex_df = latex_df.round(2)
-        latex_bold_df = latex_df.apply(
-            bold_best_cell, lower_better=lower_better, axis=1
-        )
-        # RFE: Add \resizebox{\textwidth}{!} before \begin{tabular} and closing bracket after \end{tabular}
-        latex_bold_df.to_latex(
-            buf=summary_metric_latex_name,
-            float_format="%.2f",
-            caption=f"Average metric for each model over all datasets (mean $\\pm$ standard deviation). The best (highest) results are highlighted in bold. In case of a draw, all best results are highlighted.",
-            label=f"tab:{simple_metric_name}_metric_summary",
-            # column_format=col_format,
-            escape=False,
-            multicolumn=True,
-            multicolumn_format="c",
-            position="htbp",
-        )
+        # # Combine mean and std into a single string per cell
+        # metric_summary_df = metric_summary_df.apply(
+        #     lambda row: {
+        #         col: f"{row['Mean'][col]:.2f} $\\pm$ {row['STD'][col]:.2f}"
+        #         for col in row["Mean"].index
+        #     },
+        #     axis=1,
+        #     result_type="expand",
+        # )
+        # metric_summary_df.index.name = "Model"
+        # metric_summary_df.columns.name = "Family"
+        # latex_df = metric_summary_df.copy()
+        # latex_df = latex_df.round(2)
+        # latex_bold_df = latex_df.apply(
+        #     bold_best_cell, lower_better=lower_better, axis=1
+        # )
+        # latex_bold_df.to_latex(
+        #     buf=summary_metric_latex_name,
+        #     float_format="%.2f",
+        #     caption=f"Average metric for each model over all datasets (mean $\\pm$ standard deviation). The best (highest) results are highlighted in bold. In case of a draw, all best results are highlighted.",
+        #     label=f"tab:{simple_metric_name}_metric_summary",
+        #     # column_format=col_format,
+        #     escape=False,
+        #     multicolumn=True,
+        #     multicolumn_format="c",
+        #     position="htbp",
+        # )
         # endregion Metric Matrix
 
         # region Average and Standard Deviation Metric Matrix
@@ -237,25 +238,6 @@ if __name__ == "__main__":
                 col_format += "|"
             col_format += "c"
 
-        def sci_fmt(x):
-            # Use scientific notation if abs(x) >= 1e4 or abs(x) < 1e-2 and not zero
-            if pd.isna(x):
-                return ""
-            if abs(x) >= 1e4 or (abs(x) < 1e-2 and x != 0):
-                return f"{x:.2e}"
-            else:
-                return f"{x:.2f}"
-
-        # Format both mean and std in each cell using sci_fmt
-        def format_mean_std_cell(cell):
-            try:
-                mean_str, std_str = cell.split(" $\\pm$ ")
-                mean_val = float(mean_str)
-                std_val = float(std_str)
-                return f"{sci_fmt(mean_val)} $\\pm$ {sci_fmt(std_val)}"
-            except Exception:
-                return cell
-
         latex_bold_df = latex_bold_df.applymap(format_mean_std_cell)
 
         latex_bold_df.to_latex(
@@ -277,7 +259,7 @@ if __name__ == "__main__":
 
         p_values = plot_critical_difference_diagram(
             metric_matrix_df,
-            MODEL_NAME_DICT,
+            BNC_MODEL_NAME_DICT,
             file_name=cd_file_name,
             lower_better=lower_better,
             # friedman_stat=friedman_stat,
@@ -288,7 +270,7 @@ if __name__ == "__main__":
         # region Ranking Table
         ranking_matrix_df = get_ranking_matrix(
             metric_matrix_df,
-            MODEL_NAME_DICT,
+            BNC_MODEL_NAME_DICT,
             file_name=ranking_file_name,
             lower_better=lower_better,
         )
@@ -353,8 +335,6 @@ if __name__ == "__main__":
         ranking_matrix_df["Metric"] = simple_metric_name.replace("_", " ").title()
         all_rankings_dict[simple_metric_name] = ranking_matrix_df
         # endregion Ranking Table
-
-    print(f"Results saved in {RESULT_PATH}")
     # endregion
 
     # region Concat model rankings across all classification metrics
@@ -401,7 +381,6 @@ if __name__ == "__main__":
     # latex export
     latex_df = combined_ranking_summary_df.copy()
     latex_df = latex_df.round(2)
-    ranking_summary_latex_name = RESULT_PATH / f"agg_ranking_summary.tex"
     # Apply bold_best_cell per Metric column (i.e., per metric for each structure)
     latex_bold_df = latex_df.copy()
     for metric in latex_df.columns.levels[0]:
@@ -440,3 +419,7 @@ if __name__ == "__main__":
     # region Training time analysis
     # TODO
     # endregion Training time analysis
+    # region External Baseline Comparison
+    # TODO
+    # endregion External Baseline Comparison
+    print(f"Results saved in {RESULT_PATH}")
