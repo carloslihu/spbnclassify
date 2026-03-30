@@ -242,7 +242,13 @@ def get_ranking_matrix(
         - Additional rows for the sum and average of ranks are appended to the table.
         - Model names are shortened using the `bn_to_acronym` function.
     """
-    formatted_results = metric_matrix_df[model_name_dict.values()].copy()
+    labels = list(model_name_dict.values())
+    if not all(label in metric_matrix_df.columns for label in labels):
+        print(
+            "Warning: Not all model names from model_name_dict are present in metric_matrix_df columns. Skipping ranking matrix generation."
+        )
+        return pd.DataFrame()  # Return an empty DataFrame if columns are missing
+    formatted_results = metric_matrix_df[labels].copy()
     ranking_matrix_df = formatted_results.rank(
         axis=1,
         method="min",
@@ -314,6 +320,11 @@ def plot_critical_difference_diagram(
 
     # Generate the critical difference diagram on the provided axis
     labels = list(model_name_dict.values())
+    if not all(label in metric_matrix_df.columns for label in labels):
+        print(
+            "Warning: Not all model names from model_name_dict are present in metric_matrix_df columns. Skipping critical difference diagram."
+        )
+        return
     label_color_dict = {
         label: (
             "#FFB300"  # Bright orange for SemiParametric (solution, stands out)

@@ -1,3 +1,4 @@
+# RFE: Further refactor
 import sys
 from pathlib import Path
 
@@ -32,9 +33,6 @@ from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison imp
     sci_fmt,
 )
 
-# gs_<experiment_name> folder results
-EXPERIMENT_NAME_LIST = ["bnc", "RandomForest", "SVC", "XGBoost"]
-
 BNC_MODEL_NAME_LIST = [
     # Gaussian classifiers
     "GaussianNaiveBayes",
@@ -61,13 +59,25 @@ BNC_MODEL_NAME_LIST = [
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
 ]
-BASELINE_MODEL_NAME_LIST = ["RandomForest", "SVC", "XGBoost"]
+BNC_BASELINE_MODEL_NAME_LIST = [
+    "SemiParametricAveragedOneDependenceEstimator",
+    "SemiParametricBayesianNetworkAugmentedNaiveBayes",
+    "SemiParametricBayesianMultinet",
+]
+BASELINE_MODEL_NAME_LIST = [
+    # "LogisticRegression",
+    "RandomForest",
+    "XGBoost",
+    "SVM-RBF",
+]
 MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
 BNC_MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in BNC_MODEL_NAME_LIST}
-MODEL_NAME_DICT = BNC_MODEL_NAME_DICT | {
-    name: name for name in BASELINE_MODEL_NAME_LIST
+BASELINE_MODEL_NAME_DICT = {name: name for name in BASELINE_MODEL_NAME_LIST} | {
+    name: bn_to_acronym(name) for name in BNC_BASELINE_MODEL_NAME_LIST
 }
+MODEL_NAME_DICT = BNC_MODEL_NAME_DICT | BASELINE_MODEL_NAME_DICT
+
 METRIC_CONFIG_DICT = {
     "cross_validation_avg/avg_metrics/weighted avg/accuracy": {"lower_better": False},
     "cross_validation_avg/avg_metrics/weighted avg/F1-score": {"lower_better": False},
@@ -82,6 +92,9 @@ METRIC_CONFIG_DICT = {
     },
 }
 CLASS_METRIC_LIST = ["accuracy", "F1-score", "AUC", "log_likelihood"]
+
+# gs_<experiment_name> folder results
+EXPERIMENT_NAME_LIST = BASELINE_MODEL_NAME_LIST + ["bnc"]
 
 if __name__ == "__main__":
     AVG_STD_RESULT_PATH.mkdir(parents=True, exist_ok=True)
@@ -101,6 +114,7 @@ if __name__ == "__main__":
 
     # region Model Comparison for each metric
     all_rankings_dict = {}
+    baseline_rankings_dict = {}
     for metric_name in METRIC_CONFIG_DICT.keys():
         # region Parameter setup
         simple_metric_name = metric_name.split("/")[-1]
@@ -123,10 +137,17 @@ if __name__ == "__main__":
         ranking_file_name = (
             RANKING_TABLES_RESULT_PATH / f"{simple_metric_name}_ranking_table.csv"
         )
+        baseline_ranking_file_name = (
+            RANKING_TABLES_RESULT_PATH
+            / f"{simple_metric_name}_baseline_ranking_table.csv"
+        )
         summary_ranking_latex_name = (
             RANKING_TABLES_RESULT_PATH / f"{simple_metric_name}_ranking_summary.tex"
         )
         cd_file_name = CD_DIAGRAMS_RESULT_PATH / f"{simple_metric_name}_cd_diagram.png"
+        baseline_cd_file_name = (
+            CD_DIAGRAMS_RESULT_PATH / f"{simple_metric_name}_baseline_cd_diagram.png"
+        )
         # endregion Parameter setup
 
         # region Metric Matrix
@@ -265,6 +286,13 @@ if __name__ == "__main__":
             # friedman_stat=friedman_stat,
             # p_value=p_value,
         )
+        p_values = plot_critical_difference_diagram(
+            metric_matrix_df,
+            BASELINE_MODEL_NAME_DICT,
+            file_name=baseline_cd_file_name,
+            lower_better=lower_better,
+        )
+
         # endregion Critical Difference Diagram
 
         # region Ranking Table
@@ -334,6 +362,31 @@ if __name__ == "__main__":
         )
         ranking_matrix_df["Metric"] = simple_metric_name.replace("_", " ").title()
         all_rankings_dict[simple_metric_name] = ranking_matrix_df
+
+        # Baseline ranking table
+        baseline_ranking_matrix_df = get_ranking_matrix(
+            metric_matrix_df,
+            BASELINE_MODEL_NAME_DICT,
+            file_name=baseline_ranking_file_name,
+            lower_better=lower_better,
+        )
+        # Calculate average ranking for each model across all metrics and datasets
+        average_rankings_mean = baseline_ranking_matrix_df.mean()
+        # Calculate standard deviation for each model across all metrics and datasets
+        average_rankings_std = baseline_ranking_matrix_df.std()
+
+        # Create a summary DataFrame
+        baseline_ranking_summary_df = pd.DataFrame(
+            {
+                "Model": average_rankings_mean.index,
+                "Mean Ranking": average_rankings_mean.values,
+                "STD Ranking": average_rankings_std.values,
+            }
+        )
+        baseline_ranking_summary_df["Metric"] = simple_metric_name.replace(
+            "_", " "
+        ).title()
+        baseline_rankings_dict[simple_metric_name] = baseline_ranking_summary_df
         # endregion Ranking Table
     # endregion
 
@@ -341,6 +394,37 @@ if __name__ == "__main__":
     combined_rankings_df = pd.concat(
         [df for key, df in all_rankings_dict.items() if key in CLASS_METRIC_LIST],
         ignore_index=True,
+    )
+    combined_baseline_rankings_df = pd.concat(
+        [df for key, df in baseline_rankings_dict.items() if key in CLASS_METRIC_LIST],
+        ignore_index=True,
+    )
+
+    # One row per baseline model, one column per metric, cell = mean ± std.
+    baseline_metric_order = combined_baseline_rankings_df["Metric"].drop_duplicates()
+    baseline_model_order = combined_baseline_rankings_df["Model"].drop_duplicates()
+    combined_baseline_ranking_summary_df = combined_baseline_rankings_df.assign(
+        MeanSTD=lambda df: df.apply(
+            lambda row: f"{row['Mean Ranking']:.2f} $\\pm$ {row['STD Ranking']:.2f}",
+            axis=1,
+        )
+    ).pivot(index="Model", columns="Metric", values="MeanSTD")
+    combined_baseline_ranking_summary_df = combined_baseline_ranking_summary_df.reindex(
+        index=baseline_model_order,
+        columns=baseline_metric_order,
+    )
+    combined_baseline_ranking_summary_df.reset_index(inplace=True)
+    combined_baseline_ranking_summary_df.to_csv(
+        RESULT_PATH / "agg_baseline_ranking_summary.csv", index=False
+    )
+
+    combined_baseline_ranking_summary_df.to_latex(
+        buf=RESULT_PATH / "agg_baseline_ranking_summary.tex",
+        caption=f"Mean and standard deviation of average rankings for {', '.join(baseline_model_order)} across all datasets, evaluated for each performance metric.",
+        label="tab:agg_baseline_ranking_summary",
+        index=False,
+        escape=False,
+        position="htbp",
     )
 
     average_rankings_mean = combined_rankings_df.groupby("Metric").mean()
