@@ -66,7 +66,7 @@ BNC_BASELINE_MODEL_NAME_LIST = [
 ]
 BASELINE_MODEL_NAME_LIST = [
     # "LogisticRegression",
-    "RandomForest",
+    "Random_Forest",
     "XGBoost",
     "SVM-RBF",
 ]
