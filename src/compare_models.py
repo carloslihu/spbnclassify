@@ -60,15 +60,20 @@ BNC_MODEL_NAME_LIST = [
     "SemiParametricBayesianMultinet",
 ]
 BNC_BASELINE_MODEL_NAME_LIST = [
+    "GaussianNaiveBayes",
     "SemiParametricAveragedOneDependenceEstimator",
+    # "SemiParametricKDependenceBayesian",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
 ]
 BASELINE_MODEL_NAME_LIST = [
     # "LogisticRegression",
-    "Random_Forest",
-    "XGBoost",
-    "SVM-RBF",
+    # "Random_Forest",
+    # "XGBoost",
+    # "SVM-RBF",
+    # "GaussianNB",
+    "LDA",
+    "QDA",
 ]
 MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
@@ -427,8 +432,8 @@ if __name__ == "__main__":
         position="htbp",
     )
 
-    average_rankings_mean = combined_rankings_df.groupby("Metric").mean()
-    average_rankings_std = combined_rankings_df.groupby("Metric").std()
+    average_rankings_mean = combined_rankings_df.groupby("Metric", sort=False).mean()
+    average_rankings_std = combined_rankings_df.groupby("Metric", sort=False).std()
     # Create a DataFrame with "mean $\\pm$ std" for each cell
     combined_ranking_summary_df = pd.DataFrame(
         {
