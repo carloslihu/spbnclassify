@@ -11,19 +11,14 @@ import pyagrum.lib.bn_vs_bn as gcm
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 
-from ..bn import (
-    BayesianNetwork,
+from ..bn import BayesianNetwork
+from ..utils.constants import NAN_LOGL_VALUE, TRUE_CLASS_LABEL
+from ..utils.distance import (
     hamming_distance,
     node_presence_distance,
     node_type_distance,
 )
-from ..utils import (
-    NAN_LOGL_VALUE,
-    TRUE_CLASS_LABEL,
-    dict2html,
-    extract_class_name,
-    safe_exp,
-)
+from ..utils.generic import dict2html, extract_class_name, safe_exp
 
 
 class BaseBayesianNetworkClassifier(BayesianNetwork):

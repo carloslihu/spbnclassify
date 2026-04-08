@@ -8,10 +8,10 @@ from ..bn import (
     GaussianBayesianNetwork,
     KDEBayesianNetwork,
     SemiParametricBayesianNetwork,
-    gaussian_jensen_shannon_divergence,
 )
-from ..utils import safe_exp
 from ..utils.constants import TRUE_CLASS_LABEL
+from ..utils.distance import gaussian_jensen_shannon_divergence
+from ..utils.generic import safe_exp
 from .base import BaseMultiBayesianNetworkClassifier
 
 

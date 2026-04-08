@@ -7,14 +7,14 @@ from ..bn import (
     KDEBayesianNetwork,
     SemiParametricBayesianNetwork,
 )
-from ..utils import (
+from ..utils.constants import (
     CONTINUOUS_NODES,
     PROB_CONTINUOUS_CONTINUOUS,
     PROB_DISCRETE_CONTINUOUS,
     PROB_DISCRETE_DISCRETE,
     PROB_GAUSSIAN,
+    TRUE_CLASS_LABEL,
 )
-from ..utils.constants import TRUE_CLASS_LABEL
 from .base import BaseBayesianNetworkClassifier
 from .probabilistic_model import FixedCLG, FixedDiscreteFactor, NormalMixtureCPD
 

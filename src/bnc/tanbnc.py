@@ -1,7 +1,7 @@
 import pandas as pd
 import pybnesian as pbn
 
-from ..utils import ConditionalMutualInformationGraph, DirectedTree
+from ..utils.graph import ConditionalMutualInformationGraph, DirectedTree
 from .banc import (
     BaseBayesianNetworkClassifier,
     GaussianBayesianNetworkAugmentedNaiveBayes,

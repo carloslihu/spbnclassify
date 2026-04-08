@@ -11,8 +11,7 @@ import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 from scipy.optimize import differential_evolution
 
-from ..utils import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP
-from ..utils.constants import TRUE_ANOMALY_LABEL
+from ..utils.constants import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP, TRUE_ANOMALY_LABEL
 from ..utils.feature_selection import get_zero_variance_variables
 
 

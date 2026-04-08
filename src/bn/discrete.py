@@ -14,8 +14,8 @@ import pydot
 from matplotlib import pyplot as plt
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
+from ..utils.generic import convert_arcs_to_names
 from .base import BayesianNetwork
-from .utils import convert_arcs_to_names
 
 
 class DiscreteBayesianNetwork(

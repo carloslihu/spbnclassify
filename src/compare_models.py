@@ -18,7 +18,7 @@ DATASET_DETAIL_PATH = RESULT_PATH / "dataset_details"
 sys.path.append(str(RUTILE_AI_PATH))
 
 from rutile_ai.data_handler import DATASET_NAME_LIST
-from rutile_ai.engine.classification.spbnclassify.src.bn import bn_to_acronym
+from rutile_ai.engine.classification.spbnclassify.src.utils.generic import bn_to_acronym
 from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison import (
     bold_best_cell,
     format_mean_std_cell,

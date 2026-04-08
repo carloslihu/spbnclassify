@@ -1,58 +1,8 @@
-import re
-
 import numpy as np
-import pyagrum as gum
 import pybnesian as pbn
 import scipy
 
-from . import BayesianNetwork
-
-
-def bn_to_acronym(name: str) -> str:
-    """
-    Converts a Bayesian network name to its acronym.
-    This function capitalizes words or uppercase abbreviations to form an acronym.
-    For each word, if it is already uppercase, it is included as is; otherwise, only
-    the first letter (capitalized) is used.
-    Args:
-        name (str): The name of the Bayesian network.
-    Returns:
-        str: The acronym generated from the input name.
-    Example:
-        >>> bn_to_acronym("SemiParametricBayesianNetwork")
-        'SPBN'
-    """
-
-    words = re.findall(r"[A-Z][a-z]*|[A-Z]+(?![a-z])", name)
-    acronym = "".join([w if w and w.isupper() else w[0].upper() for w in words if w])
-    # Insert hyphen after G, SP, or KDE if acronym starts with one of these
-    for prefix in ["G", "SP", "KDE"]:
-        if acronym.startswith(prefix) and len(acronym) > len(prefix):
-            suffix = acronym[len(prefix) :]
-            # Handle special cases for suffixes
-            match suffix:
-                case "TANB":
-                    suffix = "TAN"
-                case "BNANB":
-                    suffix = "BAN"
-                case "KDB":
-                    suffix = "$k$DB"
-                case _:
-                    suffix = suffix
-            acronym = prefix + "-" + suffix
-            break
-    return acronym
-
-
-# Convert arcs from IDs to names
-def convert_arcs_to_names(bn: gum.BayesNet) -> list[tuple[str, str]]:
-    """Convert arcs from node IDs to variable names"""
-    arcs_with_names = []
-    for source_id, target_id in bn.arcs():  # type: ignore library
-        source_name = bn.variable(source_id).name()
-        target_name = bn.variable(target_id).name()
-        arcs_with_names.append((source_name, target_name))
-    return arcs_with_names
+from ..bn import BayesianNetwork
 
 
 # region Structural Distance

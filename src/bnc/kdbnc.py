@@ -1,7 +1,7 @@
 import pandas as pd
 import pybnesian as pbn
 
-from ..utils import ConditionalMutualInformationGraph
+from ..utils.graph import ConditionalMutualInformationGraph
 from .banc import (
     GaussianBayesianNetworkAugmentedNaiveBayes,
     KDEBayesianNetworkAugmentedNaiveBayes,
