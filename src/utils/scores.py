@@ -69,7 +69,6 @@ class OracleValidatedScore(pbn.ValidatedScore):
         return None
 
 
-# TODO: Review that this is correctly calculated
 class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     """Validated score that optimizes conditional log-likelihood for a target variable."""
 
@@ -156,6 +155,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def data(self) -> pd.DataFrame:
         return self.training_data()
 
+    # TODO: Review that this is correctly calculated
     def _conditional_log_likelihood(
         self, model: pbn.BayesianNetworkBase, df: pd.DataFrame | object
     ) -> float:
@@ -215,9 +215,12 @@ if __name__ == "__main__":
         {
             "x1": [0.0, 0.2, 0.8, 1.1, 1.5, 1.9, 2.2, 2.5],
             "x2": [1.0, 0.9, 0.7, 0.4, 0.2, 0.1, -0.1, -0.3],
-            "y": pd.Categorical(["A", "A", "A", "B", "B", "B", "B", "B"]),
+            "y": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
+    # TODO: Adapt to my BNCs
+    X = toy_df[["x1", "x2"]]
+    y = toy_df["y"]
     cll_score = ConditionalLogLikelihoodValidatedScore(
         toy_df, target="y", test_ratio=0.25, k=2, seed=7
     )
