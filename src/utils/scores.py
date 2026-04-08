@@ -1,7 +1,9 @@
+import numpy as np
+import pandas as pd
 import pybnesian as pbn
 
 
-class OracleScore(pbn.ValidatedScore):
+class OracleValidatedScore(pbn.ValidatedScore):
     """
     Oracle score used for testing structure learning.
 
@@ -70,5 +72,7 @@ class OracleScore(pbn.ValidatedScore):
 if __name__ == "__main__":
     hc = pbn.GreedyHillClimbing()
     start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
-    learned_model = hc.estimate(pbn.ArcOperatorSet(), OracleScore(), start_model)
+    learned_model = hc.estimate(
+        operators=pbn.ArcOperatorSet(), score=OracleValidatedScore(), start=start_model
+    )
     assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
