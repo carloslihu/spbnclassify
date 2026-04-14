@@ -14,8 +14,41 @@ class OracleValidatedScore(pbn.ValidatedScore):
               d
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        target: str,
+        test_ratio: float = 0.2,
+        k: int = 10,
+        seed: int | None = None,
+        construction_args: pbn.Arguments = pbn.Arguments(),
+    ) -> None:
         super().__init__()
+        self.target = target
+        if self.target not in df.columns:
+            raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
+
+        # CLL requires enumerating target values to normalize p(y|x).
+        self._target_values = (
+            pd.Series(df[self.target]).dropna().sort_values().unique().tolist()
+        )
+        if len(self._target_values) < 2:
+            raise ValueError(
+                "ConditionalLogLikelihoodScore requires at least two target values."
+            )
+
+        self.holdout_lik = pbn.HoldoutLikelihood(
+            df,
+            test_ratio=test_ratio,
+            seed=seed,
+            construction_args=construction_args,
+        )
+        self.cv_lik = pbn.CVLikelihood(
+            self.holdout_lik.training_data(),
+            k=k,
+            seed=seed,
+            construction_args=construction_args,
+        )
         self.variables: list[str] = ["a", "b", "c", "d"]
 
     def has_variables(self, vars: list[str]) -> bool:
@@ -62,14 +95,21 @@ class OracleValidatedScore(pbn.ValidatedScore):
     #     """
     #     return 0.0
 
-    def vscore(self, model: pbn.BayesianNetworkBase) -> float:
-        """Validation score. Default behavior is summing validation local scores.
-        This method is optional. The default implementation sums the validation local score for all the nodes
-        """
-        return sum(
-            self.vlocal_score(model, node, model.parents(node))
-            for node in model.nodes()
-        )
+    # def data(self) -> pd.DataFrame:
+    #     """Returns the DataFrame used to calculate the score and local scores.
+    #     This method is optional.
+    #     It is needed to infer the default node types in the GreedyHillClimbing algorithm.
+    #     """
+    #     return pd.DataFrame(columns=self.variables)
+
+    # def vscore(self, model: pbn.BayesianNetworkBase) -> float:
+    #     """Validation score. Default behavior is summing validation local scores.
+    #     This method is optional. The default implementation sums the validation local score for all the nodes
+    #     """
+    #     return sum(
+    #         self.vlocal_score(model, node, model.parents(node))
+    #         for node in model.nodes()
+    #     )
 
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
@@ -77,27 +117,21 @@ class OracleValidatedScore(pbn.ValidatedScore):
         """Validation local score with the required 3-argument signature.
         Only the version with 3 arguments score.vlocal_score(model, variable, evidence) needs to be implemented. The version with 2 arguments can not be overriden.
         """
+        # This is a simplified version without the validated likelihood proxy: the local score is directly used as validation local score.
         return self.local_score(model, variable, evidence)
 
-    def vlocal_score_node_type(
-        self,
-        model: pbn.BayesianNetworkBase,
-        variable_type: pbn.FactorType,
-        variable: str,
-        evidence: list[str],
-    ) -> float:
-        """
-        Returns the validated local score value of a node variable in the model if its conditional distribution were a variable_type factor and it had evidence as parents.
-        This method is optional. This method is only needed if the score is used together with ChangeNodeTypeSet.
-        """
-        return self.vlocal_score(model, variable, evidence)
-
-    # def data(self) -> pd.DataFrame:
-    #     """Returns the DataFrame used to calculate the score and local scores.
-    #     This method is optional.
-    #     It is needed to infer the default node types in the GreedyHillClimbing algorithm.
+    # def vlocal_score_node_type(
+    #     self,
+    #     model: pbn.BayesianNetworkBase,
+    #     variable_type: pbn.FactorType,
+    #     variable: str,
+    #     evidence: list[str],
+    # ) -> float:
     #     """
-    #     return pd.DataFrame(columns=self.variables)
+    #     Returns the validated local score value of a node variable in the model if its conditional distribution were a variable_type factor and it had evidence as parents.
+    #     This method is optional. This method is only needed if the score is used together with ChangeNodeTypeSet.
+    #     """
+    #     return 0.0
 
 
 class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
@@ -113,13 +147,14 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         construction_args: pbn.Arguments = pbn.Arguments(),
     ) -> None:
         super().__init__()
-        if target not in df.columns:
+        self._data = df
+        self.target = target
+        if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
 
-        self.target = target
         # CLL requires enumerating target values to normalize p(y|x).
         self._target_values = (
-            pd.Series(df[target]).dropna().sort_values().unique().tolist()
+            pd.Series(df[self.target]).dropna().sort_values().unique().tolist()
         )
         if len(self._target_values) < 2:
             raise ValueError(
@@ -140,50 +175,78 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         )
 
     def has_variables(self, vars: str | list[str]) -> bool:
+        """Return whether all given variables belong to the oracle domain."""
         return self.cv_lik.has_variables(vars)
 
     def compatible_bn(self, model: pbn.BayesianNetworkBase) -> bool:
+        """Checks whether the model is compatible (can be used) with this Score."""
         return self.has_variables(model.nodes())
+
+    # TODO: Review necessity
+    # def score(self, model: pbn.BayesianNetworkBase) -> float:
+    #     """This method is optional. The default implementation sums the local score for all the nodes."""
+    #     return self._conditional_log_likelihood(model, self.holdout_lik.training_data())
 
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
+        """Returns the local score value of a node variable in the model given its parents (evidence).
+        Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
+        """
+
         if variable != self.target:
             return 0.0
+        # TODO: do not use local_score
         return self.cv_lik.local_score(model, variable, evidence)
 
-    def score(self, model: pbn.BayesianNetworkBase) -> float:
-        return self._conditional_log_likelihood(model, self.holdout_lik.training_data())
+    # def local_score_node_type(
+    #     self,
+    #     model: pbn.BayesianNetworkBase,
+    #     variable_type: pbn.FactorType,
+    #     variable: str,
+    #     evidence: list[str],
+    # ) -> float:
+    #     """Returns the local score value of a node variable in the model if its conditional distribution were a variable_type factor and it had evidence as parents.
+    #     This method is optional. This method is only needed if the score is used together with ChangeNodeTypeSet
+    #     """
+    #     return 0.0
 
-    def vscore(self, model: pbn.BayesianNetworkBase) -> float:
-        return self._conditional_log_likelihood(model, self.holdout_lik.test_data())
+    # def vscore(self, model: pbn.BayesianNetworkBase) -> float:
+    #     """Validation score. Default behavior is summing validation local scores.
+    #     This method is optional. The default implementation sums the validation local score for all the nodes
+    #     """
+    #     return sum(
+    #         self.vlocal_score(model, node, model.parents(node))
+    #         for node in model.nodes()
+    #     )
 
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
         if variable != self.target:
             return 0.0
+        # TODO: do not use local_score
         return self.holdout_lik.local_score(model, variable, evidence)
 
-    def vlocal_score_node_type(
-        self,
-        model: pbn.BayesianNetworkBase,
-        variable_type: pbn.FactorType,
-        variable: str,
-        evidence: list[str],
-    ) -> float:
-        if variable != self.target:
-            return 0.0
-        return self.holdout_lik.local_score(model, variable_type, variable, evidence)
+    # TODO: Implement
+    # def vlocal_score_node_type(
+    #     self,
+    #     model: pbn.BayesianNetworkBase,
+    #     variable_type: pbn.FactorType,
+    #     variable: str,
+    #     evidence: list[str],
+    # ) -> float:
+    #     if variable != self.target:
+    #         return 0.0
+    #     return self.holdout_lik.local_score(model, variable_type, variable, evidence)
+    def data(self) -> pd.DataFrame:
+        return self._data
 
     def training_data(self) -> pd.DataFrame:
         return self.holdout_lik.training_data()
 
     def validation_data(self) -> pd.DataFrame:
         return self.holdout_lik.test_data()
-
-    def data(self) -> pd.DataFrame:
-        return self.training_data()
 
     # TODO: Review that this is correctly calculated
     def _conditional_log_likelihood(
@@ -233,16 +296,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 # TODO: Metric-based structure learning
 # TODO: CLL score-based NTL
-# TODO: Metric-based structure learning
 if __name__ == "__main__":
-    hc = pbn.GreedyHillClimbing()
-    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
-    learned_model = hc.estimate(
-        operators=pbn.ArcOperatorSet(), score=OracleValidatedScore(), start=start_model
-    )
-    assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
-
-    # Short usage example for ConditionalLogLikelihoodValidatedScore.
     toy_df = pd.DataFrame(
         {
             "x1": [0.0, 0.2, 0.8, 1.1, 1.5, 1.9, 2.2, 2.5],
@@ -250,6 +304,17 @@ if __name__ == "__main__":
             "y": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
+    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
+
+    hc = pbn.GreedyHillClimbing()
+    learned_model = hc.estimate(
+        operators=pbn.ArcOperatorSet(),
+        score=OracleValidatedScore(df=toy_df, target="y", k=2),
+        start=start_model,
+    )
+    assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
+
+    # CLL score-based structure learning on the toy data.
     # TODO: Adapt to my BNCs
     X = toy_df[["x1", "x2"]]
     y = toy_df["y"]
