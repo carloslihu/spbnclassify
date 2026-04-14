@@ -14,41 +14,8 @@ class OracleValidatedScore(pbn.ValidatedScore):
               d
     """
 
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        target: str,
-        test_ratio: float = 0.2,
-        k: int = 10,
-        seed: int | None = None,
-        construction_args: pbn.Arguments = pbn.Arguments(),
-    ) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.target = target
-        if self.target not in df.columns:
-            raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
-
-        # CLL requires enumerating target values to normalize p(y|x).
-        self._target_values = (
-            pd.Series(df[self.target]).dropna().sort_values().unique().tolist()
-        )
-        if len(self._target_values) < 2:
-            raise ValueError(
-                "ConditionalLogLikelihoodScore requires at least two target values."
-            )
-
-        self.holdout_lik = pbn.HoldoutLikelihood(
-            df,
-            test_ratio=test_ratio,
-            seed=seed,
-            construction_args=construction_args,
-        )
-        self.cv_lik = pbn.CVLikelihood(
-            self.holdout_lik.training_data(),
-            k=k,
-            seed=seed,
-            construction_args=construction_args,
-        )
         self.variables: list[str] = ["a", "b", "c", "d"]
 
     def has_variables(self, vars: list[str]) -> bool:
@@ -161,22 +128,22 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
                 "ConditionalLogLikelihoodScore requires at least two target values."
             )
 
-        self.holdout_lik = pbn.HoldoutLikelihood(
+        self.holdout = pbn.HoldoutLikelihood(
             df,
             test_ratio=test_ratio,
             seed=seed,
             construction_args=construction_args,
-        )
-        self.cv_lik = pbn.CVLikelihood(
-            self.holdout_lik.training_data(),
+        ).holdout
+        self.cv = pbn.CVLikelihood(
+            self.holdout.training_data(),
             k=k,
             seed=seed,
             construction_args=construction_args,
-        )
+        ).cv
 
     def has_variables(self, vars: str | list[str]) -> bool:
         """Return whether all given variables belong to the oracle domain."""
-        return self.cv_lik.has_variables(vars)
+        return set(vars).issubset(set(self._data.columns))
 
     def compatible_bn(self, model: pbn.BayesianNetworkBase) -> bool:
         """Checks whether the model is compatible (can be used) with this Score."""
@@ -193,11 +160,12 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         """Returns the local score value of a node variable in the model given its parents (evidence).
         Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
         """
-
         if variable != self.target:
             return 0.0
-        # TODO: do not use local_score
-        return self.cv_lik.local_score(model, variable, evidence)
+        else:
+            # TODO: Calculate
+            # return self.cv_lik.local_score(model, variable, evidence)
+            return 0.0
 
     # def local_score_node_type(
     #     self,
@@ -225,8 +193,10 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     ) -> float:
         if variable != self.target:
             return 0.0
-        # TODO: do not use local_score
-        return self.holdout_lik.local_score(model, variable, evidence)
+        else:
+            # TODO: Calculate
+            # return self.holdout_lik.local_score(model, variable, evidence)
+            return 0.0
 
     # TODO: Implement
     # def vlocal_score_node_type(
@@ -243,10 +213,10 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         return self._data
 
     def training_data(self) -> pd.DataFrame:
-        return self.holdout_lik.training_data()
+        return self.holdout.training_data()
 
     def validation_data(self) -> pd.DataFrame:
-        return self.holdout_lik.test_data()
+        return self.holdout.test_data()
 
     # TODO: Review that this is correctly calculated
     def _conditional_log_likelihood(
@@ -295,8 +265,21 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 
 # TODO: Metric-based structure learning
+
+
 # TODO: CLL score-based NTL
 if __name__ == "__main__":
+    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
+
+    hc = pbn.GreedyHillClimbing()
+    learned_model = hc.estimate(
+        operators=pbn.ArcOperatorSet(),
+        score=OracleValidatedScore(),
+        start=start_model,
+    )
+    assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
+
+    # CLL score-based structure learning on the toy data.
     toy_df = pd.DataFrame(
         {
             "x1": [0.0, 0.2, 0.8, 1.1, 1.5, 1.9, 2.2, 2.5],
@@ -304,17 +287,6 @@ if __name__ == "__main__":
             "y": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
-    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
-
-    hc = pbn.GreedyHillClimbing()
-    learned_model = hc.estimate(
-        operators=pbn.ArcOperatorSet(),
-        score=OracleValidatedScore(df=toy_df, target="y", k=2),
-        start=start_model,
-    )
-    assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
-
-    # CLL score-based structure learning on the toy data.
     # TODO: Adapt to my BNCs
     X = toy_df[["x1", "x2"]]
     y = toy_df["y"]
