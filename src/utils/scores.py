@@ -23,13 +23,22 @@ class OracleValidatedScore(pbn.ValidatedScore):
         return set(vars).issubset(set(self.variables))
 
     def compatible_bn(self, model: pbn.BayesianNetworkBase) -> bool:
-        """Check if the network nodes are compatible with this score."""
+        """Checks whether the model is compatible (can be used) with this Score."""
         return self.has_variables(model.nodes())
+
+    # def score(self, model: pbn.BayesianNetworkBase) -> float:
+    #     """This method is optional. The default implementation sums the local score for all the nodes."""
+    #     return sum(
+    #         self.local_score(model, node, model.parents(node)) for node in model.nodes()
+    #     )
 
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        """Training local score used by the search process."""
+        """Returns the local score value of a node variable in the model given its parents (evidence).
+        Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
+        """
+        # Use local decomposition proxy during search: only target local likelihood matters.
         if variable == "c":
             value: float = -1.0
             if "a" in evidence:
@@ -41,8 +50,22 @@ class OracleValidatedScore(pbn.ValidatedScore):
             return 1.0
         return -1.0
 
+    # def local_score_node_type(
+    #     self,
+    #     model: pbn.BayesianNetworkBase,
+    #     variable_type: pbn.FactorType,
+    #     variable: str,
+    #     evidence: list[str],
+    # ) -> float:
+    #     """Returns the local score value of a node variable in the model if its conditional distribution were a variable_type factor and it had evidence as parents.
+    #     This method is optional. This method is only needed if the score is used together with ChangeNodeTypeSet
+    #     """
+    #     return 0.0
+
     def vscore(self, model: pbn.BayesianNetworkBase) -> float:
-        """Validation score. Default behavior is summing validation local scores."""
+        """Validation score. Default behavior is summing validation local scores.
+        This method is optional. The default implementation sums the validation local score for all the nodes
+        """
         return sum(
             self.vlocal_score(model, node, model.parents(node))
             for node in model.nodes()
@@ -51,7 +74,9 @@ class OracleValidatedScore(pbn.ValidatedScore):
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        """Validation local score with the required 3-argument signature."""
+        """Validation local score with the required 3-argument signature.
+        Only the version with 3 arguments score.vlocal_score(model, variable, evidence) needs to be implemented. The version with 2 arguments can not be overriden.
+        """
         return self.local_score(model, variable, evidence)
 
     def vlocal_score_node_type(
@@ -61,12 +86,18 @@ class OracleValidatedScore(pbn.ValidatedScore):
         variable: str,
         evidence: list[str],
     ) -> float:
-        """Optional override used by ChangeNodeTypeSet-enabled searches."""
+        """
+        Returns the validated local score value of a node variable in the model if its conditional distribution were a variable_type factor and it had evidence as parents.
+        This method is optional. This method is only needed if the score is used together with ChangeNodeTypeSet.
+        """
         return self.vlocal_score(model, variable, evidence)
 
-    def data(self) -> None:
-        """No dataset is required by this synthetic score."""
-        return None
+    # def data(self) -> pd.DataFrame:
+    #     """Returns the DataFrame used to calculate the score and local scores.
+    #     This method is optional.
+    #     It is needed to infer the default node types in the GreedyHillClimbing algorithm.
+    #     """
+    #     return pd.DataFrame(columns=self.variables)
 
 
 class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
@@ -86,6 +117,15 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
 
         self.target = target
+        # CLL requires enumerating target values to normalize p(y|x).
+        self._target_values = (
+            pd.Series(df[target]).dropna().sort_values().unique().tolist()
+        )
+        if len(self._target_values) < 2:
+            raise ValueError(
+                "ConditionalLogLikelihoodScore requires at least two target values."
+            )
+
         self.holdout_lik = pbn.HoldoutLikelihood(
             df,
             test_ratio=test_ratio,
@@ -99,15 +139,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             construction_args=construction_args,
         )
 
-        # CLL requires enumerating target values to normalize p(y|x).
-        self._target_values = (
-            pd.Series(df[target]).dropna().sort_values().unique().tolist()
-        )
-        if len(self._target_values) < 2:
-            raise ValueError(
-                "ConditionalLogLikelihoodScore requires at least two target values."
-            )
-
     def has_variables(self, vars: str | list[str]) -> bool:
         return self.cv_lik.has_variables(vars)
 
@@ -117,7 +148,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        # Use local decomposition proxy during search: only target local likelihood matters.
         if variable != self.target:
             return 0.0
         return self.cv_lik.local_score(model, variable, evidence)
