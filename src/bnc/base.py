@@ -109,6 +109,30 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
         """
         return f"Bayesian Network Classifier with {self.num_nodes()} nodes and {self.num_arcs()} arcs"
 
+    def copy_pbn(
+        self,
+        bn: pbn.BayesianNetwork,
+        classes: list[str] | None = None,
+        weights: dict[str, float] | None = None,
+    ) -> "BaseBayesianNetworkClassifier":
+        """Copies a pybnesian Bayesian Network to the current Bayesian Network
+
+        Args:
+            bn (pbn.BayesianNetwork): The Bayesian Network to be copied
+
+        Returns:
+            BayesianNetwork: The copied Bayesian Network
+        """
+        # 1) Copy graph structure + node types + CPDs
+        super().copy_pbn(bn)
+
+        # 2) Copy classifier specific attributes
+        self.classes_ = sorted(classes) if classes is not None else self.classes_
+        self.weights_ = weights if weights is not None else self.weights_
+        self.feature_names_in_ = [n for n in self.nodes() if n != self.true_label]
+        self.n_features_in_ = len(self.feature_names_in_)
+        return self
+
     def fit(
         self, X: pd.DataFrame, y: pd.Series | None = None
     ) -> "BaseBayesianNetworkClassifier":

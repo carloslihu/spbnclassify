@@ -264,6 +264,32 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
             self.add_cpds(state["__factors"])
         self.__dict__.update(state)
 
+    def copy_pbn(self, bn: pbn.BayesianNetwork) -> "BayesianNetwork":
+        """Copies a pybnesian Bayesian Network to the current Bayesian Network
+
+        Args:
+            bn (pbn.BayesianNetwork): The Bayesian Network to be copied
+
+        Returns:
+            BayesianNetwork: The copied Bayesian Network
+        """
+        arcs = bn.arcs()
+        node_types = bn.node_types().items()
+        # RFE: Adapt for when there are more discrete nodes apart from the target
+        node_num_categories_dict = {}
+        if self.true_label in bn.nodes():
+            # num_categories = len(y.cat.categories)
+            # if num_categories < 2:
+            num_categories = 2
+            node_num_categories_dict[self.true_label] = num_categories
+        self._copy_bn_structure(arcs, node_types, node_num_categories_dict)
+        # TODO: Review if everything works
+        # Copies the factors (cpds) of the Bayesian Network to the current Bayesian Network
+        factors = [bn.cpd(n) for n in bn.nodes() if bn.cpd(n) is not None]
+        self.add_cpds(factors)
+
+        return self
+
     def fit(
         self,
         X: pd.DataFrame,
@@ -294,16 +320,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
 
         # Copies the structure to the current Bayesian Network
         if bn:
-            arcs = bn.arcs()
-            node_types = bn.node_types().items()
-            # RFE: Adapt for when there are more discrete nodes apart from the target
-            node_num_categories_dict = {}
-            if y is not None:
-                num_categories = len(y.cat.categories)
-                if num_categories < 2:
-                    num_categories = 2
-                node_num_categories_dict[self.true_label] = num_categories
-            self._copy_bn_structure(arcs, node_types, node_num_categories_dict)
+            self.copy_pbn(bn)
         return self
 
     def logl(self, X: pd.DataFrame) -> np.ndarray:
