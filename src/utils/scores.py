@@ -1,6 +1,20 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
+
+RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
+sys.path.append(str(RUTILE_AI_PATH))
+
+from rutile_ai.engine.classification.spbnclassify.src.bnc import GaussianNaiveBayes
+from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
+    DATA_SIZE,
+    SEED,
+    TRUE_CLASS_LABEL,
+    generate_normal_data_classification,
+)
 
 
 class OracleValidatedScore(pbn.ValidatedScore):
@@ -243,8 +257,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 
 # TODO: Metric-based structure learning
-
-
 # TODO: CLL score-based NTL
 if __name__ == "__main__":
     start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
@@ -258,23 +270,18 @@ if __name__ == "__main__":
     assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
 
     # CLL score-based structure learning on the toy data.
-    toy_df = pd.DataFrame(
-        {
-            "x1": [0.0, 0.2, 0.8, 1.1, 1.5, 1.9, 2.2, 2.5],
-            "x2": [1.0, 0.9, 0.7, 0.4, 0.2, 0.1, -0.1, -0.3],
-            "y": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
-        }
-    )
-    # TODO: Adapt to my BNCs
-    X = toy_df[["x1", "x2"]]
-    y = toy_df["y"]
+    df = generate_normal_data_classification(DATA_SIZE, seed=SEED)
+    X = df.drop(columns=[TRUE_CLASS_LABEL])
+    y = df[TRUE_CLASS_LABEL]
+
     cll_score = ConditionalLogLikelihoodValidatedScore(
-        toy_df, target="y", test_ratio=0.25, k=2, seed=7
+        df, target=TRUE_CLASS_LABEL, test_ratio=0.2, k=2, seed=SEED
     )
-    toy_start = pbn.GaussianNetwork(["x1", "x2", "y"])
-    toy_model = hc.estimate(
-        operators=pbn.ArcOperatorSet(), score=cll_score, start=toy_start
+    base_model = GaussianNaiveBayes(seed=42)
+    base_model.fit(X, y)
+    learnt_model = hc.estimate(
+        operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model
     )
-    print("Toy model arcs:", sorted(toy_model.arcs()))
-    print("Toy train CLL:", cll_score.score(toy_model))
-    print("Toy validation CLL:", cll_score.vscore(toy_model))
+    print("Toy model arcs:", sorted(learnt_model.arcs()))
+    print("Toy train CLL:", cll_score.score(learnt_model))
+    print("Toy validation CLL:", cll_score.vscore(learnt_model))
