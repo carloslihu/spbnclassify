@@ -172,7 +172,9 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         y_true = pd.Series(df_pd[self.target]).to_numpy()
         log_joint = []
         for value in self._target_values:
-            conditioned = df_pd.copy()
+            conditioned = (
+                df_pd.copy()
+            )  # TODO: Shouldn't this be conditioned with filter?
             conditioned[self.target] = value
             log_joint.append(np.asarray(eval_model.logl(conditioned), dtype=float))
 

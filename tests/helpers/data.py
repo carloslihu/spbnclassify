@@ -4,8 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# TODO: Remove rutile_ai dependency
-from src.utils.constants import TRUE_CLASS_LABEL
+TRUE_CLASS_LABEL = "class_label"
 
 # Constants
 
