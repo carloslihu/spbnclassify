@@ -179,25 +179,16 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        """Returns the local score value of a node variable in the model given its parents (evidence).
-        Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
-        """
         if variable != self.target:
             return 0.0
-        else:
-            # TODO: Calculate
-            # return self.cv_lik.local_score(model, variable, evidence)
-            return 0.0
+        return self._conditional_log_likelihood(model, self.training_data())
 
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
         if variable != self.target:
             return 0.0
-        else:
-            # TODO: Calculate
-            # return self.holdout_lik.local_score(model, variable, evidence)
-            return 0.0
+        return self._conditional_log_likelihood(model, self.validation_data())
 
     # TODO: local_score_node_type, vlocal_score_node_type
 
@@ -210,40 +201,26 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def validation_data(self) -> pd.DataFrame:
         return self.holdout.test_data()
 
-    # TODO: Review that this is correctly calculated
     def _conditional_log_likelihood(
         self, model: pbn.BayesianNetworkBase, df: pd.DataFrame | object
     ) -> float:
-        df_pd = self._to_pandas(df)
-
-        if pd.Series(df_pd[self.target]).isna().any():
+        eval_df = self._to_pandas(df)
+        if pd.Series(eval_df[self.target]).isna().any():
             raise ValueError(
                 "CLL cannot be computed with missing values in the target column."
             )
+        # TODO: This should only fit parameters
+        model.fit(eval_df)
+        # TODO: Recover the original model with copy_pbn
+        # eval_model =
+        eval_df["logl"] = 0.0
+        for class_value in self._target_values:
+            conditional_mask = eval_df[self.target] == class_value
+            eval_df.loc[conditional_mask, "logl"] = model.conditional_logl(
+                eval_df.loc[conditional_mask], class_value=class_value
+            )
 
-        eval_model = model.clone()
-        eval_model.fit(self.training_data())
-
-        y_true = pd.Series(df_pd[self.target]).to_numpy()
-        log_joint = []
-        for value in self._target_values:
-            conditioned = (
-                df_pd.copy()
-            )  # TODO: Shouldn't this be conditioned with filter?
-            conditioned[self.target] = value
-            log_joint.append(np.asarray(eval_model.logl(conditioned), dtype=float))
-
-        log_joint_matrix = np.vstack(log_joint)
-        max_per_row = np.max(log_joint_matrix, axis=0)
-        log_denom = max_per_row + np.log(
-            np.exp(log_joint_matrix - max_per_row).sum(axis=0)
-        )
-
-        target_to_index = {value: idx for idx, value in enumerate(self._target_values)}
-        true_idx = np.array([target_to_index[val] for val in y_true], dtype=int)
-        num = log_joint_matrix[true_idx, np.arange(log_joint_matrix.shape[1])]
-
-        return float(np.sum(num - log_denom))
+        return eval_df["logl"].sum()
 
     @staticmethod
     def _to_pandas(df: pd.DataFrame | object) -> pd.DataFrame:
@@ -266,6 +243,7 @@ if __name__ == "__main__":
         operators=pbn.ArcOperatorSet(),
         score=OracleValidatedScore(),
         start=start_model,
+        verbose=True,
     )
     assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
 
@@ -280,7 +258,7 @@ if __name__ == "__main__":
     base_model = GaussianNaiveBayes(seed=42)
     base_model.fit(X, y)
     learnt_model = hc.estimate(
-        operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model
+        operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
     print("Toy model arcs:", sorted(learnt_model.arcs()))
     print("Toy train CLL:", cll_score.score(learnt_model))
