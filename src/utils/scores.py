@@ -188,14 +188,18 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     ) -> float:
         if variable != self.target:
             return 0.0
-        return self._conditional_log_likelihood(model, self.training_data())
+        return self._conditional_log_likelihood(
+            model, self.training_data(), variable, evidence
+        )
 
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
         if variable != self.target:
             return 0.0
-        return self._conditional_log_likelihood(model, self.validation_data())
+        return self._conditional_log_likelihood(
+            model, self.validation_data(), variable, evidence
+        )
 
     # TODO: local_score_node_type, vlocal_score_node_type
 
@@ -209,7 +213,11 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         return self.holdout.test_data()
 
     def _conditional_log_likelihood(
-        self, model: pbn.BayesianNetworkBase, df: pd.DataFrame | object
+        self,
+        model: pbn.BayesianNetworkBase,
+        df: pd.DataFrame | object,
+        variable: str,
+        evidence: list[str],
     ) -> float:
         eval_df = self._to_pandas(df)
         if pd.Series(eval_df[self.target]).isna().any():
@@ -229,6 +237,11 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         eval_df["logl"] = 0.0
         for class_value in self._target_values:
             conditional_mask = eval_df[self.target] == class_value
+            # TODO: Make it do it for a specific variable and evidence
+            cpd = eval_model.cpd(variable)
+            # if isinstance(cpd, (pbn.CLinearGaussianCPD, pbn.HCKDE)):
+            # assignment = pbn.Assignment({self.true_label: class_value})
+            # conditional_cpd = cpd.conditional_factor(assignment)
             eval_df.loc[conditional_mask, "logl"] = eval_model.conditional_logl(
                 eval_df.loc[conditional_mask], class_value=class_value
             )
@@ -266,13 +279,17 @@ if __name__ == "__main__":
     y = df[TRUE_CLASS_LABEL]
 
     model_class = GaussianNaiveBayes
+
     base_model = model_class(seed=42)
     base_model.fit(X, y)
+    base_model.remove_arc(TRUE_CLASS_LABEL, "a")
+    base_model.remove_arc(TRUE_CLASS_LABEL, "b")
+    base_model.remove_arc(TRUE_CLASS_LABEL, "c")
 
     classes = base_model.classes_
     weights = base_model.weights_
-    # weights = {str(k): v for k, v in base_model.weights_.items()}
 
+    # TODO: Arc operators are not added
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
         target=TRUE_CLASS_LABEL,
@@ -287,6 +304,6 @@ if __name__ == "__main__":
     learnt_model = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
-    print("Toy model arcs:", sorted(learnt_model.arcs()))
-    print("Toy train CLL:", cll_score.score(learnt_model))
-    print("Toy validation CLL:", cll_score.vscore(learnt_model))
+    print("Learned model arcs:", sorted(learnt_model.arcs()))
+    print("Train CLL:", cll_score.score(learnt_model))
+    print("Validation CLL:", cll_score.vscore(learnt_model))
