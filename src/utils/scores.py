@@ -139,10 +139,12 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         k: int = 10,
         seed: int | None = None,
         construction_args: pbn.Arguments = pbn.Arguments(),
+        model_class: type[pbn.BayesianNetworkBase] | None = None,
     ) -> None:
         super().__init__()
         self._data = df
         self.target = target
+        self.model_class = model_class
         if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
 
@@ -209,14 +211,19 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             raise ValueError(
                 "CLL cannot be computed with missing values in the target column."
             )
-        # TODO: This should only fit parameters
+        # NOTE: This should only fit parameters
         model.fit(eval_df)
         # TODO: Recover the original model with copy_pbn
-        # eval_model =
+        if self.model_class is not None:
+            eval_model = self.model_class(seed=42)
+            eval_model.copy_pbn(model)
+        else:
+            eval_model = model
+
         eval_df["logl"] = 0.0
         for class_value in self._target_values:
             conditional_mask = eval_df[self.target] == class_value
-            eval_df.loc[conditional_mask, "logl"] = model.conditional_logl(
+            eval_df.loc[conditional_mask, "logl"] = eval_model.conditional_logl(
                 eval_df.loc[conditional_mask], class_value=class_value
             )
 
@@ -253,7 +260,12 @@ if __name__ == "__main__":
     y = df[TRUE_CLASS_LABEL]
 
     cll_score = ConditionalLogLikelihoodValidatedScore(
-        df, target=TRUE_CLASS_LABEL, test_ratio=0.2, k=2, seed=SEED
+        df,
+        target=TRUE_CLASS_LABEL,
+        test_ratio=0.2,
+        k=2,
+        seed=SEED,
+        model_class=GaussianNaiveBayes,
     )
     base_model = GaussianNaiveBayes(seed=42)
     base_model.fit(X, y)
