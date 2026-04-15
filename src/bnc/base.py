@@ -67,8 +67,8 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             true_label=true_label,
             prediction_label=prediction_label,
         )
-        self.classes_ = sorted(classes_)
-        self.weights_ = weights_
+        self.classes_: list[str] = sorted(classes_)
+        self.weights_: dict[str, float] = weights_
 
     # TODO: Make this automatically insert the structure or change name
     def _init_structure(

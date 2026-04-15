@@ -138,13 +138,18 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         test_ratio: float = 0.2,
         k: int = 10,
         seed: int | None = None,
-        construction_args: pbn.Arguments = pbn.Arguments(),
         model_class: type[pbn.BayesianNetworkBase] | None = None,
+        construction_args: pbn.Arguments = pbn.Arguments(),
+        classes: list[str] = [],
+        weights: dict[str, float] = {},
     ) -> None:
         super().__init__()
         self._data = df
         self.target = target
         self.model_class = model_class
+        self.classes = classes
+        self.weights = weights
+
         if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
 
@@ -213,9 +218,10 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             )
         # NOTE: This should only fit parameters
         model.fit(eval_df)
-        # TODO: Recover the original model with copy_pbn
         if self.model_class is not None:
-            eval_model = self.model_class(seed=42)
+            eval_model = self.model_class(
+                classes_=self.classes, weights_=self.weights, seed=42
+            )
             eval_model.copy_pbn(model)
         else:
             eval_model = model
@@ -259,16 +265,25 @@ if __name__ == "__main__":
     X = df.drop(columns=[TRUE_CLASS_LABEL])
     y = df[TRUE_CLASS_LABEL]
 
+    model_class = GaussianNaiveBayes
+    base_model = model_class(seed=42)
+    base_model.fit(X, y)
+
+    classes = base_model.classes_
+    weights = base_model.weights_
+    # weights = {str(k): v for k, v in base_model.weights_.items()}
+
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
         target=TRUE_CLASS_LABEL,
         test_ratio=0.2,
         k=2,
         seed=SEED,
-        model_class=GaussianNaiveBayes,
+        model_class=model_class,
+        classes=classes,
+        weights=weights,
     )
-    base_model = GaussianNaiveBayes(seed=42)
-    base_model.fit(X, y)
+
     learnt_model = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
