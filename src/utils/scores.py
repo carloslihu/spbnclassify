@@ -140,20 +140,16 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         k: int = 10,
         seed: int | None = None,
         construction_args: pbn.Arguments = pbn.Arguments(),
-        classes: list[str] = [],
-        weights: dict[str, float] = {},
     ) -> None:
         super().__init__()
         self._data = df
         self.target = target
+
         self.model_class = model_class
         self.feature_names_in_ = df.columns.drop(target).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
-        self.classes_ = classes
-        self.weights_ = weights
-
-        self.k = k
-        self.seed = seed
+        self.classes_ = df[self.target].dropna().unique().tolist()
+        self.weights_ = df[self.target].value_counts(normalize=True)
 
         if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
@@ -166,7 +162,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             raise ValueError(
                 "ConditionalLogLikelihoodScore requires at least two target values."
             )
-
+        # RFE: Maybe this should be stratified?
         self.holdout = pbn.HoldoutLikelihood(
             df,
             test_ratio=test_ratio,
@@ -232,26 +228,45 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         fit_df: pd.DataFrame | object,
         eval_df: pd.DataFrame | object,
     ) -> float:
-        """Returns the conditional log-likelihood of the model on the evaluation data."""
-        # Copy the model structure
+        """
+        Calculate the conditional log-likelihood of a Bayesian Network model on evaluation data.
 
+        This method fits the model parameters using training data and then computes the sum of
+        conditional log-likelihoods for each class value in the evaluation data.
+
+        Args:
+            model (pbn.BayesianNetworkBase): The Bayesian Network model whose parameters will be fitted.
+            fit_df (pd.DataFrame | object): Training data used to fit the model parameters.
+                Can be a pandas DataFrame or other compatible data structure.
+            eval_df (pd.DataFrame | object): Evaluation data used to compute conditional log-likelihoods.
+                Can be a pandas DataFrame or other compatible data structure.
+
+        Returns:
+            float: The sum of conditional log-likelihoods across all samples in the evaluation data,
+                computed per class value.
+
+        Note:
+            - Only model parameters are fitted, not the structure.
+            - The target column is excluded from features (fit_X and eval_X).
+            - Log-likelihoods are computed conditionally for each class value present in eval_df.
+            - Classes with no samples in the evaluation data are skipped.
+        """
         fit_df_pd = self._to_pandas(fit_df)
         eval_df_pd = self._to_pandas(eval_df)
-
         fit_X = fit_df_pd.drop(columns=[self.target])
         fit_y = fit_df_pd[self.target]
 
         # Only fit the parameters, not the structure
         model._fit_parameters(fit_X, fit_y)
 
-        eval_X = eval_df_pd.drop(columns=[self.target])
+        # Compute conditional log-likelihoods for each class value in the evaluation data
         eval_df_pd["logl"] = 0.0
         for class_value in self._target_values:
             conditional_mask = eval_df_pd[self.target] == class_value
             if not conditional_mask.any():
                 continue
             eval_df_pd.loc[conditional_mask, "logl"] = model.conditional_logl(
-                eval_X.loc[conditional_mask], class_value=class_value
+                eval_df_pd.loc[conditional_mask], class_value=class_value
             )
 
         return float(eval_df_pd["logl"].sum())
@@ -262,6 +277,25 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         variable: str,
         evidence: list[str],
     ) -> pbn.BayesianNetworkBase:
+        """
+        Create a modified copy of a Bayesian Network with adjusted parent set for a specific variable.
+        This method creates a new candidate model based on the current model's configuration
+        (classes, weights, feature names, etc.) and modifies its structure to match the desired
+        parent set for a given variable. The method only copies the graph structure and node types,
+        intentionally excluding CPDs (Conditional Probability Distributions) since the candidate
+        parent sets may differ from the current model.
+        Args:
+            model (pbn.BayesianNetworkBase): The source Bayesian Network model to base the
+                candidate model upon.
+            variable (str): The target variable whose parent set will be modified.
+            evidence (list[str]): A list of variable names that should be parents of the target
+                variable in the resulting candidate model.
+        Returns:
+            pbn.BayesianNetworkBase: A new Bayesian Network model with the same configuration
+                as the current model but with the graph structure modified so that only the
+                variables in `evidence` are parents of the specified `variable`. Arcs are only
+                added if they satisfy the model's validity constraints.
+        """
         candidate_model = self.model_class(
             classes_=self.classes_,
             weights_=self.weights_,
@@ -279,16 +313,15 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
         current_parents = set(candidate_model.parents(variable))
         desired_parents = set(evidence)
-
+        # Remove arcs from current parents that are not in the desired parents
         for parent in sorted(current_parents - desired_parents):
             candidate_model.remove_arc(parent, variable)
-
+        # Add arcs from desired parents that are not in the current parents, if valid
         for parent in sorted(desired_parents - current_parents):
             if not candidate_model.has_arc(
                 parent, variable
             ) and candidate_model.can_add_arc(parent, variable):
                 candidate_model.add_arc(parent, variable)
-
         return candidate_model
 
     @staticmethod
@@ -325,8 +358,6 @@ if __name__ == "__main__":
 
     base_model = model_class(seed=42)
     base_model.fit(X, y)
-    classes = base_model.classes_
-    weights = base_model.weights_
 
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
@@ -335,13 +366,12 @@ if __name__ == "__main__":
         k=2,
         seed=SEED,
         model_class=model_class,
-        classes=classes,
-        weights=weights,
     )
 
     learnt_model = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
+    # TODO: Find way to compare how it improves
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
     print("Learned model arcs:", sorted(learnt_model.arcs()))
