@@ -563,6 +563,18 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
 
         return bn
 
+    @abstractmethod
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        """Learns the parameters of the Bayesian Network from the data.
+
+        Args:
+            X (pd.DataFrame): The feature data to learn from.
+            y (pd.Series | None, optional): The target variable. Defaults to None.
+        """
+        pass
+
     def _fit_node_types(
         self,
         bn: pbn.BayesianNetwork,

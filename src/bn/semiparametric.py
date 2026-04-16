@@ -104,7 +104,13 @@ class SemiParametricBayesianNetwork(
         Args:
             data (pd.DataFrame): The data to learn from.
         """
-        data = pd.concat([X, y], axis=1)
         BayesianNetwork.fit(self, X, y)
+        self._fit_parameters(X, y)
+        return self
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        data = pd.concat([X, y], axis=1)
         pbn.SemiparametricBN.fit(self, data)
         return self

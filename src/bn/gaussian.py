@@ -127,11 +127,17 @@ class GaussianBayesianNetwork(
         Args:
             data (pd.DataFrame): The data to learn from.
         """
-        data = pd.concat([X, y], axis=1)
         BayesianNetwork.fit(self, X, y)
-        pbn.CLGNetwork.fit(self, data)
+        self._fit_parameters(X, y)
         # self._calculate_max_logl(X)
         self.joint_gaussian_ = self._get_joint_gaussian()
+        return self
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        data = pd.concat([X, y], axis=1)
+        pbn.CLGNetwork.fit(self, data)
         return self
 
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
