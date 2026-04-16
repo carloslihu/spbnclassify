@@ -283,12 +283,10 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
             num_categories = 2
             node_num_categories_dict[self.true_label] = num_categories
         self._copy_bn_structure(arcs, node_types, node_num_categories_dict)
-        # TODO: Review if everything works
         # Copies the factors (cpds) of the Bayesian Network to the current Bayesian Network
         if bn.fitted():
             factors = [bn.cpd(n) for n in bn.nodes() if bn.cpd(n) is not None]
             self.add_cpds(factors)
-
         return self
 
     def fit(

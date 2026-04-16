@@ -135,20 +135,23 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         self,
         df: pd.DataFrame,
         target: str,
+        model_class: type[pbn.BayesianNetworkBase],
         test_ratio: float = 0.2,
         k: int = 10,
         seed: int | None = None,
-        model_class: type[pbn.BayesianNetworkBase] | None = None,
         construction_args: pbn.Arguments = pbn.Arguments(),
-        classes: list[str] | None = None,
-        weights: dict[str, float] | None = None,
+        classes: list[str] = [],
+        weights: dict[str, float] = {},
     ) -> None:
         super().__init__()
         self._data = df
         self.target = target
         self.model_class = model_class
-        self.classes = classes if classes is not None else []
-        self.weights = weights if weights is not None else {}
+        self.feature_names_in_ = df.columns.drop(target).tolist()
+        self.n_features_in_ = len(self.feature_names_in_)
+        self.classes_ = classes
+        self.weights_ = weights
+
         self.k = k
         self.seed = seed
 
@@ -188,9 +191,12 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
+        """Returns the local score value of a node variable in the model given its parents (evidence).
+        Match ValidatedLikelihood::local_score behavior: CV over holdout training data.
+        Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
+        """
         candidate_model = self._model_with_variable_evidence(model, variable, evidence)
 
-        # Match ValidatedLikelihood::local_score behavior: CV over holdout training data.
         cll = 0.0
         for train_df, test_df in self.cv:
             cll += self._conditional_log_likelihood(candidate_model, train_df, test_df)
@@ -199,8 +205,12 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
+        """Validation local score with the required 3-argument signature.
+        Match ValidatedLikelihood::vlocal_score behavior: fit on holdout training, score on holdout test.
+        Only the version with 3 arguments score.vlocal_score(model, variable, evidence) needs to be implemented. The version with 2 arguments can not be overriden.
+        """
+
         candidate_model = self._model_with_variable_evidence(model, variable, evidence)
-        # Match ValidatedLikelihood::vlocal_score behavior: fit on holdout training, score on holdout test.
         return self._conditional_log_likelihood(
             candidate_model,
             self.holdout.training_data(),
@@ -210,6 +220,10 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     # TODO: local_score_node_type, vlocal_score_node_type
 
     def data(self) -> pd.DataFrame:
+        """Returns the DataFrame used to calculate the score and local scores.
+        This method is optional.
+        It is needed to infer the default node types in the GreedyHillClimbing algorithm.
+        """
         return self._data
 
     def _conditional_log_likelihood(
@@ -218,35 +232,17 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         fit_df: pd.DataFrame | object,
         eval_df: pd.DataFrame | object,
     ) -> float:
+        """Returns the conditional log-likelihood of the model on the evaluation data."""
         # Copy the model structure
-        if self.model_class is None:
-            raise ValueError("model_class must be set to clone candidate models.")
 
-        fit_model = self.model_class(classes_=self.classes, weights_=self.weights)
-        fit_model._copy_bn_structure(
-            arcs=model.arcs(),
-            node_types=list(model.node_types().items()),
-        )
-
-        fit_df_pd: pd.DataFrame = self._to_pandas(fit_df)
-        eval_df_pd: pd.DataFrame = self._to_pandas(eval_df)
-
-        if pd.Series(eval_df_pd[self.target]).isna().any():
-            raise ValueError(
-                "CLL cannot be computed with missing values in the target column."
-            )
+        fit_df_pd = self._to_pandas(fit_df)
+        eval_df_pd = self._to_pandas(eval_df)
 
         fit_X = fit_df_pd.drop(columns=[self.target])
         fit_y = fit_df_pd[self.target]
-        fit_model.fit(fit_X, fit_y)
 
-        if self.model_class is not None:
-            eval_model = self.model_class(
-                classes_=self.classes, weights_=self.weights, seed=42
-            )
-            eval_model.copy_pbn(fit_model)
-        else:
-            eval_model = fit_model
+        # Only fit the parameters, not the structure
+        model._fit_parameters(fit_X, fit_y)
 
         eval_X = eval_df_pd.drop(columns=[self.target])
         eval_df_pd["logl"] = 0.0
@@ -254,7 +250,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             conditional_mask = eval_df_pd[self.target] == class_value
             if not conditional_mask.any():
                 continue
-            eval_df_pd.loc[conditional_mask, "logl"] = eval_model.conditional_logl(
+            eval_df_pd.loc[conditional_mask, "logl"] = model.conditional_logl(
                 eval_X.loc[conditional_mask], class_value=class_value
             )
 
@@ -266,13 +262,12 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         variable: str,
         evidence: list[str],
     ) -> pbn.BayesianNetworkBase:
-        if self.model_class is None:
-            raise ValueError(
-                "model_class must be set to evaluate candidate parent evidence in local scores."
-            )
-
         candidate_model = self.model_class(
-            classes_=self.classes, weights_=self.weights, seed=42
+            classes_=self.classes_,
+            weights_=self.weights_,
+            feature_names_in_=self.feature_names_in_,
+            n_features_in_=self.n_features_in_,
+            true_label=self.target,
         )
 
         # Copy only graph structure and node types. CPDs are intentionally excluded
