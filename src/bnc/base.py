@@ -194,7 +194,7 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             - NOTE: Only used for predict_proba calculation
         """
 
-        log_likelihood = pd.Series(self.weights_[class_value], index=data.index)
+        log_likelihood = pd.Series(np.log(self.weights_[class_value]), index=data.index)
         for node in self.feature_names_in_:
             cpd = self.conditional_factor(node=node, class_value=class_value)
             # NOTE: When the CPD is None, that means that the variable is not fitted (CLG with 0 variance)
