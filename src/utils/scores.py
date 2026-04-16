@@ -140,15 +140,17 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         seed: int | None = None,
         model_class: type[pbn.BayesianNetworkBase] | None = None,
         construction_args: pbn.Arguments = pbn.Arguments(),
-        classes: list[str] = [],
-        weights: dict[str, float] = {},
+        classes: list[str] | None = None,
+        weights: dict[str, float] | None = None,
     ) -> None:
         super().__init__()
         self._data = df
         self.target = target
         self.model_class = model_class
-        self.classes = classes
-        self.weights = weights
+        self.classes = classes if classes is not None else []
+        self.weights = weights if weights is not None else {}
+        self.k = k
+        self.seed = seed
 
         if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
@@ -186,19 +188,23 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def local_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        if variable != self.target:
-            return 0.0
-        return self._conditional_log_likelihood(
-            model, self.training_data(), variable, evidence
-        )
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+
+        # Match ValidatedLikelihood::local_score behavior: CV over holdout training data.
+        cll = 0.0
+        for train_df, test_df in self.cv:
+            cll += self._conditional_log_likelihood(candidate_model, train_df, test_df)
+        return cll
 
     def vlocal_score(
         self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
     ) -> float:
-        if variable != self.target:
-            return 0.0
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+        # Match ValidatedLikelihood::vlocal_score behavior: fit on holdout training, score on holdout test.
         return self._conditional_log_likelihood(
-            model, self.validation_data(), variable, evidence
+            candidate_model,
+            self.holdout.training_data(),
+            self.holdout.test_data(),
         )
 
     # TODO: local_score_node_type, vlocal_score_node_type
@@ -206,47 +212,89 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def data(self) -> pd.DataFrame:
         return self._data
 
-    def training_data(self) -> pd.DataFrame:
-        return self.holdout.training_data()
-
-    def validation_data(self) -> pd.DataFrame:
-        return self.holdout.test_data()
-
     def _conditional_log_likelihood(
         self,
         model: pbn.BayesianNetworkBase,
-        df: pd.DataFrame | object,
-        variable: str,
-        evidence: list[str],
+        fit_df: pd.DataFrame | object,
+        eval_df: pd.DataFrame | object,
     ) -> float:
-        eval_df = self._to_pandas(df)
-        if pd.Series(eval_df[self.target]).isna().any():
+        # Copy the model structure
+        if self.model_class is None:
+            raise ValueError("model_class must be set to clone candidate models.")
+
+        fit_model = self.model_class(classes_=self.classes, weights_=self.weights)
+        fit_model._copy_bn_structure(
+            arcs=model.arcs(),
+            node_types=list(model.node_types().items()),
+        )
+
+        fit_df_pd: pd.DataFrame = self._to_pandas(fit_df)
+        eval_df_pd: pd.DataFrame = self._to_pandas(eval_df)
+
+        if pd.Series(eval_df_pd[self.target]).isna().any():
             raise ValueError(
                 "CLL cannot be computed with missing values in the target column."
             )
-        # NOTE: This should only fit parameters
-        model.fit(eval_df)
+
+        fit_X = fit_df_pd.drop(columns=[self.target])
+        fit_y = fit_df_pd[self.target]
+        fit_model.fit(fit_X, fit_y)
+
         if self.model_class is not None:
             eval_model = self.model_class(
                 classes_=self.classes, weights_=self.weights, seed=42
             )
-            eval_model.copy_pbn(model)
+            eval_model.copy_pbn(fit_model)
         else:
-            eval_model = model
+            eval_model = fit_model
 
-        eval_df["logl"] = 0.0
+        eval_X = eval_df_pd.drop(columns=[self.target])
+        eval_df_pd["logl"] = 0.0
         for class_value in self._target_values:
-            conditional_mask = eval_df[self.target] == class_value
-            # TODO: Make it do it for a specific variable and evidence
-            cpd = eval_model.cpd(variable)
-            # if isinstance(cpd, (pbn.CLinearGaussianCPD, pbn.HCKDE)):
-            # assignment = pbn.Assignment({self.true_label: class_value})
-            # conditional_cpd = cpd.conditional_factor(assignment)
-            eval_df.loc[conditional_mask, "logl"] = eval_model.conditional_logl(
-                eval_df.loc[conditional_mask], class_value=class_value
+            conditional_mask = eval_df_pd[self.target] == class_value
+            if not conditional_mask.any():
+                continue
+            eval_df_pd.loc[conditional_mask, "logl"] = eval_model.conditional_logl(
+                eval_X.loc[conditional_mask], class_value=class_value
             )
 
-        return eval_df["logl"].sum()
+        return float(eval_df_pd["logl"].sum())
+
+    def _model_with_variable_evidence(
+        self,
+        model: pbn.BayesianNetworkBase,
+        variable: str,
+        evidence: list[str],
+    ) -> pbn.BayesianNetworkBase:
+        if self.model_class is None:
+            raise ValueError(
+                "model_class must be set to evaluate candidate parent evidence in local scores."
+            )
+
+        candidate_model = self.model_class(
+            classes_=self.classes, weights_=self.weights, seed=42
+        )
+
+        # Copy only graph structure and node types. CPDs are intentionally excluded
+        # because candidate parent sets can differ from the current model.
+        candidate_model._copy_bn_structure(
+            arcs=model.arcs(),
+            node_types=list(model.node_types().items()),
+        )
+
+        current_parents = set(candidate_model.parents(variable))
+        desired_parents = set(evidence)
+
+        for parent in sorted(current_parents - desired_parents):
+            candidate_model.remove_arc(parent, variable)
+
+        for parent in sorted(desired_parents - current_parents):
+            if not candidate_model.has_arc(
+                parent, variable
+            ) and candidate_model.can_add_arc(parent, variable):
+                candidate_model.add_arc(parent, variable)
+
+        return candidate_model
 
     @staticmethod
     def _to_pandas(df: pd.DataFrame | object) -> pd.DataFrame:
@@ -282,14 +330,9 @@ if __name__ == "__main__":
 
     base_model = model_class(seed=42)
     base_model.fit(X, y)
-    base_model.remove_arc(TRUE_CLASS_LABEL, "a")
-    base_model.remove_arc(TRUE_CLASS_LABEL, "b")
-    base_model.remove_arc(TRUE_CLASS_LABEL, "c")
-
     classes = base_model.classes_
     weights = base_model.weights_
 
-    # TODO: Arc operators are not added
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
         target=TRUE_CLASS_LABEL,
@@ -304,6 +347,8 @@ if __name__ == "__main__":
     learnt_model = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
+    print("Base model arcs:", sorted(base_model.arcs()))
+    print("Base model log-likelihood:", base_model.slogl(df))
     print("Learned model arcs:", sorted(learnt_model.arcs()))
     print("Train CLL:", cll_score.score(learnt_model))
     print("Validation CLL:", cll_score.vscore(learnt_model))
