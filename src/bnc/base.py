@@ -70,7 +70,6 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
         self.classes_: list[str] = sorted(classes_)
         self.weights_: dict[str, float] = weights_
 
-    # TODO: Make this automatically insert the structure or change name
     def _init_structure(
         self,
         nodes: list[str] = [],
@@ -114,8 +113,6 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
     ) -> "BaseBayesianNetworkClassifier":
         if y is None:
             raise ValueError("y must be set")
-        self.classes_ = sorted(y.unique())
-        self.weights_ = y.value_counts(normalize=True)
         super().fit(X, y)
         return self
 
@@ -242,6 +239,16 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             name=self.prediction_label,
         )
         return prediction_label
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        if y is None:
+            raise ValueError("y must be set")
+        super()._fit_parameters(X, y)
+        self.classes_ = sorted(y.unique())
+        self.weights_ = y.value_counts(normalize=True)
+        return self
 
 
 class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):

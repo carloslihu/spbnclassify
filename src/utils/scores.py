@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pybnesian as pbn
 
@@ -148,8 +147,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         self.model_class = model_class
         self.feature_names_in_ = df.columns.drop(target).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
-        self.classes_ = df[self.target].dropna().unique().tolist()
-        self.weights_ = df[self.target].value_counts(normalize=True)
 
         if self.target not in df.columns:
             raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
@@ -297,8 +294,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
                 added if they satisfy the model's validity constraints.
         """
         candidate_model = self.model_class(
-            classes_=self.classes_,
-            weights_=self.weights_,
             feature_names_in_=self.feature_names_in_,
             n_features_in_=self.n_features_in_,
             true_label=self.target,

@@ -9,7 +9,6 @@ import pyagrum as gum
 import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
-from scipy.optimize import differential_evolution
 
 from ..utils.constants import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP, TRUE_ANOMALY_LABEL
 from ..utils.feature_selection import get_zero_variance_variables
