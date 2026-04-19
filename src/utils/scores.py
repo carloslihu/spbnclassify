@@ -337,9 +337,8 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 # TODO: Metric-based structure learning
 if __name__ == "__main__":
-    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
-
     hc = pbn.GreedyHillClimbing()
+    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
     learned_model = hc.estimate(
         operators=pbn.ArcOperatorSet(),
         score=OracleValidatedScore(),
@@ -354,6 +353,7 @@ if __name__ == "__main__":
     y = df[TRUE_CLASS_LABEL]
 
     model_class = GaussianNaiveBayes
+    # model_class = GaussianBayesianNetworkAugmentedNaiveBayes
 
     base_model = model_class(seed=42)
     base_model.fit(X, y)
