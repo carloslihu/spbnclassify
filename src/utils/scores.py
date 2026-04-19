@@ -266,7 +266,8 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             conditional_mask = eval_df_pd[self.target] == class_value
             if not conditional_mask.any():
                 continue
-            eval_df_pd.loc[conditional_mask, "logl"] = model.conditional_logl(
+            eval_df_pd.loc[conditional_mask, "logl"] = model.weights_[class_value]
+            eval_df_pd.loc[conditional_mask, "logl"] += model.conditional_logl(
                 eval_df_pd.loc[conditional_mask], class_value=class_value
             )
 
@@ -371,7 +372,11 @@ if __name__ == "__main__":
     )
     learnt_pbn.fit(df)
     learnt_model = model_class(
-        classes_=base_model.classes_, weights_=base_model.weights_, seed=SEED
+        feature_names_in_=base_model.feature_names_in_,
+        n_features_in_=base_model.n_features_in_,
+        classes_=base_model.classes_,
+        weights_=base_model.weights_,
+        seed=SEED,
     )
     learnt_model.copy_pbn(learnt_pbn)
 

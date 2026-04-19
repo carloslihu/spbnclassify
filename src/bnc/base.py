@@ -144,7 +144,7 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
 
     def conditional_logl(self, data: pd.DataFrame, class_value: str) -> np.ndarray:
         """
-        Compute the conditional log-likelihood for a fixed class value.
+        Compute the class-conditional log-likelihood for a fixed class value log p(X | C = class_value).
         This method calculates the log-likelihood of the data given the specified
         class value, using the conditional probability distributions (CPDs) of the
         features in the Bayesian network.
@@ -155,7 +155,7 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             class_value (str): The class value for which the conditional log-likelihood
                 is to be computed.
         Returns:
-            np.ndarray: A NumPy array containing the computed log-likelihood
+            np.ndarray: A NumPy array containing log p(X | C = class_value).
         Notes:
             - If a conditional probability distribution (CPD) is `None`, it indicates
               that the corresponding variable is not fitted (e.g., a Conditional Linear
@@ -164,10 +164,11 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
               using `np.nan_to_num`, which typically occurs when the variable is not
               fitted (e.g., a Conditional Kernel Density Estimation (CKDE) with zero
               variance).
-            - NOTE: Only used for predict_proba calculation
+            - NOTE: Class priors are intentionally NOT included here.
+              They are applied once in `predict_proba`.
         """
 
-        log_likelihood = pd.Series(np.log(self.weights_[class_value]), index=data.index)
+        log_likelihood = pd.Series(0.0, index=data.index)
         for node in self.feature_names_in_:
             cpd = self.conditional_factor(node=node, class_value=class_value)
             # NOTE: When the CPD is None, that means that the variable is not fitted (CLG with 0 variance)
