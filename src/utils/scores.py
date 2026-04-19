@@ -10,6 +10,7 @@ sys.path.append(str(RUTILE_AI_PATH))
 
 from rutile_ai.engine.classification.spbnclassify.src.bnc import (
     GaussianBayesianNetworkAugmentedNaiveBayes,
+    GaussianNaiveBayes,
 )
 from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
     DATA_SIZE,
@@ -351,7 +352,7 @@ if __name__ == "__main__":
     X = df.drop(columns=[TRUE_CLASS_LABEL])
     y = df[TRUE_CLASS_LABEL]
 
-    model_class = GaussianBayesianNetworkAugmentedNaiveBayes
+    model_class = GaussianNaiveBayes
 
     base_model = model_class(seed=42)
     base_model.fit(X, y)
@@ -368,6 +369,7 @@ if __name__ == "__main__":
     learnt_pbn = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
+    learnt_pbn.fit(df)
     learnt_model = model_class(
         classes_=base_model.classes_, weights_=base_model.weights_, seed=SEED
     )
