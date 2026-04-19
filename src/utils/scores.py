@@ -3,11 +3,14 @@ from pathlib import Path
 
 import pandas as pd
 import pybnesian as pbn
+from sklearn.metrics import accuracy_score
 
 RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
 sys.path.append(str(RUTILE_AI_PATH))
 
-from rutile_ai.engine.classification.spbnclassify.src.bnc import GaussianNaiveBayes
+from rutile_ai.engine.classification.spbnclassify.src.bnc import (
+    GaussianBayesianNetworkAugmentedNaiveBayes,
+)
 from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
     DATA_SIZE,
     SEED,
@@ -331,7 +334,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 
 # TODO: Metric-based structure learning
-# TODO: CLL score-based NTL
 if __name__ == "__main__":
     start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
 
@@ -349,7 +351,7 @@ if __name__ == "__main__":
     X = df.drop(columns=[TRUE_CLASS_LABEL])
     y = df[TRUE_CLASS_LABEL]
 
-    model_class = GaussianNaiveBayes
+    model_class = GaussianBayesianNetworkAugmentedNaiveBayes
 
     base_model = model_class(seed=42)
     base_model.fit(X, y)
@@ -363,12 +365,24 @@ if __name__ == "__main__":
         model_class=model_class,
     )
 
-    learnt_model = hc.estimate(
+    learnt_pbn = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
-    # TODO: Find way to compare how it improves
+    learnt_model = model_class(
+        classes_=base_model.classes_, weights_=base_model.weights_, seed=SEED
+    )
+    learnt_model.copy_pbn(learnt_pbn)
+
+    base_model_pred = base_model.predict(X)
+    learnt_model_pred = learnt_model.predict(X)
+
+    base_accuracy = accuracy_score(y, base_model_pred)
+    learnt_accuracy = accuracy_score(y, learnt_model_pred)
+
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
+    print(f"Base model accuracy: {base_accuracy:.4f}")
+
     print("Learned model arcs:", sorted(learnt_model.arcs()))
-    print("Train CLL:", cll_score.score(learnt_model))
-    print("Validation CLL:", cll_score.vscore(learnt_model))
+    print("Learned model log-likelihood:", learnt_model.slogl(df))
+    print(f"Learned model accuracy: {learnt_accuracy:.4f}")

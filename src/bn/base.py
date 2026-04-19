@@ -281,6 +281,13 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
             # if num_categories < 2:
             num_categories = 2
             node_num_categories_dict[self.true_label] = num_categories
+
+        # Remove all existing arcs to avoid conflicts with the learned structure
+        for source, target in self.arcs():
+            self.remove_arc(source, target)
+            if self.graphic.existsArc(source, target):
+                self.graphic.eraseArc(source, target)
+
         self._copy_bn_structure(arcs, node_types, node_num_categories_dict)
         # Copies the factors (cpds) of the Bayesian Network to the current Bayesian Network
         if bn.fitted():
