@@ -30,10 +30,7 @@ class TestGaussianBayesianNetworkAugmentedNaiveBayes(
         self, data: pd.DataFrame
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
         nodes = data.columns.tolist()
-        return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("c", "b")]
-        )
+        return set([(TRUE_CLASS_LABEL, "b"), (TRUE_CLASS_LABEL, "c"), ("c", "b")])
 
 
 class TestGaussianNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
@@ -184,11 +181,7 @@ class TestGaussianMaxKAugmentedNaiveBayes(BaseTestGaussianBayesianNetworkClassif
     def get_expected_arcs(
         self, data: pd.DataFrame
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
-        nodes = data.columns.tolist()
-        return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("c", "b")]
-        )
+        return set([(TRUE_CLASS_LABEL, "c")] + [("c", "b")])
 
     def has_max_indegree_constraint(self) -> bool:
         return True

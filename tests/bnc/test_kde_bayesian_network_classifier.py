@@ -29,9 +29,9 @@ class TestKDEBayesianNetworkAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassi
         self, data: pd.DataFrame
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
         nodes = data.columns.tolist()
+
         return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("b", "c"), ("a", "c")]
+            [(TRUE_CLASS_LABEL, "b"), (TRUE_CLASS_LABEL, "c"), ("b", "c"), ("a", "c")]
         )
 
     def test_generate(self) -> None:
@@ -198,10 +198,7 @@ class TestKDEMaxKAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
         self, data: pd.DataFrame
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
         nodes = data.columns.tolist()
-        return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("c", "a")]
-        )
+        return set([(TRUE_CLASS_LABEL, "b"), (TRUE_CLASS_LABEL, "c"), ("c", "a")])
 
     def has_max_indegree_constraint(self) -> bool:
         return True

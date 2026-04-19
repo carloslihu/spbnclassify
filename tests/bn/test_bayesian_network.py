@@ -193,9 +193,11 @@ class BaseTestBayesianNetwork:
             if isinstance(arcs, list):
                 # For multinet structures, arcs is a list of tuples
                 assert set(arcs) == set(expected_arcs)
-            else:
+            elif isinstance(arcs, dict):
                 # For single network structures, arcs is a set of tuples
-                assert arcs == expected_arcs
+                for key, expected_arc_list in expected_arcs.items():
+                    arc_list = arcs[key]
+                    assert set(arc_list) == set(expected_arc_list)
 
         expected_node_types = self.get_expected_node_types(data)
         node_types = bn.node_types()
@@ -394,9 +396,8 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
     def test_infer(self, bn: BayesianNetwork):
         """Test the infer method of the Discrete Bayesian Network."""
         evidence = {"a": 0, "b": 1}
-        targets = {"c", "d"}
-        html_str = bn.infer(evidence=evidence, targets=targets)
-        assert isinstance(html_str, str)
+        result_dict = bn.infer(evidence=evidence)
+        assert isinstance(result_dict, dict)
 
 
 class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):

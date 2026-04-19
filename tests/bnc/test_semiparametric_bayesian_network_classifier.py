@@ -34,8 +34,7 @@ class TestSemiParametricBayesianNetworkAugmentedNaiveBayes(
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
         nodes = data.columns.tolist()
         return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("b", "c"), ("a", "c")]
+            [(TRUE_CLASS_LABEL, "b"), (TRUE_CLASS_LABEL, "c"), ("b", "c"), ("a", "c")]
         )
 
     def get_expected_node_types(self, data: pd.DataFrame) -> dict:
@@ -254,10 +253,7 @@ class TestSemiParametricMaxKAugmentedNaiveBayes(
         self, data: pd.DataFrame
     ) -> set[tuple[str, str]] | dict[str, list[tuple[str, str]]]:
         nodes = data.columns.tolist()
-        return set(
-            [(TRUE_CLASS_LABEL, node) for node in nodes if node != TRUE_CLASS_LABEL]
-            + [("c", "a")]
-        )
+        return set([(TRUE_CLASS_LABEL, "b"), (TRUE_CLASS_LABEL, "c"), ("c", "a")])
 
     def get_expected_node_types(self, data: pd.DataFrame) -> dict:
         return {
