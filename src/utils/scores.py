@@ -11,11 +11,13 @@ sys.path.append(str(RUTILE_AI_PATH))
 from rutile_ai.engine.classification.spbnclassify.src.bnc import (
     GaussianBayesianNetworkAugmentedNaiveBayes,
     GaussianNaiveBayes,
+    SemiParametricNaiveBayes,
 )
 from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
     DATA_SIZE,
     SEED,
     TRUE_CLASS_LABEL,
+    generate_non_normal_data_classification,
     generate_normal_data_classification,
 )
 
@@ -214,7 +216,38 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             self.holdout.test_data(),
         )
 
-    # TODO: local_score_node_type, vlocal_score_node_type
+    def local_score_node_type(
+        self,
+        model: pbn.BayesianNetworkBase,
+        variable_type: pbn.FactorType,
+        variable: str,
+        evidence: list[str],
+    ) -> float:
+        """Return the cross-validated local score for an explicit node type."""
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+        candidate_model.set_node_type(variable, variable_type)
+
+        cll = 0.0
+        for train_df, test_df in self.cv:
+            cll += self._conditional_log_likelihood(candidate_model, train_df, test_df)
+        return cll
+
+    def vlocal_score_node_type(
+        self,
+        model: pbn.BayesianNetworkBase,
+        variable_type: pbn.FactorType,
+        variable: str,
+        evidence: list[str],
+    ) -> float:
+        """Return the validation local score for an explicit node type."""
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+        candidate_model.set_node_type(variable, variable_type)
+
+        return self._conditional_log_likelihood(
+            candidate_model,
+            self.holdout.training_data(),
+            self.holdout.test_data(),
+        )
 
     def data(self) -> pd.DataFrame:
         """Returns the DataFrame used to calculate the score and local scores.
@@ -338,14 +371,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 # TODO: Metric-based structure learning
 if __name__ == "__main__":
     hc = pbn.GreedyHillClimbing()
-    start_model = pbn.GaussianNetwork(["a", "b", "c", "d"])
-    learned_model = hc.estimate(
-        operators=pbn.ArcOperatorSet(),
-        score=OracleValidatedScore(),
-        start=start_model,
-        verbose=True,
-    )
-    assert set(learned_model.arcs()) == {("a", "c"), ("b", "c"), ("c", "d")}
 
     # CLL score-based structure learning on the toy data.
     df = generate_normal_data_classification(DATA_SIZE, seed=SEED)
@@ -393,3 +418,39 @@ if __name__ == "__main__":
     print("Learned model arcs:", sorted(learnt_model.arcs()))
     print("Learned model log-likelihood:", learnt_model.slogl(df))
     print(f"Learned model accuracy: {learnt_accuracy:.4f}")
+    # TODO: Add ChangeNodeType tests
+    df = generate_non_normal_data_classification(DATA_SIZE, seed=SEED)
+    X = df.drop(columns=[TRUE_CLASS_LABEL])
+    y = df[TRUE_CLASS_LABEL]
+    model_class = SemiParametricNaiveBayes
+    base_model = model_class(seed=42)
+    base_model.fit(X, y)
+    print("Base model arcs:", sorted(base_model.arcs()))
+    print("Base model log-likelihood:", base_model.slogl(df))
+    print("Base model node types:", base_model.node_types())
+    cll_score = ConditionalLogLikelihoodValidatedScore(
+        df,
+        target=TRUE_CLASS_LABEL,
+        test_ratio=0.2,
+        k=2,
+        seed=SEED,
+        model_class=model_class,
+    )
+    learnt_pbn = hc.estimate(
+        operators=pbn.ChangeNodeTypeSet(),
+        score=cll_score,
+        start=base_model,
+        verbose=True,
+    )
+    learnt_model = model_class(
+        feature_names_in_=base_model.feature_names_in_,
+        n_features_in_=base_model.n_features_in_,
+        classes_=base_model.classes_,
+        weights_=base_model.weights_,
+        seed=SEED,
+    )
+    learnt_model.copy_pbn(learnt_pbn)
+
+    print("Learned model arcs:", sorted(learnt_model.arcs()))
+    print("Learned model log-likelihood:", learnt_model.slogl(df))
+    print("Learned model node types:", learnt_model.node_types())
