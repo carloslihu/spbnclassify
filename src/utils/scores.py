@@ -748,60 +748,62 @@ if __name__ == "__main__":
         {
             "Model": "Base",
             "Arcs": str(sorted(base_model.arcs())),
-            "LogLikelihood": base_model.slogl(df),
+            "Log-likelihood": base_model.slogl(df),
             "Accuracy": base_accuracy,
-            "F1Weighted": base_f1,
-            "ROCAUC": base_auc,
+            "F1-score (weighted)": base_f1,
+            "ROC AUC": base_auc,
         },
         {
             "Model": "Baseline",
             "Arcs": str(sorted(baseline_model.arcs())),
-            "LogLikelihood": baseline_model.slogl(df),
+            "Log-likelihood": baseline_model.slogl(df),
             "Accuracy": baseline_accuracy,
-            "F1Weighted": baseline_f1,
-            "ROCAUC": baseline_auc,
+            "F1-score (weighted)": baseline_f1,
+            "ROC AUC": baseline_auc,
         },
         {
             "Model": "CLLScore",
             "Arcs": str(sorted(cll_model.arcs())),
-            "LogLikelihood": cll_model.slogl(df),
+            "Log-likelihood": cll_model.slogl(df),
             "Accuracy": cll_accuracy,
-            "F1Weighted": cll_f1,
-            "ROCAUC": cll_auc,
+            "F1-score (weighted)": cll_f1,
+            "ROC AUC": cll_auc,
         },
         {
             "Model": "AccuracyScore",
             "Arcs": str(sorted(acc_model.arcs())),
-            "LogLikelihood": acc_model.slogl(df),
+            "Log-likelihood": acc_model.slogl(df),
             "Accuracy": acc_accuracy,
-            "F1Weighted": acc_f1,
-            "ROCAUC": acc_auc,
+            "F1-score (weighted)": acc_f1,
+            "ROC AUC": acc_auc,
         },
         {
             "Model": "F1Score",
             "Arcs": str(sorted(f1_model.arcs())),
-            "LogLikelihood": f1_model.slogl(df),
+            "Log-likelihood": f1_model.slogl(df),
             "Accuracy": f1_accuracy,
-            "F1Weighted": f1_model_f1,
-            "ROCAUC": f1_auc,
+            "F1-score (weighted)": f1_model_f1,
+            "ROC AUC": f1_auc,
         },
         {
             "Model": "AUCScore",
             "Arcs": str(sorted(auc_model.arcs())),
-            "LogLikelihood": auc_model.slogl(df),
+            "Log-likelihood": auc_model.slogl(df),
             "Accuracy": auc_accuracy,
-            "F1Weighted": auc_model_f1,
-            "ROCAUC": auc_model_auc,
+            "F1-score (weighted)": auc_model_f1,
+            "ROC AUC": auc_model_auc,
         },
     ]
 
     comparison_df = pd.DataFrame(comparison_rows)
-    comparison_df["LogLikelihood"] = comparison_df["LogLikelihood"].map(
+    comparison_df["Log-likelihood"] = comparison_df["Log-likelihood"].map(
         lambda v: f"{v:.6f}"
     )
     comparison_df["Accuracy"] = comparison_df["Accuracy"].map(lambda v: f"{v:.4f}")
-    comparison_df["F1Weighted"] = comparison_df["F1Weighted"].map(lambda v: f"{v:.4f}")
-    comparison_df["ROCAUC"] = comparison_df["ROCAUC"].map(lambda v: f"{v:.4f}")
+    comparison_df["F1-score (weighted)"] = comparison_df["F1-score (weighted)"].map(
+        lambda v: f"{v:.4f}"
+    )
+    comparison_df["ROC AUC"] = comparison_df["ROC AUC"].map(lambda v: f"{v:.4f}")
 
     print("\nModel comparison table:\n")
     print(comparison_df.to_string(index=False))
