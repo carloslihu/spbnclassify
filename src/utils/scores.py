@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pybnesian as pbn
 from scipy.special import logsumexp
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
 RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
@@ -520,6 +520,33 @@ class AccuracyScore(pbn.Score):
 # TODO: Metric-based structure learning
 if __name__ == "__main__":
 
+    def _safe_predict_proba(
+        model: pbn.BayesianNetworkBase, x: pd.DataFrame
+    ) -> np.ndarray | None:
+        try:
+            return model.predict_proba(x)
+        except Exception:
+            return None
+
+    def _compute_auc(y_true: pd.Series, y_proba: np.ndarray | None) -> float:
+        if y_proba is None:
+            return float("nan")
+
+        if y_proba.ndim == 1:
+            return float(roc_auc_score(y_true, y_proba))
+
+        if y_proba.shape[1] == 2:
+            return float(roc_auc_score(y_true, y_proba[:, 1]))
+
+        return float(
+            roc_auc_score(
+                y_true,
+                y_proba,
+                multi_class="ovr",
+                average="weighted",
+            )
+        )
+
     # CLL score-based structure learning on the toy data.
     df = generate_normal_data_classification(DATA_SIZE, seed=SEED)
     X = df.drop(columns=[TRUE_CLASS_LABEL])
@@ -595,26 +622,49 @@ if __name__ == "__main__":
     cll_model_pred = cll_model.predict(X_test)
     acc_model_pred = acc_model.predict(X_test)
 
+    base_model_proba = _safe_predict_proba(base_model, X_test)
+    baseline_model_proba = _safe_predict_proba(baseline_model, X_test)
+    cll_model_proba = _safe_predict_proba(cll_model, X_test)
+    acc_model_proba = _safe_predict_proba(acc_model, X_test)
+
     base_accuracy = accuracy_score(y_test, base_model_pred)
     baseline_accuracy = accuracy_score(y_test, baseline_model_pred)
     cll_accuracy = accuracy_score(y_test, cll_model_pred)
     acc_accuracy = accuracy_score(y_test, acc_model_pred)
 
+    base_f1 = f1_score(y_test, base_model_pred, average="weighted")
+    baseline_f1 = f1_score(y_test, baseline_model_pred, average="weighted")
+    cll_f1 = f1_score(y_test, cll_model_pred, average="weighted")
+    acc_f1 = f1_score(y_test, acc_model_pred, average="weighted")
+
+    base_auc = _compute_auc(y_test, base_model_proba)
+    baseline_auc = _compute_auc(y_test, baseline_model_proba)
+    cll_auc = _compute_auc(y_test, cll_model_proba)
+    acc_auc = _compute_auc(y_test, acc_model_proba)
+
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
     print(f"Base model accuracy: {base_accuracy:.4f}")
+    print(f"Base model F1-score (weighted): {base_f1:.4f}")
+    print(f"Base model ROC-AUC: {base_auc:.4f}")
     print("-" * 50)
 
     print("Baseline model arcs:", sorted(baseline_model.arcs()))
     print("Baseline model log-likelihood:", baseline_model.slogl(df))
     print(f"Baseline model accuracy: {baseline_accuracy:.4f}")
+    print(f"Baseline model F1-score (weighted): {baseline_f1:.4f}")
+    print(f"Baseline model ROC-AUC: {baseline_auc:.4f}")
     print("-" * 50)
 
     print("CLL model arcs:", sorted(cll_model.arcs()))
     print("CLL model log-likelihood:", cll_model.slogl(df))
     print(f"CLL model accuracy: {cll_accuracy:.4f}")
+    print(f"CLL model F1-score (weighted): {cll_f1:.4f}")
+    print(f"CLL model ROC-AUC: {cll_auc:.4f}")
     print("-" * 50)
 
     print("Accuracy score model arcs:", sorted(acc_model.arcs()))
     print("Accuracy score model log-likelihood:", acc_model.slogl(df))
     print(f"Accuracy score model accuracy: {acc_accuracy:.4f}")
+    print(f"Accuracy score model F1-score (weighted): {acc_f1:.4f}")
+    print(f"Accuracy score model ROC-AUC: {acc_auc:.4f}")
