@@ -404,7 +404,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
 # TODO: Metric-based structure learning
 if __name__ == "__main__":
-    hc = pbn.GreedyHillClimbing()
 
     # CLL score-based structure learning on the toy data.
     df = generate_normal_data_classification(DATA_SIZE, seed=SEED)
@@ -412,6 +411,8 @@ if __name__ == "__main__":
     y = df[TRUE_CLASS_LABEL]
 
     model_class = GaussianNaiveBayes
+    baseline_model_class = GaussianBayesianNetworkAugmentedNaiveBayes
+
     # model_class = GaussianBayesianNetworkAugmentedNaiveBayes
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
@@ -421,15 +422,24 @@ if __name__ == "__main__":
         seed=SEED,
         model_class=model_class,
     )
+
     df_train = cll_score._training_data_holdout
     df_test = cll_score._test_data_holdout
+
     X_train = df_train.drop(columns=[TRUE_CLASS_LABEL])
     y_train = df_train[TRUE_CLASS_LABEL]
     X_test = df_test.drop(columns=[TRUE_CLASS_LABEL])
     y_test = df_test[TRUE_CLASS_LABEL]
+
+    # Baselines
     base_model = model_class(seed=42)
     base_model.fit(X_train, y_train)
 
+    baseline_model = baseline_model_class(seed=SEED)
+    baseline_model.fit(X_train, y_train)
+
+    # Structure learning with CLL score
+    hc = pbn.GreedyHillClimbing()
     learnt_pbn = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
@@ -445,14 +455,20 @@ if __name__ == "__main__":
     learnt_model.copy_pbn(learnt_pbn)
 
     base_model_pred = base_model.predict(X_test)
+    baseline_model_pred = baseline_model.predict(X_test)
     learnt_model_pred = learnt_model.predict(X_test)
 
     base_accuracy = accuracy_score(y_test, base_model_pred)
+    baseline_accuracy = accuracy_score(y_test, baseline_model_pred)
     learnt_accuracy = accuracy_score(y_test, learnt_model_pred)
 
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
     print(f"Base model accuracy: {base_accuracy:.4f}")
+
+    print("Baseline model arcs:", sorted(baseline_model.arcs()))
+    print("Baseline model log-likelihood:", baseline_model.slogl(df))
+    print(f"Baseline model accuracy: {baseline_accuracy:.4f}")
 
     print("Learned model arcs:", sorted(learnt_model.arcs()))
     print("Learned model log-likelihood:", learnt_model.slogl(df))
