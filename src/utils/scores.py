@@ -6,6 +6,7 @@ import pandas as pd
 import pybnesian as pbn
 from scipy.special import logsumexp
 from sklearn.metrics import accuracy_score
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
 RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
 sys.path.append(str(RUTILE_AI_PATH))
@@ -167,19 +168,37 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
             raise ValueError(
                 "ConditionalLogLikelihoodScore requires at least two target values."
             )
-        # RFE: Maybe this should be stratified?
-        self.holdout = pbn.HoldoutLikelihood(
-            df,
-            test_ratio=test_ratio,
-            seed=seed,
-            construction_args=construction_args,
-        ).holdout
-        self.cv = pbn.CVLikelihood(
-            self.holdout.training_data(),
-            k=k,
-            seed=seed,
-            construction_args=construction_args,
-        ).cv
+        # Use stratified holdout split
+        stratified_shuffle = StratifiedShuffleSplit(
+            n_splits=1, test_size=test_ratio, random_state=seed
+        )
+        train_idx, test_idx = next(stratified_shuffle.split(df, df[self.target]))
+
+        self._training_data_holdout = df.iloc[train_idx].reset_index(drop=True)
+        self._test_data_holdout = df.iloc[test_idx].reset_index(drop=True)
+
+        # Use stratified K-fold for cross-validation on training data
+        self._stratified_kfold = StratifiedKFold(
+            n_splits=k, shuffle=True, random_state=seed
+        )
+
+    def _get_cv_splits(self) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+        """Generate stratified K-fold cross-validation splits on the holdout training data."""
+        splits = []
+        y_train = self._training_data_holdout[self.target]
+
+        for train_idx, test_idx in self._stratified_kfold.split(
+            self._training_data_holdout, y_train
+        ):
+            train_fold = self._training_data_holdout.iloc[train_idx].reset_index(
+                drop=True
+            )
+            test_fold = self._training_data_holdout.iloc[test_idx].reset_index(
+                drop=True
+            )
+            splits.append((train_fold, test_fold))
+
+        return splits
 
     def has_variables(self, vars: str | list[str]) -> bool:
         """Return whether all given variables belong to the oracle domain."""
@@ -199,7 +218,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         candidate_model = self._model_with_variable_evidence(model, variable, evidence)
 
         cll = 0.0
-        for train_df, test_df in self.cv:
+        for train_df, test_df in self._get_cv_splits():
             cll += self._conditional_log_likelihood(candidate_model, train_df, test_df)
         return cll
 
@@ -214,8 +233,8 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         candidate_model = self._model_with_variable_evidence(model, variable, evidence)
         return self._conditional_log_likelihood(
             candidate_model,
-            self.holdout.training_data(),
-            self.holdout.test_data(),
+            self._training_data_holdout,
+            self._test_data_holdout,
         )
 
     def local_score_node_type(
@@ -230,7 +249,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         candidate_model.set_node_type(variable, variable_type)
 
         cll = 0.0
-        for train_df, test_df in self.cv:
+        for train_df, test_df in self._get_cv_splits():
             cll += self._conditional_log_likelihood(candidate_model, train_df, test_df)
         return cll
 
@@ -247,8 +266,8 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
         return self._conditional_log_likelihood(
             candidate_model,
-            self.holdout.training_data(),
-            self.holdout.test_data(),
+            self._training_data_holdout,
+            self._test_data_holdout,
         )
 
     def data(self) -> pd.DataFrame:
