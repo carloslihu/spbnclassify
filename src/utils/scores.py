@@ -517,7 +517,51 @@ class AccuracyScore(pbn.Score):
         return candidate_model
 
 
-# TODO: Metric-based structure learning
+class F1Score(AccuracyScore):
+    """Score that optimizes weighted F1-score on a stratified holdout split."""
+
+    def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
+        train_x = self._training_data_holdout.drop(columns=[self.target])
+        train_y = self._training_data_holdout[self.target]
+        test_x = self._test_data_holdout.drop(columns=[self.target])
+        test_y = self._test_data_holdout[self.target]
+
+        model._fit_parameters(train_x, train_y)
+        pred_y = model.predict(test_x)
+        return float(f1_score(test_y, pred_y, average="weighted"))
+
+
+class AUCScore(AccuracyScore):
+    """Score that optimizes ROC-AUC on a stratified holdout split."""
+
+    @staticmethod
+    def _compute_auc(y_true: pd.Series, y_proba: np.ndarray) -> float:
+        if y_proba.ndim == 1:
+            return float(roc_auc_score(y_true, y_proba))
+
+        if y_proba.shape[1] == 2:
+            return float(roc_auc_score(y_true, y_proba[:, 1]))
+
+        return float(
+            roc_auc_score(
+                y_true,
+                y_proba,
+                multi_class="ovr",
+                average="weighted",
+            )
+        )
+
+    def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
+        train_x = self._training_data_holdout.drop(columns=[self.target])
+        train_y = self._training_data_holdout[self.target]
+        test_x = self._test_data_holdout.drop(columns=[self.target])
+        test_y = self._test_data_holdout[self.target]
+
+        model._fit_parameters(train_x, train_y)
+        pred_proba = model.predict_proba(test_x)
+        return self._compute_auc(test_y, pred_proba)
+
+
 if __name__ == "__main__":
 
     def _safe_predict_proba(
@@ -617,54 +661,147 @@ if __name__ == "__main__":
     )
     acc_model.copy_pbn(acc_pbn)
 
+    # Structure learning with F1 score
+    f1_score_obj = F1Score(
+        df,
+        target=TRUE_CLASS_LABEL,
+        test_ratio=0.2,
+        seed=SEED,
+        model_class=model_class,
+    )
+    f1_pbn = hc.estimate(
+        operators=pbn.ArcOperatorSet(),
+        score=f1_score_obj,
+        start=base_model,
+        verbose=True,
+    )
+    f1_pbn.fit(df_train)
+    f1_model = model_class(
+        feature_names_in_=base_model.feature_names_in_,
+        n_features_in_=base_model.n_features_in_,
+        classes_=base_model.classes_,
+        weights_=base_model.weights_,
+        seed=SEED,
+    )
+    f1_model.copy_pbn(f1_pbn)
+
+    # Structure learning with AUC score
+    auc_score_obj = AUCScore(
+        df,
+        target=TRUE_CLASS_LABEL,
+        test_ratio=0.2,
+        seed=SEED,
+        model_class=model_class,
+    )
+    auc_pbn = hc.estimate(
+        operators=pbn.ArcOperatorSet(),
+        score=auc_score_obj,
+        start=base_model,
+        verbose=True,
+    )
+    auc_pbn.fit(df_train)
+    auc_model = model_class(
+        feature_names_in_=base_model.feature_names_in_,
+        n_features_in_=base_model.n_features_in_,
+        classes_=base_model.classes_,
+        weights_=base_model.weights_,
+        seed=SEED,
+    )
+    auc_model.copy_pbn(auc_pbn)
+
     base_model_pred = base_model.predict(X_test)
     baseline_model_pred = baseline_model.predict(X_test)
     cll_model_pred = cll_model.predict(X_test)
     acc_model_pred = acc_model.predict(X_test)
+    f1_model_pred = f1_model.predict(X_test)
+    auc_model_pred = auc_model.predict(X_test)
 
     base_model_proba = _safe_predict_proba(base_model, X_test)
     baseline_model_proba = _safe_predict_proba(baseline_model, X_test)
     cll_model_proba = _safe_predict_proba(cll_model, X_test)
     acc_model_proba = _safe_predict_proba(acc_model, X_test)
+    f1_model_proba = _safe_predict_proba(f1_model, X_test)
+    auc_model_proba = _safe_predict_proba(auc_model, X_test)
 
     base_accuracy = accuracy_score(y_test, base_model_pred)
     baseline_accuracy = accuracy_score(y_test, baseline_model_pred)
     cll_accuracy = accuracy_score(y_test, cll_model_pred)
     acc_accuracy = accuracy_score(y_test, acc_model_pred)
+    f1_accuracy = accuracy_score(y_test, f1_model_pred)
+    auc_accuracy = accuracy_score(y_test, auc_model_pred)
 
     base_f1 = f1_score(y_test, base_model_pred, average="weighted")
     baseline_f1 = f1_score(y_test, baseline_model_pred, average="weighted")
     cll_f1 = f1_score(y_test, cll_model_pred, average="weighted")
     acc_f1 = f1_score(y_test, acc_model_pred, average="weighted")
+    f1_model_f1 = f1_score(y_test, f1_model_pred, average="weighted")
+    auc_model_f1 = f1_score(y_test, auc_model_pred, average="weighted")
 
     base_auc = _compute_auc(y_test, base_model_proba)
     baseline_auc = _compute_auc(y_test, baseline_model_proba)
     cll_auc = _compute_auc(y_test, cll_model_proba)
     acc_auc = _compute_auc(y_test, acc_model_proba)
+    f1_auc = _compute_auc(y_test, f1_model_proba)
+    auc_model_auc = _compute_auc(y_test, auc_model_proba)
 
-    print("Base model arcs:", sorted(base_model.arcs()))
-    print("Base model log-likelihood:", base_model.slogl(df))
-    print(f"Base model accuracy: {base_accuracy:.4f}")
-    print(f"Base model F1-score (weighted): {base_f1:.4f}")
-    print(f"Base model ROC-AUC: {base_auc:.4f}")
-    print("-" * 50)
+    comparison_rows = [
+        {
+            "Model": "Base",
+            "Arcs": str(sorted(base_model.arcs())),
+            "LogLikelihood": base_model.slogl(df),
+            "Accuracy": base_accuracy,
+            "F1Weighted": base_f1,
+            "ROCAUC": base_auc,
+        },
+        {
+            "Model": "Baseline",
+            "Arcs": str(sorted(baseline_model.arcs())),
+            "LogLikelihood": baseline_model.slogl(df),
+            "Accuracy": baseline_accuracy,
+            "F1Weighted": baseline_f1,
+            "ROCAUC": baseline_auc,
+        },
+        {
+            "Model": "CLLScore",
+            "Arcs": str(sorted(cll_model.arcs())),
+            "LogLikelihood": cll_model.slogl(df),
+            "Accuracy": cll_accuracy,
+            "F1Weighted": cll_f1,
+            "ROCAUC": cll_auc,
+        },
+        {
+            "Model": "AccuracyScore",
+            "Arcs": str(sorted(acc_model.arcs())),
+            "LogLikelihood": acc_model.slogl(df),
+            "Accuracy": acc_accuracy,
+            "F1Weighted": acc_f1,
+            "ROCAUC": acc_auc,
+        },
+        {
+            "Model": "F1Score",
+            "Arcs": str(sorted(f1_model.arcs())),
+            "LogLikelihood": f1_model.slogl(df),
+            "Accuracy": f1_accuracy,
+            "F1Weighted": f1_model_f1,
+            "ROCAUC": f1_auc,
+        },
+        {
+            "Model": "AUCScore",
+            "Arcs": str(sorted(auc_model.arcs())),
+            "LogLikelihood": auc_model.slogl(df),
+            "Accuracy": auc_accuracy,
+            "F1Weighted": auc_model_f1,
+            "ROCAUC": auc_model_auc,
+        },
+    ]
 
-    print("Baseline model arcs:", sorted(baseline_model.arcs()))
-    print("Baseline model log-likelihood:", baseline_model.slogl(df))
-    print(f"Baseline model accuracy: {baseline_accuracy:.4f}")
-    print(f"Baseline model F1-score (weighted): {baseline_f1:.4f}")
-    print(f"Baseline model ROC-AUC: {baseline_auc:.4f}")
-    print("-" * 50)
+    comparison_df = pd.DataFrame(comparison_rows)
+    comparison_df["LogLikelihood"] = comparison_df["LogLikelihood"].map(
+        lambda v: f"{v:.6f}"
+    )
+    comparison_df["Accuracy"] = comparison_df["Accuracy"].map(lambda v: f"{v:.4f}")
+    comparison_df["F1Weighted"] = comparison_df["F1Weighted"].map(lambda v: f"{v:.4f}")
+    comparison_df["ROCAUC"] = comparison_df["ROCAUC"].map(lambda v: f"{v:.4f}")
 
-    print("CLL model arcs:", sorted(cll_model.arcs()))
-    print("CLL model log-likelihood:", cll_model.slogl(df))
-    print(f"CLL model accuracy: {cll_accuracy:.4f}")
-    print(f"CLL model F1-score (weighted): {cll_f1:.4f}")
-    print(f"CLL model ROC-AUC: {cll_auc:.4f}")
-    print("-" * 50)
-
-    print("Accuracy score model arcs:", sorted(acc_model.arcs()))
-    print("Accuracy score model log-likelihood:", acc_model.slogl(df))
-    print(f"Accuracy score model accuracy: {acc_accuracy:.4f}")
-    print(f"Accuracy score model F1-score (weighted): {acc_f1:.4f}")
-    print(f"Accuracy score model ROC-AUC: {acc_auc:.4f}")
+    print("\nModel comparison table:\n")
+    print(comparison_df.to_string(index=False))

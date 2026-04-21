@@ -10,7 +10,9 @@ from helpers.data import (
 from src.bnc import GaussianNaiveBayes
 from src.utils.scores import (
     AccuracyScore,
+    AUCScore,
     ConditionalLogLikelihoodValidatedScore,
+    F1Score,
     OracleValidatedScore,
 )
 
@@ -374,6 +376,62 @@ class TestAccuracyScore:
         assert 0.0 <= value <= 1.0
 
     def test_local_score_node_type_matches_manual_accuracy(
+        self,
+        score: AccuracyScore,
+        base_model: GaussianNaiveBayes,
+    ) -> None:
+        variable = "c"
+        evidence = [TRUE_CLASS_LABEL, "a"]
+        variable_type = base_model.node_types()[variable]
+
+        candidate = score._model_with_variable_evidence(base_model, variable, evidence)
+        candidate.set_node_type(variable, variable_type)
+        expected = score._accuracy(candidate)
+
+        actual = score.local_score_node_type(
+            base_model,
+            variable_type,
+            variable,
+            evidence,
+        )
+        assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("score_class", [F1Score, AUCScore])
+class TestF1AndAUCScore:
+    @pytest.fixture
+    def df(self) -> pd.DataFrame:
+        return generate_normal_data_classification(DATA_SIZE // 5, seed=SEED)
+
+    @pytest.fixture
+    def base_model(self, df: pd.DataFrame) -> GaussianNaiveBayes:
+        x = df.drop(columns=[TRUE_CLASS_LABEL])
+        y = df[TRUE_CLASS_LABEL]
+        model = GaussianNaiveBayes(seed=SEED)
+        model.fit(x, y)
+        return model
+
+    @pytest.fixture
+    def score(
+        self, df: pd.DataFrame, score_class: type[AccuracyScore]
+    ) -> AccuracyScore:
+        return score_class(
+            df=df,
+            target=TRUE_CLASS_LABEL,
+            model_class=GaussianNaiveBayes,
+            test_ratio=0.2,
+            seed=SEED,
+        )
+
+    def test_score_returns_value_between_zero_and_one(
+        self,
+        score: AccuracyScore,
+        base_model: GaussianNaiveBayes,
+    ) -> None:
+        value = score.score(base_model)
+        assert 0.0 <= value <= 1.0
+
+    def test_local_score_node_type_matches_manual_metric(
         self,
         score: AccuracyScore,
         base_model: GaussianNaiveBayes,
