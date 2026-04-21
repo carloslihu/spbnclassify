@@ -14,13 +14,11 @@ sys.path.append(str(RUTILE_AI_PATH))
 from rutile_ai.engine.classification.spbnclassify.src.bnc import (
     GaussianBayesianNetworkAugmentedNaiveBayes,
     GaussianNaiveBayes,
-    SemiParametricNaiveBayes,
 )
 from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
     DATA_SIZE,
     SEED,
     TRUE_CLASS_LABEL,
-    generate_non_normal_data_classification,
     generate_normal_data_classification,
 )
 
@@ -54,7 +52,7 @@ class OracleValidatedScore(pbn.ValidatedScore):
         """Returns the local score value of a node variable in the model given its parents (evidence).
         Only the version with 3 arguments score.local_score(model, variable, evidence) needs to be implemented. The version with 2 arguments cannot be overriden.
         """
-        # Use local decomposition proxy during search: only target local likelihood matters.
+        # Use local decomposition proxy during search: only true_label local likelihood matters.
         if variable == "c":
             value: float = -1.0
             if "a" in evidence:
@@ -137,45 +135,49 @@ class OracleValidatedScore(pbn.ValidatedScore):
 
 
 class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
-    """Validated score that optimizes conditional log-likelihood for a target variable."""
+    """Validated score that optimizes conditional log-likelihood for a true_label variable."""
 
     def __init__(
         self,
-        df: pd.DataFrame,
-        target: str,
+        data: pd.DataFrame,
+        true_label: str,
         model_class: type[pbn.BayesianNetworkBase],
-        test_ratio: float = 0.2,
+        test_holdout_ratio: float = 0.2,
         k: int = 10,
         seed: int | None = None,
         construction_args: pbn.Arguments = pbn.Arguments(),
     ) -> None:
         super().__init__()
-        self._data = df
-        self.target = target
+        self._data = data
+        self.true_label = true_label
 
         self.model_class = model_class
-        self.feature_names_in_ = df.columns.drop(target).tolist()
+        self.feature_names_in_ = data.columns.drop(true_label).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
 
-        if self.target not in df.columns:
-            raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
+        if self.true_label not in data.columns:
+            raise ValueError(
+                f"Target '{true_label}' is not present in DataFrame columns."
+            )
 
-        # CLL requires enumerating target values to normalize p(y|x).
+        # CLL requires enumerating true_label values to normalize p(y|x).
         self._target_values = (
-            pd.Series(df[self.target]).dropna().sort_values().unique().tolist()
+            pd.Series(data[self.true_label]).dropna().sort_values().unique().tolist()
         )
         if len(self._target_values) < 2:
             raise ValueError(
-                "ConditionalLogLikelihoodScore requires at least two target values."
+                "ConditionalLogLikelihoodScore requires at least two true_label values."
             )
         # Use stratified holdout split
         stratified_shuffle = StratifiedShuffleSplit(
-            n_splits=1, test_size=test_ratio, random_state=seed
+            n_splits=1, test_size=test_holdout_ratio, random_state=seed
         )
-        train_idx, test_idx = next(stratified_shuffle.split(df, df[self.target]))
+        train_idx, test_idx = next(
+            stratified_shuffle.split(data, data[self.true_label])
+        )
 
-        self._training_data_holdout = df.iloc[train_idx].reset_index(drop=True)
-        self._test_data_holdout = df.iloc[test_idx].reset_index(drop=True)
+        self._training_data_holdout = data.iloc[train_idx].reset_index(drop=True)
+        self._test_data_holdout = data.iloc[test_idx].reset_index(drop=True)
 
         # Use stratified K-fold for cross-validation on training data
         self._stratified_kfold = StratifiedKFold(
@@ -185,7 +187,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
     def _get_cv_splits(self) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
         """Generate stratified K-fold cross-validation splits on the holdout training data."""
         splits = []
-        y_train = self._training_data_holdout[self.target]
+        y_train = self._training_data_holdout[self.true_label]
 
         for train_idx, test_idx in self._stratified_kfold.split(
             self._training_data_holdout, y_train
@@ -302,14 +304,14 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
         Note:
             - Only model parameters are fitted, not the structure.
-            - The target column is excluded from features (fit_X and eval_X).
+            - The true_label column is excluded from features (fit_X and eval_X).
             - Log-likelihoods are computed conditionally for each class value present in eval_df.
             - Classes with no samples in the evaluation data are skipped.
         """
         fit_df_pd = self._to_pandas(fit_df)
         eval_df_pd = self._to_pandas(eval_df)
-        fit_X = fit_df_pd.drop(columns=[self.target])
-        fit_y = fit_df_pd[self.target]
+        fit_X = fit_df_pd.drop(columns=[self.true_label])
+        fit_y = fit_df_pd[self.true_label]
 
         # Only fit the parameters, not the structure
         model._fit_parameters(fit_X, fit_y)
@@ -329,7 +331,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
 
         observed_log_joint = np.empty(len(eval_df_pd), dtype=float)
         for class_value in self._target_values:
-            conditional_mask = eval_df_pd[self.target] == class_value
+            conditional_mask = eval_df_pd[self.true_label] == class_value
             if not conditional_mask.any():
                 continue
             observed_log_joint[conditional_mask.to_numpy()] = np.log(
@@ -356,8 +358,8 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         Args:
             model (pbn.BayesianNetworkBase): The source Bayesian Network model to base the
                 candidate model upon.
-            variable (str): The target variable whose parent set will be modified.
-            evidence (list[str]): A list of variable names that should be parents of the target
+            variable (str): The true_label variable whose parent set will be modified.
+            evidence (list[str]): A list of variable names that should be parents of the true_label
                 variable in the resulting candidate model.
         Returns:
             pbn.BayesianNetworkBase: A new Bayesian Network model with the same configuration
@@ -368,7 +370,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         candidate_model = self.model_class(
             feature_names_in_=self.feature_names_in_,
             n_features_in_=self.n_features_in_,
-            true_label=self.target,
+            true_label=self.true_label,
         )
 
         # Copy only graph structure and node types. CPDs are intentionally excluded
@@ -392,11 +394,11 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         return candidate_model
 
     @staticmethod
-    def _to_pandas(df: pd.DataFrame | object) -> pd.DataFrame:
-        if isinstance(df, pd.DataFrame):
-            return df
-        if hasattr(df, "to_pandas"):
-            return df.to_pandas()
+    def _to_pandas(data: pd.DataFrame | object) -> pd.DataFrame:
+        if isinstance(data, pd.DataFrame):
+            return data
+        if hasattr(data, "to_pandas"):
+            return data.to_pandas()
         raise TypeError(
             "Expected pandas DataFrame or pyarrow RecordBatch-compatible object."
         )
@@ -407,31 +409,33 @@ class AccuracyScore(pbn.Score):
 
     def __init__(
         self,
-        df: pd.DataFrame,
-        target: str,
+        data: pd.DataFrame,
+        true_label: str,
         model_class: type[pbn.BayesianNetworkBase],
-        test_ratio: float = 0.2,
+        test_holdout_ratio: float = 0.2,
         seed: int | None = None,
     ) -> None:
         super().__init__()
-        self._data = df
-        self.target = target
+        self._data = data
+        self.true_label = true_label
         self.model_class = model_class
 
-        if self.target not in df.columns:
-            raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
+        if self.true_label not in data.columns:
+            raise ValueError(
+                f"Target '{true_label}' is not present in DataFrame columns."
+            )
 
-        self.feature_names_in_ = df.columns.drop(target).tolist()
+        self.feature_names_in_ = data.columns.drop(true_label).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
 
         splitter = StratifiedShuffleSplit(
             n_splits=1,
-            test_size=test_ratio,
+            test_size=test_holdout_ratio,
             random_state=seed,
         )
-        train_idx, test_idx = next(splitter.split(df, df[self.target]))
-        self._training_data_holdout = df.iloc[train_idx].reset_index(drop=True)
-        self._test_data_holdout = df.iloc[test_idx].reset_index(drop=True)
+        train_idx, test_idx = next(splitter.split(data, data[self.true_label]))
+        self._training_data_holdout = data.iloc[train_idx].reset_index(drop=True)
+        self._test_data_holdout = data.iloc[test_idx].reset_index(drop=True)
 
     def has_variables(self, vars: str | list[str]) -> bool:
         """Return whether all given variables belong to the score domain."""
@@ -470,10 +474,10 @@ class AccuracyScore(pbn.Score):
         return self._data
 
     def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
-        train_x = self._training_data_holdout.drop(columns=[self.target])
-        train_y = self._training_data_holdout[self.target]
-        test_x = self._test_data_holdout.drop(columns=[self.target])
-        test_y = self._test_data_holdout[self.target]
+        train_x = self._training_data_holdout.drop(columns=[self.true_label])
+        train_y = self._training_data_holdout[self.true_label]
+        test_x = self._test_data_holdout.drop(columns=[self.true_label])
+        test_y = self._test_data_holdout[self.true_label]
 
         model._fit_parameters(train_x, train_y)
         pred_y = model.predict(test_x)
@@ -486,7 +490,7 @@ class AccuracyScore(pbn.Score):
         candidate_model = self.model_class(
             feature_names_in_=self.feature_names_in_,
             n_features_in_=self.n_features_in_,
-            true_label=self.target,
+            true_label=self.true_label,
         )
         candidate_model._copy_bn_structure(
             arcs=model.arcs(),
@@ -521,10 +525,10 @@ class F1Score(AccuracyScore):
     """Score that optimizes weighted F1-score on a stratified holdout split."""
 
     def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
-        train_x = self._training_data_holdout.drop(columns=[self.target])
-        train_y = self._training_data_holdout[self.target]
-        test_x = self._test_data_holdout.drop(columns=[self.target])
-        test_y = self._test_data_holdout[self.target]
+        train_x = self._training_data_holdout.drop(columns=[self.true_label])
+        train_y = self._training_data_holdout[self.true_label]
+        test_x = self._test_data_holdout.drop(columns=[self.true_label])
+        test_y = self._test_data_holdout[self.true_label]
 
         model._fit_parameters(train_x, train_y)
         pred_y = model.predict(test_x)
@@ -552,10 +556,10 @@ class AUCScore(AccuracyScore):
         )
 
     def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
-        train_x = self._training_data_holdout.drop(columns=[self.target])
-        train_y = self._training_data_holdout[self.target]
-        test_x = self._test_data_holdout.drop(columns=[self.target])
-        test_y = self._test_data_holdout[self.target]
+        train_x = self._training_data_holdout.drop(columns=[self.true_label])
+        train_y = self._training_data_holdout[self.true_label]
+        test_x = self._test_data_holdout.drop(columns=[self.true_label])
+        test_y = self._test_data_holdout[self.true_label]
 
         model._fit_parameters(train_x, train_y)
         pred_proba = model.predict_proba(test_x)
@@ -592,18 +596,18 @@ if __name__ == "__main__":
         )
 
     # CLL score-based structure learning on the toy data.
-    df = generate_normal_data_classification(DATA_SIZE, seed=SEED)
-    X = df.drop(columns=[TRUE_CLASS_LABEL])
-    y = df[TRUE_CLASS_LABEL]
+    data = generate_normal_data_classification(DATA_SIZE, seed=SEED)
+    X = data.drop(columns=[TRUE_CLASS_LABEL])
+    y = data[TRUE_CLASS_LABEL]
 
     model_class = GaussianNaiveBayes
     baseline_model_class = GaussianBayesianNetworkAugmentedNaiveBayes
 
     # model_class = GaussianBayesianNetworkAugmentedNaiveBayes
     cll_score = ConditionalLogLikelihoodValidatedScore(
-        df,
-        target=TRUE_CLASS_LABEL,
-        test_ratio=0.2,
+        data,
+        true_label=TRUE_CLASS_LABEL,
+        test_holdout_ratio=0.2,
         k=2,
         seed=SEED,
         model_class=model_class,
@@ -642,9 +646,9 @@ if __name__ == "__main__":
 
     # Structure learning with accuracy score
     acc_score = AccuracyScore(
-        df,
-        target=TRUE_CLASS_LABEL,
-        test_ratio=0.2,
+        data,
+        true_label=TRUE_CLASS_LABEL,
+        test_holdout_ratio=0.2,
         seed=SEED,
         model_class=model_class,
     )
@@ -663,9 +667,9 @@ if __name__ == "__main__":
 
     # Structure learning with F1 score
     f1_score_obj = F1Score(
-        df,
-        target=TRUE_CLASS_LABEL,
-        test_ratio=0.2,
+        data,
+        true_label=TRUE_CLASS_LABEL,
+        test_holdout_ratio=0.2,
         seed=SEED,
         model_class=model_class,
     )
@@ -687,9 +691,9 @@ if __name__ == "__main__":
 
     # Structure learning with AUC score
     auc_score_obj = AUCScore(
-        df,
-        target=TRUE_CLASS_LABEL,
-        test_ratio=0.2,
+        data,
+        true_label=TRUE_CLASS_LABEL,
+        test_holdout_ratio=0.2,
         seed=SEED,
         model_class=model_class,
     )
@@ -748,7 +752,7 @@ if __name__ == "__main__":
         {
             "Model": "Base",
             "Arcs": str(sorted(base_model.arcs())),
-            "Log-likelihood": base_model.slogl(df),
+            "Log-likelihood": base_model.slogl(data),
             "Accuracy": base_accuracy,
             "F1-score (weighted)": base_f1,
             "ROC AUC": base_auc,
@@ -756,7 +760,7 @@ if __name__ == "__main__":
         {
             "Model": "Baseline",
             "Arcs": str(sorted(baseline_model.arcs())),
-            "Log-likelihood": baseline_model.slogl(df),
+            "Log-likelihood": baseline_model.slogl(data),
             "Accuracy": baseline_accuracy,
             "F1-score (weighted)": baseline_f1,
             "ROC AUC": baseline_auc,
@@ -764,7 +768,7 @@ if __name__ == "__main__":
         {
             "Model": "CLLScore",
             "Arcs": str(sorted(cll_model.arcs())),
-            "Log-likelihood": cll_model.slogl(df),
+            "Log-likelihood": cll_model.slogl(data),
             "Accuracy": cll_accuracy,
             "F1-score (weighted)": cll_f1,
             "ROC AUC": cll_auc,
@@ -772,7 +776,7 @@ if __name__ == "__main__":
         {
             "Model": "AccuracyScore",
             "Arcs": str(sorted(acc_model.arcs())),
-            "Log-likelihood": acc_model.slogl(df),
+            "Log-likelihood": acc_model.slogl(data),
             "Accuracy": acc_accuracy,
             "F1-score (weighted)": acc_f1,
             "ROC AUC": acc_auc,
@@ -780,7 +784,7 @@ if __name__ == "__main__":
         {
             "Model": "F1Score",
             "Arcs": str(sorted(f1_model.arcs())),
-            "Log-likelihood": f1_model.slogl(df),
+            "Log-likelihood": f1_model.slogl(data),
             "Accuracy": f1_accuracy,
             "F1-score (weighted)": f1_model_f1,
             "ROC AUC": f1_auc,
@@ -788,7 +792,7 @@ if __name__ == "__main__":
         {
             "Model": "AUCScore",
             "Arcs": str(sorted(auc_model.arcs())),
-            "Log-likelihood": auc_model.slogl(df),
+            "Log-likelihood": auc_model.slogl(data),
             "Accuracy": auc_accuracy,
             "F1-score (weighted)": auc_model_f1,
             "ROC AUC": auc_model_auc,

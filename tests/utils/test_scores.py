@@ -82,45 +82,45 @@ class TestOracleValidatedScore:
 
 class TestConditionalLogLikelihoodValidatedScore:
     @pytest.fixture
-    def df(self) -> pd.DataFrame:
+    def data(self) -> pd.DataFrame:
         return generate_normal_data_classification(DATA_SIZE // 5, seed=SEED)
 
     @pytest.fixture
-    def base_model(self, df: pd.DataFrame) -> GaussianNaiveBayes:
-        X = df.drop(columns=[TRUE_CLASS_LABEL])
-        y = df[TRUE_CLASS_LABEL]
+    def base_model(self, data: pd.DataFrame) -> GaussianNaiveBayes:
+        X = data.drop(columns=[TRUE_CLASS_LABEL])
+        y = data[TRUE_CLASS_LABEL]
         model = GaussianNaiveBayes(seed=SEED)
         model.fit(X, y)
         return model
 
     @pytest.fixture
-    def score(self, df: pd.DataFrame) -> ConditionalLogLikelihoodValidatedScore:
+    def score(self, data: pd.DataFrame) -> ConditionalLogLikelihoodValidatedScore:
         return ConditionalLogLikelihoodValidatedScore(
-            df=df,
-            target=TRUE_CLASS_LABEL,
+            data=data,
+            true_label=TRUE_CLASS_LABEL,
             model_class=GaussianNaiveBayes,
-            test_ratio=0.2,
+            test_holdout_ratio=0.2,
             k=2,
             seed=SEED,
         )
 
-    def test_init_raises_if_target_missing(self, df: pd.DataFrame) -> None:
+    def test_init_raises_if_target_missing(self, data: pd.DataFrame) -> None:
         with pytest.raises(KeyError, match="missing_target"):
             ConditionalLogLikelihoodValidatedScore(
-                df=df,
-                target="missing_target",
+                data=data,
+                true_label="missing_target",
                 model_class=GaussianNaiveBayes,
                 seed=SEED,
             )
 
-    def test_init_raises_if_target_has_single_value(self, df: pd.DataFrame) -> None:
-        single_class_df = df.copy()
+    def test_init_raises_if_target_has_single_value(self, data: pd.DataFrame) -> None:
+        single_class_df = data.copy()
         single_class_df[TRUE_CLASS_LABEL] = "class1"
 
-        with pytest.raises(ValueError, match="requires at least two target values"):
+        with pytest.raises(ValueError, match="requires at least two true_label values"):
             ConditionalLogLikelihoodValidatedScore(
-                df=single_class_df,
-                target=TRUE_CLASS_LABEL,
+                data=single_class_df,
+                true_label=TRUE_CLASS_LABEL,
                 model_class=GaussianNaiveBayes,
                 seed=SEED,
             )
@@ -128,9 +128,9 @@ class TestConditionalLogLikelihoodValidatedScore:
     def test_holdout_split_sizes_match_ratio(
         self,
         score: ConditionalLogLikelihoodValidatedScore,
-        df: pd.DataFrame,
+        data: pd.DataFrame,
     ) -> None:
-        total = len(df)
+        total = len(data)
         train_len = len(score._training_data_holdout)
         test_len = len(score._test_data_holdout)
 
@@ -140,9 +140,9 @@ class TestConditionalLogLikelihoodValidatedScore:
     def test_holdout_split_is_stratified(
         self,
         score: ConditionalLogLikelihoodValidatedScore,
-        df: pd.DataFrame,
+        data: pd.DataFrame,
     ) -> None:
-        full_classes = set(df[TRUE_CLASS_LABEL].unique())
+        full_classes = set(data[TRUE_CLASS_LABEL].unique())
         train_classes = set(score._training_data_holdout[TRUE_CLASS_LABEL].unique())
         test_classes = set(score._test_data_holdout[TRUE_CLASS_LABEL].unique())
 
@@ -151,21 +151,21 @@ class TestConditionalLogLikelihoodValidatedScore:
 
     def test_stratified_splits_are_deterministic_for_same_seed(
         self,
-        df: pd.DataFrame,
+        data: pd.DataFrame,
     ) -> None:
         score_a = ConditionalLogLikelihoodValidatedScore(
-            df=df,
-            target=TRUE_CLASS_LABEL,
+            data=data,
+            true_label=TRUE_CLASS_LABEL,
             model_class=GaussianNaiveBayes,
-            test_ratio=0.2,
+            test_holdout_ratio=0.2,
             k=2,
             seed=SEED,
         )
         score_b = ConditionalLogLikelihoodValidatedScore(
-            df=df,
-            target=TRUE_CLASS_LABEL,
+            data=data,
+            true_label=TRUE_CLASS_LABEL,
             model_class=GaussianNaiveBayes,
-            test_ratio=0.2,
+            test_holdout_ratio=0.2,
             k=2,
             seed=SEED,
         )
@@ -214,9 +214,9 @@ class TestConditionalLogLikelihoodValidatedScore:
         )
 
     def test_data_returns_original_dataframe(
-        self, score: ConditionalLogLikelihoodValidatedScore, df: pd.DataFrame
+        self, score: ConditionalLogLikelihoodValidatedScore, data: pd.DataFrame
     ) -> None:
-        assert score.data() is df
+        assert score.data() is data
 
     def test_model_with_variable_evidence_updates_parents(
         self,
@@ -310,11 +310,13 @@ class TestConditionalLogLikelihoodValidatedScore:
         )
         assert actual == pytest.approx(expected)
 
-    def test_to_pandas_with_dataframe(self, df: pd.DataFrame) -> None:
-        out = ConditionalLogLikelihoodValidatedScore._to_pandas(df)
-        assert out is df
+    def test_to_pandas_with_dataframe(self, data: pd.DataFrame) -> None:
+        out = ConditionalLogLikelihoodValidatedScore._to_pandas(data)
+        assert out is data
 
-    def test_to_pandas_with_to_pandas_compatible_object(self, df: pd.DataFrame) -> None:
+    def test_to_pandas_with_to_pandas_compatible_object(
+        self, data: pd.DataFrame
+    ) -> None:
         class _DummyFrame:
             def __init__(self, frame: pd.DataFrame) -> None:
                 self._frame = frame
@@ -322,9 +324,9 @@ class TestConditionalLogLikelihoodValidatedScore:
             def to_pandas(self) -> pd.DataFrame:
                 return self._frame
 
-        wrapped = _DummyFrame(df)
+        wrapped = _DummyFrame(data)
         out = ConditionalLogLikelihoodValidatedScore._to_pandas(wrapped)
-        assert out is df
+        assert out is data
 
     def test_to_pandas_raises_for_invalid_type(self) -> None:
         with pytest.raises(TypeError, match="Expected pandas DataFrame"):
@@ -333,24 +335,24 @@ class TestConditionalLogLikelihoodValidatedScore:
 
 class TestAccuracyScore:
     @pytest.fixture
-    def df(self) -> pd.DataFrame:
+    def data(self) -> pd.DataFrame:
         return generate_normal_data_classification(DATA_SIZE // 5, seed=SEED)
 
     @pytest.fixture
-    def base_model(self, df: pd.DataFrame) -> GaussianNaiveBayes:
-        x = df.drop(columns=[TRUE_CLASS_LABEL])
-        y = df[TRUE_CLASS_LABEL]
+    def base_model(self, data: pd.DataFrame) -> GaussianNaiveBayes:
+        x = data.drop(columns=[TRUE_CLASS_LABEL])
+        y = data[TRUE_CLASS_LABEL]
         model = GaussianNaiveBayes(seed=SEED)
         model.fit(x, y)
         return model
 
     @pytest.fixture
-    def score(self, df: pd.DataFrame) -> AccuracyScore:
+    def score(self, data: pd.DataFrame) -> AccuracyScore:
         return AccuracyScore(
-            df=df,
-            target=TRUE_CLASS_LABEL,
+            data=data,
+            true_label=TRUE_CLASS_LABEL,
             model_class=GaussianNaiveBayes,
-            test_ratio=0.2,
+            test_holdout_ratio=0.2,
             seed=SEED,
         )
 
@@ -400,26 +402,26 @@ class TestAccuracyScore:
 @pytest.mark.parametrize("score_class", [F1Score, AUCScore])
 class TestF1AndAUCScore:
     @pytest.fixture
-    def df(self) -> pd.DataFrame:
+    def data(self) -> pd.DataFrame:
         return generate_normal_data_classification(DATA_SIZE // 5, seed=SEED)
 
     @pytest.fixture
-    def base_model(self, df: pd.DataFrame) -> GaussianNaiveBayes:
-        x = df.drop(columns=[TRUE_CLASS_LABEL])
-        y = df[TRUE_CLASS_LABEL]
+    def base_model(self, data: pd.DataFrame) -> GaussianNaiveBayes:
+        x = data.drop(columns=[TRUE_CLASS_LABEL])
+        y = data[TRUE_CLASS_LABEL]
         model = GaussianNaiveBayes(seed=SEED)
         model.fit(x, y)
         return model
 
     @pytest.fixture
     def score(
-        self, df: pd.DataFrame, score_class: type[AccuracyScore]
+        self, data: pd.DataFrame, score_class: type[AccuracyScore]
     ) -> AccuracyScore:
         return score_class(
-            df=df,
-            target=TRUE_CLASS_LABEL,
+            data=data,
+            true_label=TRUE_CLASS_LABEL,
             model_class=GaussianNaiveBayes,
-            test_ratio=0.2,
+            test_holdout_ratio=0.2,
             seed=SEED,
         )
 
