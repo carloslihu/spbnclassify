@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pybnesian as pbn
+from scipy.special import logsumexp
 from sklearn.metrics import accuracy_score
 
 RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
@@ -293,18 +295,31 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         # Only fit the parameters, not the structure
         model._fit_parameters(fit_X, fit_y)
 
-        # Compute conditional log-likelihoods for each class value in the evaluation data
-        eval_df_pd["logl"] = 0.0
+        # Exact conditional log-likelihood:
+        # log p(y|x) = log p(x,y) - log p(x)
+        class_joint_terms = []
+        for class_value in self._target_values:
+            class_prior = np.log(model.weights_[class_value])
+            class_joint_terms.append(
+                class_prior
+                + model.conditional_logl(eval_df_pd, class_value=class_value)
+            )
+
+        log_joint_matrix = np.column_stack(class_joint_terms)
+        log_px = logsumexp(log_joint_matrix, axis=1)
+
+        observed_log_joint = np.empty(len(eval_df_pd), dtype=float)
         for class_value in self._target_values:
             conditional_mask = eval_df_pd[self.target] == class_value
             if not conditional_mask.any():
                 continue
-            eval_df_pd.loc[conditional_mask, "logl"] = model.weights_[class_value]
-            eval_df_pd.loc[conditional_mask, "logl"] += model.conditional_logl(
+            observed_log_joint[conditional_mask.to_numpy()] = np.log(
+                model.weights_[class_value]
+            ) + model.conditional_logl(
                 eval_df_pd.loc[conditional_mask], class_value=class_value
             )
 
-        return float(eval_df_pd["logl"].sum())
+        return float((observed_log_joint - log_px).sum())
 
     def _model_with_variable_evidence(
         self,
