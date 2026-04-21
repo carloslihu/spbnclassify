@@ -122,6 +122,81 @@ class TestConditionalLogLikelihoodValidatedScore:
                 seed=SEED,
             )
 
+    def test_holdout_split_sizes_match_ratio(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+        df: pd.DataFrame,
+    ) -> None:
+        total = len(df)
+        train_len = len(score._training_data_holdout)
+        test_len = len(score._test_data_holdout)
+
+        assert train_len + test_len == total
+        assert test_len == int(round(total * 0.2))
+
+    def test_holdout_split_is_stratified(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+        df: pd.DataFrame,
+    ) -> None:
+        full_classes = set(df[TRUE_CLASS_LABEL].unique())
+        train_classes = set(score._training_data_holdout[TRUE_CLASS_LABEL].unique())
+        test_classes = set(score._test_data_holdout[TRUE_CLASS_LABEL].unique())
+
+        assert train_classes == full_classes
+        assert test_classes == full_classes
+
+    def test_stratified_splits_are_deterministic_for_same_seed(
+        self,
+        df: pd.DataFrame,
+    ) -> None:
+        score_a = ConditionalLogLikelihoodValidatedScore(
+            df=df,
+            target=TRUE_CLASS_LABEL,
+            model_class=GaussianNaiveBayes,
+            test_ratio=0.2,
+            k=2,
+            seed=SEED,
+        )
+        score_b = ConditionalLogLikelihoodValidatedScore(
+            df=df,
+            target=TRUE_CLASS_LABEL,
+            model_class=GaussianNaiveBayes,
+            test_ratio=0.2,
+            k=2,
+            seed=SEED,
+        )
+
+        assert score_a._training_data_holdout.equals(score_b._training_data_holdout)
+        assert score_a._test_data_holdout.equals(score_b._test_data_holdout)
+
+        cv_a = score_a._get_cv_splits()
+        cv_b = score_b._get_cv_splits()
+        assert len(cv_a) == len(cv_b) == 2
+
+        for (a_train, a_test), (b_train, b_test) in zip(cv_a, cv_b):
+            assert a_train.equals(b_train)
+            assert a_test.equals(b_test)
+
+    def test_cv_splits_are_stratified(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+    ) -> None:
+        full_classes = set(score._training_data_holdout[TRUE_CLASS_LABEL].unique())
+
+        for train_df, test_df in score._get_cv_splits():
+            assert set(train_df[TRUE_CLASS_LABEL].unique()) == full_classes
+            assert set(test_df[TRUE_CLASS_LABEL].unique()) == full_classes
+
+    def test_cv_test_fold_sizes_are_balanced(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+    ) -> None:
+        fold_test_sizes = [len(test_df) for _, test_df in score._get_cv_splits()]
+
+        assert len(fold_test_sizes) > 0
+        assert max(fold_test_sizes) - min(fold_test_sizes) <= 1
+
     def test_has_variables(self, score: ConditionalLogLikelihoodValidatedScore) -> None:
         assert score.has_variables([TRUE_CLASS_LABEL, "a"])
         assert score.has_variables("a")
@@ -162,7 +237,7 @@ class TestConditionalLogLikelihoodValidatedScore:
         candidate = score._model_with_variable_evidence(base_model, variable, evidence)
 
         expected = 0.0
-        for train_df, test_df in score.cv:
+        for train_df, test_df in score._get_cv_splits():
             expected += score._conditional_log_likelihood(candidate, train_df, test_df)
 
         actual = score.local_score(base_model, variable, evidence)
@@ -179,10 +254,57 @@ class TestConditionalLogLikelihoodValidatedScore:
 
         expected = score._conditional_log_likelihood(
             candidate,
-            score.holdout.training_data(),
-            score.holdout.test_data(),
+            score._training_data_holdout,
+            score._test_data_holdout,
         )
         actual = score.vlocal_score(base_model, variable, evidence)
+        assert actual == pytest.approx(expected)
+
+    def test_local_score_node_type_matches_manual_cv_accumulation(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+        base_model: GaussianNaiveBayes,
+    ) -> None:
+        variable = "c"
+        evidence = [TRUE_CLASS_LABEL, "a"]
+        variable_type = base_model.node_types()[variable]
+        candidate = score._model_with_variable_evidence(base_model, variable, evidence)
+        candidate.set_node_type(variable, variable_type)
+
+        expected = 0.0
+        for train_df, test_df in score._get_cv_splits():
+            expected += score._conditional_log_likelihood(candidate, train_df, test_df)
+
+        actual = score.local_score_node_type(
+            base_model,
+            variable_type,
+            variable,
+            evidence,
+        )
+        assert actual == pytest.approx(expected)
+
+    def test_vlocal_score_node_type_matches_holdout_cll(
+        self,
+        score: ConditionalLogLikelihoodValidatedScore,
+        base_model: GaussianNaiveBayes,
+    ) -> None:
+        variable = "c"
+        evidence = [TRUE_CLASS_LABEL, "a"]
+        variable_type = base_model.node_types()[variable]
+        candidate = score._model_with_variable_evidence(base_model, variable, evidence)
+        candidate.set_node_type(variable, variable_type)
+
+        expected = score._conditional_log_likelihood(
+            candidate,
+            score._training_data_holdout,
+            score._test_data_holdout,
+        )
+        actual = score.vlocal_score_node_type(
+            base_model,
+            variable_type,
+            variable,
+            evidence,
+        )
         assert actual == pytest.approx(expected)
 
     def test_to_pandas_with_dataframe(self, df: pd.DataFrame) -> None:
