@@ -120,9 +120,8 @@ if __name__ == "__main__":
                             config_dict=fixed_config,
                             module_id=run_name,
                         )
+                        # RFE: This is now needed to update the relative metrics path
                         pipeline.store(grid_point_path)
-                        # RFE: Add recover option
-                        # pipeline = PipelineClass.recover_latest(grid_point_path)
 
                         if cross_validation_mode:
                             pipeline.cross_validate(
@@ -133,13 +132,13 @@ if __name__ == "__main__":
                                 max_workers=args.max_workers,
                             )
                         else:
-                            # RFE: Add mlflow support
                             for run_index in tqdm(range(args.n_runs)):
                                 pipeline.train(
                                     data_handler=data_handler, should_retrain=True
                                 )
                                 pipeline.test(data_handler=data_handler)
-
+                        # This is called again to save the last cross-validation model states
+                        pipeline.store(grid_point_path)
                         # endregion Pipeline training and testing
 
                         # region MLFlow logging
