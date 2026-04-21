@@ -413,10 +413,6 @@ if __name__ == "__main__":
 
     model_class = GaussianNaiveBayes
     # model_class = GaussianBayesianNetworkAugmentedNaiveBayes
-
-    base_model = model_class(seed=42)
-    base_model.fit(X, y)
-
     cll_score = ConditionalLogLikelihoodValidatedScore(
         df,
         target=TRUE_CLASS_LABEL,
@@ -425,11 +421,20 @@ if __name__ == "__main__":
         seed=SEED,
         model_class=model_class,
     )
+    df_train = cll_score._training_data_holdout
+    df_test = cll_score._test_data_holdout
+    X_train = df_train.drop(columns=[TRUE_CLASS_LABEL])
+    y_train = df_train[TRUE_CLASS_LABEL]
+    X_test = df_test.drop(columns=[TRUE_CLASS_LABEL])
+    y_test = df_test[TRUE_CLASS_LABEL]
+    base_model = model_class(seed=42)
+    base_model.fit(X_train, y_train)
 
     learnt_pbn = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
-    learnt_pbn.fit(df)
+
+    learnt_pbn.fit(df_train)
     learnt_model = model_class(
         feature_names_in_=base_model.feature_names_in_,
         n_features_in_=base_model.n_features_in_,
@@ -439,11 +444,11 @@ if __name__ == "__main__":
     )
     learnt_model.copy_pbn(learnt_pbn)
 
-    base_model_pred = base_model.predict(X)
-    learnt_model_pred = learnt_model.predict(X)
+    base_model_pred = base_model.predict(X_test)
+    learnt_model_pred = learnt_model.predict(X_test)
 
-    base_accuracy = accuracy_score(y, base_model_pred)
-    learnt_accuracy = accuracy_score(y, learnt_model_pred)
+    base_accuracy = accuracy_score(y_test, base_model_pred)
+    learnt_accuracy = accuracy_score(y_test, learnt_model_pred)
 
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
@@ -452,39 +457,3 @@ if __name__ == "__main__":
     print("Learned model arcs:", sorted(learnt_model.arcs()))
     print("Learned model log-likelihood:", learnt_model.slogl(df))
     print(f"Learned model accuracy: {learnt_accuracy:.4f}")
-    # TODO: Add ChangeNodeType tests
-    df = generate_non_normal_data_classification(DATA_SIZE, seed=SEED)
-    X = df.drop(columns=[TRUE_CLASS_LABEL])
-    y = df[TRUE_CLASS_LABEL]
-    model_class = SemiParametricNaiveBayes
-    base_model = model_class(seed=42)
-    base_model.fit(X, y)
-    print("Base model arcs:", sorted(base_model.arcs()))
-    print("Base model log-likelihood:", base_model.slogl(df))
-    print("Base model node types:", base_model.node_types())
-    cll_score = ConditionalLogLikelihoodValidatedScore(
-        df,
-        target=TRUE_CLASS_LABEL,
-        test_ratio=0.2,
-        k=2,
-        seed=SEED,
-        model_class=model_class,
-    )
-    learnt_pbn = hc.estimate(
-        operators=pbn.ChangeNodeTypeSet(),
-        score=cll_score,
-        start=base_model,
-        verbose=True,
-    )
-    learnt_model = model_class(
-        feature_names_in_=base_model.feature_names_in_,
-        n_features_in_=base_model.n_features_in_,
-        classes_=base_model.classes_,
-        weights_=base_model.weights_,
-        seed=SEED,
-    )
-    learnt_model.copy_pbn(learnt_pbn)
-
-    print("Learned model arcs:", sorted(learnt_model.arcs()))
-    print("Learned model log-likelihood:", learnt_model.slogl(df))
-    print("Learned model node types:", learnt_model.node_types())
