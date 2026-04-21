@@ -8,20 +8,6 @@ from scipy.special import logsumexp
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
-RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
-sys.path.append(str(RUTILE_AI_PATH))
-
-from rutile_ai.engine.classification.spbnclassify.src.bnc import (
-    GaussianBayesianNetworkAugmentedNaiveBayes,
-    GaussianNaiveBayes,
-)
-from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
-    DATA_SIZE,
-    SEED,
-    TRUE_CLASS_LABEL,
-    generate_normal_data_classification,
-)
-
 
 class OracleValidatedScore(pbn.ValidatedScore):
     """
@@ -567,6 +553,18 @@ class AUCScore(AccuracyScore):
 
 
 if __name__ == "__main__":
+    RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
+    sys.path.append(str(RUTILE_AI_PATH))
+    from rutile_ai.engine.classification.spbnclassify.src.bnc import (
+        GaussianBayesianNetworkAugmentedNaiveBayes,
+        GaussianNaiveBayes,
+    )
+    from rutile_ai.engine.classification.spbnclassify.tests.helpers.data import (
+        DATA_SIZE,
+        SEED,
+        TRUE_CLASS_LABEL,
+        generate_normal_data_classification,
+    )
 
     def _safe_predict_proba(
         model: pbn.BayesianNetworkBase, x: pd.DataFrame

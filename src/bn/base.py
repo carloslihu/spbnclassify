@@ -12,6 +12,12 @@ import pybnesian as pbn
 
 from ..utils.constants import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP, TRUE_ANOMALY_LABEL
 from ..utils.feature_selection import get_zero_variance_variables
+from ..utils.scores import (
+    AccuracyScore,
+    AUCScore,
+    ConditionalLogLikelihoodValidatedScore,
+    F1Score,
+)
 
 
 class BayesianNetworkInterface:
@@ -538,33 +544,92 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         else:
             data = X
         # We fit the Bayesian Network structure
-        # # NOTE: Making SPBN structure learning start with CKDEType() for all nodes for structure learning
+        # # Code to make SPBN structure learning start with CKDEType() for all nodes for structure learning
         # if self.bn_type == pbn.SemiparametricBNType():
         #     self.type_whitelist = [
         #         (node, pbn.CKDEType()) for node in self.feature_names_in_
         #     ] + self.type_whitelist
-        bn = pbn.hc(
-            df=data,
-            # start=self,
-            bn_type=self.bn_type,
-            score=self.search_score,  # SPBN only work with "cv-lik", "holdout-lik", "validated-lik"
-            # operators=self.search_operators,
-            operators=["arcs"],
-            arc_blacklist=self.arc_blacklist,
-            arc_whitelist=self.arc_whitelist,
-            type_blacklist=self.type_blacklist,
-            type_whitelist=self.type_whitelist,
-            callback=self.callback,
-            max_indegree=self.max_indegree,
-            max_iters=self.max_iters,
-            epsilon=self.epsilon,
-            patience=self.patience,
-            seed=self.seed,  # ! This doesn't work with SPBNs (also when score=None)
-            num_folds=self.num_folds,
-            test_holdout_ratio=self.test_holdout_ratio,
-            verbose=self.verbose,
-        )
-
+        # RFE: Use GreedyHillClimbing directly
+        # NOTE: SPBN only work with "cv-lik", "holdout-lik", "validated-lik"
+        if self.search_score in [
+            "bic",
+            "bge",
+            "cv-lik",
+            "holdout-lik",
+            "validated-lik",
+        ]:
+            bn = pbn.hc(
+                df=data,
+                # start=self,
+                bn_type=self.bn_type,
+                score=self.search_score,
+                # operators=self.search_operators,
+                operators=["arcs"],
+                arc_blacklist=self.arc_blacklist,
+                arc_whitelist=self.arc_whitelist,
+                type_blacklist=self.type_blacklist,
+                type_whitelist=self.type_whitelist,
+                callback=self.callback,
+                max_indegree=self.max_indegree,
+                max_iters=self.max_iters,
+                epsilon=self.epsilon,
+                patience=self.patience,
+                seed=self.seed,  # ! This doesn't work with SPBNs (also when score=None)
+                num_folds=self.num_folds,
+                test_holdout_ratio=self.test_holdout_ratio,
+                verbose=self.verbose,
+            )
+        else:
+            if self.search_score == "conditional-lik":
+                score = ConditionalLogLikelihoodValidatedScore(
+                    data,
+                    true_label=self.true_label,
+                    test_holdout_ratio=self.test_holdout_ratio,
+                    k=self.num_folds,
+                    seed=self.seed,
+                    model_class=type(self),
+                )
+            elif self.search_score == "accuracy":
+                score = AccuracyScore(
+                    data,
+                    true_label=self.true_label,
+                    test_holdout_ratio=self.test_holdout_ratio,
+                    seed=self.seed,
+                    model_class=type(self),
+                )
+            elif self.search_score == "f1":
+                score = F1Score(
+                    data,
+                    true_label=self.true_label,
+                    test_holdout_ratio=self.test_holdout_ratio,
+                    seed=self.seed,
+                    model_class=type(self),
+                )
+            elif self.search_score == "auc":
+                score = AUCScore(
+                    data,
+                    true_label=self.true_label,
+                    test_holdout_ratio=self.test_holdout_ratio,
+                    seed=self.seed,
+                    model_class=type(self),
+                )
+            else:
+                raise ValueError(f"Unsupported search score: {self.search_score}")
+            hc = pbn.GreedyHillClimbing()
+            bn = hc.estimate(
+                operators=pbn.ArcOperatorSet(),
+                score=score,
+                start=self,
+                arc_blacklist=self.arc_blacklist,
+                arc_whitelist=self.arc_whitelist,
+                type_blacklist=self.type_blacklist,
+                type_whitelist=self.type_whitelist,
+                max_indegree=self.max_indegree,
+                max_iters=self.max_iters,
+                epsilon=self.epsilon,
+                patience=self.patience,
+                verbose=self.verbose,
+            )
         return bn
 
     @abstractmethod
@@ -591,24 +656,84 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
                 data = pd.concat([X, y], axis=1)
             else:
                 data = X
-            bn = pbn.hc(
-                df=data,
-                start=bn,
-                score=self.search_score,
-                operators=["node_type"],
-                # arc_blacklist=self.arc_blacklist,
-                # arc_whitelist=self.arc_whitelist,
-                # type_blacklist=self.type_blacklist,
-                # type_whitelist=self.type_whitelist,
-                callback=self.callback,
-                max_iters=self.max_iters,
-                epsilon=self.epsilon,
-                patience=self.patience,
-                seed=self.seed,
-                num_folds=self.num_folds,
-                test_holdout_ratio=self.test_holdout_ratio,
-                verbose=self.verbose,
-            )
+            # RFE: Use GreedyHillClimbing directly
+            # NOTE: SPBN only work with "cv-lik", "holdout-lik", "validated-lik"
+            if self.search_score in [
+                "bic",
+                "bge",
+                "cv-lik",
+                "holdout-lik",
+                "validated-lik",
+            ]:
+                bn = pbn.hc(
+                    df=data,
+                    start=bn,
+                    score=self.search_score,
+                    operators=["node_type"],
+                    # arc_blacklist=self.arc_blacklist,
+                    # arc_whitelist=self.arc_whitelist,
+                    # type_blacklist=self.type_blacklist,
+                    # type_whitelist=self.type_whitelist,
+                    callback=self.callback,
+                    max_iters=self.max_iters,
+                    epsilon=self.epsilon,
+                    patience=self.patience,
+                    seed=self.seed,
+                    num_folds=self.num_folds,
+                    test_holdout_ratio=self.test_holdout_ratio,
+                    verbose=self.verbose,
+                )
+            else:
+                if self.search_score == "conditional-lik":
+                    score = ConditionalLogLikelihoodValidatedScore(
+                        data,
+                        true_label=self.true_label,
+                        test_holdout_ratio=self.test_holdout_ratio,
+                        k=self.num_folds,
+                        seed=self.seed,
+                        model_class=type(self),
+                    )
+                elif self.search_score == "accuracy":
+                    score = AccuracyScore(
+                        data,
+                        true_label=self.true_label,
+                        test_holdout_ratio=self.test_holdout_ratio,
+                        seed=self.seed,
+                        model_class=type(self),
+                    )
+                elif self.search_score == "f1":
+                    score = F1Score(
+                        data,
+                        true_label=self.true_label,
+                        test_holdout_ratio=self.test_holdout_ratio,
+                        seed=self.seed,
+                        model_class=type(self),
+                    )
+                elif self.search_score == "auc":
+                    score = AUCScore(
+                        data,
+                        true_label=self.true_label,
+                        test_holdout_ratio=self.test_holdout_ratio,
+                        seed=self.seed,
+                        model_class=type(self),
+                    )
+                else:
+                    raise ValueError(f"Unsupported search score: {self.search_score}")
+                hc = pbn.GreedyHillClimbing()
+                bn = hc.estimate(
+                    operators=pbn.ChangeNodeTypeSet(),
+                    score=score,
+                    start=self,
+                    # arc_blacklist=self.arc_blacklist,
+                    # arc_whitelist=self.arc_whitelist,
+                    # type_blacklist=self.type_blacklist,
+                    # type_whitelist=self.type_whitelist,
+                    max_indegree=self.max_indegree,
+                    max_iters=self.max_iters,
+                    epsilon=self.epsilon,
+                    patience=self.patience,
+                    verbose=self.verbose,
+                )
         return bn
 
     def _copy_bn_structure(
