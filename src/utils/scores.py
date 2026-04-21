@@ -402,6 +402,121 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         )
 
 
+class AccuracyScore(pbn.Score):
+    """Score that optimizes classification accuracy on a stratified holdout split."""
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        target: str,
+        model_class: type[pbn.BayesianNetworkBase],
+        test_ratio: float = 0.2,
+        seed: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._data = df
+        self.target = target
+        self.model_class = model_class
+
+        if self.target not in df.columns:
+            raise ValueError(f"Target '{target}' is not present in DataFrame columns.")
+
+        self.feature_names_in_ = df.columns.drop(target).tolist()
+        self.n_features_in_ = len(self.feature_names_in_)
+
+        splitter = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=test_ratio,
+            random_state=seed,
+        )
+        train_idx, test_idx = next(splitter.split(df, df[self.target]))
+        self._training_data_holdout = df.iloc[train_idx].reset_index(drop=True)
+        self._test_data_holdout = df.iloc[test_idx].reset_index(drop=True)
+
+    def has_variables(self, vars: str | list[str]) -> bool:
+        """Return whether all given variables belong to the score domain."""
+        return set(vars).issubset(set(self._data.columns))
+
+    def compatible_bn(self, model: pbn.BayesianNetworkBase) -> bool:
+        """Checks whether the model is compatible with this score."""
+        return self.has_variables(model.nodes())
+
+    def score(self, model: pbn.BayesianNetworkBase) -> float:
+        """Return holdout accuracy for the given model structure."""
+        candidate_model = self._model_from_structure(model)
+        return self._accuracy(candidate_model)
+
+    def local_score(
+        self, model: pbn.BayesianNetworkBase, variable: str, evidence: list[str]
+    ) -> float:
+        """Return holdout accuracy after setting variable parents to evidence."""
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+        return self._accuracy(candidate_model)
+
+    def local_score_node_type(
+        self,
+        model: pbn.BayesianNetworkBase,
+        variable_type: pbn.FactorType,
+        variable: str,
+        evidence: list[str],
+    ) -> float:
+        """Return holdout accuracy for candidate structure and variable type."""
+        candidate_model = self._model_with_variable_evidence(model, variable, evidence)
+        candidate_model.set_node_type(variable, variable_type)
+        return self._accuracy(candidate_model)
+
+    def data(self) -> pd.DataFrame:
+        """Return the DataFrame used by this score."""
+        return self._data
+
+    def _accuracy(self, model: pbn.BayesianNetworkBase) -> float:
+        train_x = self._training_data_holdout.drop(columns=[self.target])
+        train_y = self._training_data_holdout[self.target]
+        test_x = self._test_data_holdout.drop(columns=[self.target])
+        test_y = self._test_data_holdout[self.target]
+
+        model._fit_parameters(train_x, train_y)
+        pred_y = model.predict(test_x)
+        return float(accuracy_score(test_y, pred_y))
+
+    def _model_from_structure(
+        self,
+        model: pbn.BayesianNetworkBase,
+    ) -> pbn.BayesianNetworkBase:
+        candidate_model = self.model_class(
+            feature_names_in_=self.feature_names_in_,
+            n_features_in_=self.n_features_in_,
+            true_label=self.target,
+        )
+        candidate_model._copy_bn_structure(
+            arcs=model.arcs(),
+            node_types=list(model.node_types().items()),
+        )
+        return candidate_model
+
+    def _model_with_variable_evidence(
+        self,
+        model: pbn.BayesianNetworkBase,
+        variable: str,
+        evidence: list[str],
+    ) -> pbn.BayesianNetworkBase:
+        candidate_model = self._model_from_structure(model)
+
+        current_parents = set(candidate_model.parents(variable))
+        desired_parents = set(evidence)
+
+        for parent in sorted(current_parents - desired_parents):
+            candidate_model.remove_arc(parent, variable)
+
+        for parent in sorted(desired_parents - current_parents):
+            if not candidate_model.has_arc(
+                parent, variable
+            ) and candidate_model.can_add_arc(parent, variable):
+                candidate_model.add_arc(parent, variable)
+
+        return candidate_model
+
+
 # TODO: Metric-based structure learning
 if __name__ == "__main__":
 
@@ -440,36 +555,66 @@ if __name__ == "__main__":
 
     # Structure learning with CLL score
     hc = pbn.GreedyHillClimbing()
-    learnt_pbn = hc.estimate(
+    cll_pbn = hc.estimate(
         operators=pbn.ArcOperatorSet(), score=cll_score, start=base_model, verbose=True
     )
 
-    learnt_pbn.fit(df_train)
-    learnt_model = model_class(
+    cll_pbn.fit(df_train)
+    cll_model = model_class(
         feature_names_in_=base_model.feature_names_in_,
         n_features_in_=base_model.n_features_in_,
         classes_=base_model.classes_,
         weights_=base_model.weights_,
         seed=SEED,
     )
-    learnt_model.copy_pbn(learnt_pbn)
+    cll_model.copy_pbn(cll_pbn)
+
+    # Structure learning with accuracy score
+    acc_score = AccuracyScore(
+        df,
+        target=TRUE_CLASS_LABEL,
+        test_ratio=0.2,
+        seed=SEED,
+        model_class=model_class,
+    )
+    acc_pbn = hc.estimate(
+        operators=pbn.ArcOperatorSet(), score=acc_score, start=base_model, verbose=True
+    )
+    acc_pbn.fit(df_train)
+    acc_model = model_class(
+        feature_names_in_=base_model.feature_names_in_,
+        n_features_in_=base_model.n_features_in_,
+        classes_=base_model.classes_,
+        weights_=base_model.weights_,
+        seed=SEED,
+    )
+    acc_model.copy_pbn(acc_pbn)
 
     base_model_pred = base_model.predict(X_test)
     baseline_model_pred = baseline_model.predict(X_test)
-    learnt_model_pred = learnt_model.predict(X_test)
+    cll_model_pred = cll_model.predict(X_test)
+    acc_model_pred = acc_model.predict(X_test)
 
     base_accuracy = accuracy_score(y_test, base_model_pred)
     baseline_accuracy = accuracy_score(y_test, baseline_model_pred)
-    learnt_accuracy = accuracy_score(y_test, learnt_model_pred)
+    cll_accuracy = accuracy_score(y_test, cll_model_pred)
+    acc_accuracy = accuracy_score(y_test, acc_model_pred)
 
     print("Base model arcs:", sorted(base_model.arcs()))
     print("Base model log-likelihood:", base_model.slogl(df))
     print(f"Base model accuracy: {base_accuracy:.4f}")
+    print("-" * 50)
 
     print("Baseline model arcs:", sorted(baseline_model.arcs()))
     print("Baseline model log-likelihood:", baseline_model.slogl(df))
     print(f"Baseline model accuracy: {baseline_accuracy:.4f}")
+    print("-" * 50)
 
-    print("Learned model arcs:", sorted(learnt_model.arcs()))
-    print("Learned model log-likelihood:", learnt_model.slogl(df))
-    print(f"Learned model accuracy: {learnt_accuracy:.4f}")
+    print("CLL model arcs:", sorted(cll_model.arcs()))
+    print("CLL model log-likelihood:", cll_model.slogl(df))
+    print(f"CLL model accuracy: {cll_accuracy:.4f}")
+    print("-" * 50)
+
+    print("Accuracy score model arcs:", sorted(acc_model.arcs()))
+    print("Accuracy score model log-likelihood:", acc_model.slogl(df))
+    print(f"Accuracy score model accuracy: {acc_accuracy:.4f}")
