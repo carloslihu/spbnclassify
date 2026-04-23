@@ -53,10 +53,6 @@ class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
                 prediction_label=self.prediction_label,
             )
             filtered_X = data.loc[data[self.true_label] == k, self.feature_names_in_]
-            # Module.log_note(
-            #     3,
-            #     f"Learning {k} BN with training data shape: {filtered_X.shape}",
-            # )
             self.bn_dict_[k].fit(filtered_X)
         return self
 

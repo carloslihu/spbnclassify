@@ -193,8 +193,8 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
 
         where:
             - P(C = k) is the prior probability (weight) of class k,
-            - logl_k is the log-likelihood of the sample under class k,
-            - logl_j is the log-likelihood under class j (for all classes j).
+            - logl_k is log P(X | C = k) the log-likelihood of the sample under class k,
+            - logl_j is log P(X | C = j) the log-likelihood under class j (for all classes j).
 
             X (pd.DataFrame): Input data containing features required for prediction. The DataFrame should include all columns
             specified in `self.feature_names_in_`.
@@ -205,10 +205,10 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
 
         result_df = X.copy()
         class_posteriori_probabilities = [f"{k}_score" for k in self.classes_]
-        # We calculate the logl of each class (logl_k)
-        for k in self.classes_:
-            result_df[f"logl_{k}"] = self.conditional_logl(
-                result_df[self.feature_names_in_], k
+        # We calculate the logl of each class (logl_j)
+        for j in self.classes_:
+            result_df[f"logl_{j}"] = self.conditional_logl(
+                result_df[self.feature_names_in_], j
             )
             # RFE: Replace in future with scaled log-likelihood?
             # result_df[f"logl_{k}"] = -self.bn_dict_[k].anomaly_score(result_df[self.feature_names_in_])
