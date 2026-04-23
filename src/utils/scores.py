@@ -138,6 +138,7 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         self.true_label = true_label
 
         self.model_class = model_class
+        # BUG: Multinet: true_label not found in axis"
         self.feature_names_in_ = data.columns.drop(true_label).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
 
@@ -410,7 +411,7 @@ class AccuracyScore(pbn.Score):
             raise ValueError(
                 f"Target '{true_label}' is not present in DataFrame columns."
             )
-
+        # BUG: Multinet: true_label not found in axis"
         self.feature_names_in_ = data.columns.drop(true_label).tolist()
         self.n_features_in_ = len(self.feature_names_in_)
 

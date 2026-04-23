@@ -48,7 +48,7 @@ LOG_FILE="grid_search_complete.log"
 #     --experiment_name bnc_single \
 #     --data_source public \
 #     --dataset_name iris \
-#     --n_splits 2 \
+#     --n_splits 10 \
 #     --n_runs 1 \
 #     --max_workers 25"
 # LOG_FILE="grid_search_single.log"
@@ -80,11 +80,10 @@ EXEC_TIME=$((END_TIME - START_TIME))
 } >> $LOG_FILE 2>&1
 
 # endregion
-
-# To run in background use:
+# NOTE: To run in background use:
 # nohup bash full-grid-search.sh > output.log 2>&1 &
 
-# Useful commands to monitor the process:
+# NOTE: Useful commands to monitor the process:
 # ps aux | grep grid_search.py # This will show the process ID (PID) and other details
 # kill <pid> # Replace <pid> with the actual process ID from the previous command
 # pkill -f grid_search # This will kill all processes that match the name 'grid_search.py'
