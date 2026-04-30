@@ -128,7 +128,6 @@ class GaussianBayesianNetwork(
             data (pd.DataFrame): The data to learn from.
         """
         BayesianNetwork.fit(self, X, y)
-        self._fit_parameters(X, y)
         # self._calculate_max_logl(X)
         self.joint_gaussian_ = self._get_joint_gaussian()
         return self

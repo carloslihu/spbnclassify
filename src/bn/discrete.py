@@ -107,6 +107,35 @@ class DiscreteBayesianNetwork(
             prediction_label=prediction_label,
         )
 
+    def _init_structure(
+        self,
+        nodes: list[str] = [],
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, pbn.FactorType]]]:
+        """
+        Initializes the structure of a Bayesian network classifier.
+        This method generates the arcs (directed edges) and node types for the Bayesian network
+        based on the provided list of nodes. The arcs represent the relationships between the
+        true label and the other nodes, while the node types define the type of each node in
+        the network.
+        Args:
+            nodes (list[str]): A list of node names to include in the Bayesian network.
+                The `true_label` node is automatically included and connected to other nodes.
+        Returns:
+            tuple[list[tuple[str, str]], list[tuple[str, pbn.FactorType]]]:
+                - A list of arcs, where each arc is represented as a tuple of two node names
+                (parent, child).
+                - A list of node types, where each node type is represented as a tuple of a
+                node name and its corresponding `pbn.FactorType`.
+        """
+
+        arcs = []
+        node_types = [
+            (node, pbn.DiscreteFactorType())
+            for node in nodes
+            if node != self.true_label
+        ]
+        return arcs, node_types
+
     def __str__(self) -> str:
         """Returns the string representation of the Discrete Bayesian Network
 
@@ -114,21 +143,6 @@ class DiscreteBayesianNetwork(
             str: The string representation
         """
         return "Discrete " + BayesianNetwork.__str__(self)
-
-    def fit(
-        self,
-        X: pd.DataFrame,
-        y: pd.Series | None = None,
-    ) -> "BayesianNetwork":
-        """Learns the structure and parameters of the Discrete Bayesian Network from the data.
-        NOTE: pbn.DiscreteBN learns without smoothing and can only be set by fitting data. CPTs might have a slight difference with pyagrum
-        Args:
-            data (pd.DataFrame): The data to learn from.
-        """
-        BayesianNetwork.fit(self, X)
-        pbn.DiscreteBN.fit(self, X.astype(str).astype("category"))
-
-        return self
 
     def infer(
         self,
@@ -483,3 +497,10 @@ class DiscreteBayesianNetwork(
         )
 
         return bn
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        data = pd.concat([X, y], axis=1)
+        pbn.DiscreteBN.fit(self, data.astype(str).astype("category"))
+        return self

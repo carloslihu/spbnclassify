@@ -28,24 +28,15 @@ class BayesianNetworkAugmentedNaiveBayes(BaseBayesianNetworkClassifier):
         """
         return "Augmented " + super().__str__()
 
-    def fit(
-        self, X: pd.DataFrame, y: pd.Series | None = None
-    ) -> "BayesianNetworkAugmentedNaiveBayes":
-        if y is None:
-            raise ValueError("y must be set")
-        data = pd.concat([X, y], axis=1)
-        nodes = data.columns.tolist()
-
-        arcs, node_types = self._init_structure(nodes)
-        # NOTE: reinit doesn't work, best to copy the structure
-        # RFE: I should reset the structure each time before fit is called
-        self._copy_bn_structure(arcs, node_types)
-        super().fit(X, y)
-        # RFE: Calculate with hybrid factors
-        # self._calculate_max_logl(data)
-        # RFE: Calculate joint_gaussian?
-        # self.joint_gaussian_ = self._get_joint_gaussian()
-        return self
+    # def fit(
+    #     self, X: pd.DataFrame, y: pd.Series | None = None
+    # ) -> "BayesianNetworkAugmentedNaiveBayes":
+    #     super().fit(X, y)
+    #     # RFE: Calculate with hybrid factors
+    #     # self._calculate_max_logl(data)
+    #     # RFE: Calculate joint_gaussian?
+    #     # self.joint_gaussian_ = self._get_joint_gaussian()
+    #     return self
 
 
 class GaussianBayesianNetworkAugmentedNaiveBayes(

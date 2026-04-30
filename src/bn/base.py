@@ -214,6 +214,35 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         self.true_label = true_label
         self.prediction_label = prediction_label
 
+    def _init_structure(
+        self,
+        nodes: list[str] = [],
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, pbn.FactorType]]]:
+        """
+        Initializes the structure of a Bayesian network classifier.
+        This method generates the arcs (directed edges) and node types for the Bayesian network
+        based on the provided list of nodes. The arcs represent the relationships between the
+        true label and the other nodes, while the node types define the type of each node in
+        the network.
+        Args:
+            nodes (list[str]): A list of node names to include in the Bayesian network.
+                The `true_label` node is automatically included and connected to other nodes.
+        Returns:
+            tuple[list[tuple[str, str]], list[tuple[str, pbn.FactorType]]]:
+                - A list of arcs, where each arc is represented as a tuple of two node names
+                (parent, child).
+                - A list of node types, where each node type is represented as a tuple of a
+                node name and its corresponding `pbn.FactorType`.
+        """
+
+        arcs = []
+        node_types = [
+            (node, pbn.LinearGaussianCPDType())
+            for node in nodes
+            if node != self.true_label
+        ]
+        return arcs, node_types
+
     def __str__(self) -> str:
         """Returns the string representation of the Bayesian Network
 
@@ -280,21 +309,9 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         """
         arcs = bn.arcs()
         node_types = bn.node_types().items()
-        # RFE: Adapt for when there are more discrete nodes apart from the target
-        node_num_categories_dict = {}
-        if self.true_label in bn.nodes():
-            # num_categories = len(y.cat.categories)
-            # if num_categories < 2:
-            num_categories = 2
-            node_num_categories_dict[self.true_label] = num_categories
 
-        # Remove all existing arcs to avoid conflicts with the learned structure
-        for source, target in self.arcs():
-            self.remove_arc(source, target)
-            if self.graphic.existsArc(source, target):
-                self.graphic.eraseArc(source, target)
-
-        self._copy_bn_structure(arcs, node_types, node_num_categories_dict)
+        # TODO: Adapt for when there are more than 2 discrete categories
+        self._copy_bn_structure(arcs, node_types)
         # Copies the factors (cpds) of the Bayesian Network to the current Bayesian Network
         if bn.fitted():
             factors = [bn.cpd(n) for n in bn.nodes() if bn.cpd(n) is not None]
@@ -306,7 +323,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         X: pd.DataFrame,
         y: pd.Series | None = None,
     ) -> pbn.BayesianNetwork:
-        """Learns ONLY the structure of the Bayesian Network from the data."""
+        """Learns the structure and parameters of the Bayesian Network from the data."""
         # We undersample the data for the structure learning
         if self.max_train_data_size > 0 and len(X) > self.max_train_data_size:
             structure_X = X.sample(n=self.max_train_data_size, random_state=self.seed)
@@ -321,17 +338,20 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         self.feature_names_in_ = X.columns.tolist()
         self.n_features_in_ = len(self.feature_names_in_)
 
-        # We remove the variables with zero variance
-        self._remove_zero_variance_nodes(structure_X)
+        arcs, node_types = self._init_structure(self.feature_names_in_)
+        # Reinit doesn't work, best to copy the structure
+        self._copy_bn_structure(arcs, node_types)
 
-        structure_X = structure_X[self.feature_names_in_]
+        # We remove the variables with zero variance
+        structure_X = self._remove_zero_variance_nodes(structure_X)
 
         bn = self._fit_structure(structure_X, structure_y)
         bn = self._fit_node_types(bn, structure_X, structure_y)
 
-        # Copies the structure to the current Bayesian Network
+        # Copies the structure and fits parameters to the current Bayesian Network
         if bn:
             self.copy_pbn(bn)
+            self._fit_parameters(X, y)
         return self
 
     def logl(self, X: pd.DataFrame) -> np.ndarray:
@@ -513,9 +533,18 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
                 for arc in self.arc_blacklist
                 if arc[0] in valid_nodes and arc[1] in valid_nodes
             ]
+            self.arc_whitelist = [
+                arc
+                for arc in self.arc_whitelist
+                if arc[0] in valid_nodes and arc[1] in valid_nodes
+            ]
+            self.type_blacklist = [
+                t for t in self.type_blacklist if t[0] in valid_nodes
+            ]
             self.type_whitelist = [
                 t for t in self.type_whitelist if t[0] in valid_nodes
             ]
+        return X[self.feature_names_in_]
 
     # NOTE: Override in specific cases
     def _fit_structure(
@@ -560,8 +589,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         ]:
             bn = pbn.hc(
                 df=data,
-                # start=self,
-                bn_type=self.bn_type,
+                start=self,
                 score=self.search_score,
                 # operators=self.search_operators,
                 operators=["arcs"],
@@ -670,10 +698,10 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
                     start=bn,
                     score=self.search_score,
                     operators=["node_type"],
-                    # arc_blacklist=self.arc_blacklist,
-                    # arc_whitelist=self.arc_whitelist,
-                    # type_blacklist=self.type_blacklist,
-                    # type_whitelist=self.type_whitelist,
+                    arc_blacklist=self.arc_blacklist,
+                    arc_whitelist=self.arc_whitelist,
+                    type_blacklist=self.type_blacklist,
+                    type_whitelist=self.type_whitelist,
                     callback=self.callback,
                     max_iters=self.max_iters,
                     epsilon=self.epsilon,
@@ -745,7 +773,13 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         """Copies the structure of a Bayesian Network to the current Bayesian Network.
         Must be called in __setstate__ to update the structure of the Bayesian Network and after the structure learning process.
         """
+        # Remove all existing arcs to avoid conflicts with the learned structure
+        for source, target in self.arcs():
+            self.remove_arc(source, target)
+            if self.graphic.existsArc(source, target):
+                self.graphic.eraseArc(source, target)
 
+        # We copy the nodes and node types
         for node, new_type in node_types:
             if not self.contains_node(node):
                 self.add_node(node)
@@ -754,6 +788,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
                     self.graphic.add(node, num_categories)
             self.set_node_type(node, new_type)
 
+        # We copy the arcs
         for source, target in arcs:
             if not self.has_arc(source, target) and self.can_add_arc(source, target):
                 self.add_arc(source, target)

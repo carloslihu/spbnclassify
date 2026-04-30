@@ -94,20 +94,6 @@ class SemiParametricBayesianNetwork(
         """
         return "SemiParametric " + BayesianNetwork.__str__(self)
 
-    def fit(
-        self,
-        X: pd.DataFrame,
-        y: pd.Series | None = None,
-    ) -> "BayesianNetwork":
-        """Learns the structure and parameters of the SemiParametric Bayesian Network from the data.
-
-        Args:
-            data (pd.DataFrame): The data to learn from.
-        """
-        BayesianNetwork.fit(self, X, y)
-        self._fit_parameters(X, y)
-        return self
-
     def _fit_parameters(
         self, X: pd.DataFrame, y: pd.Series | None = None
     ) -> pbn.BayesianNetwork:
