@@ -99,7 +99,14 @@ class AveragedOneDependenceEstimator(BaseMultiBayesianNetworkClassifier):
         return result_df[class_posteriori_probabilities].to_numpy()
 
     def logl(self, X: pd.DataFrame) -> np.ndarray:
-        return np.log(self.predict_proba(X))
+        weights_log = np.log(self.weights_.to_numpy())
+        proba_log = np.log(self.predict_proba(X))
+        logl = proba_log + weights_log
+
+        # Get the corresponding logl column for each instance based on true_label
+        true_labels = X[self.true_label].values
+        logl = logl[np.arange(len(logl)), np.searchsorted(self.classes_, true_labels)]
+        return logl
 
     # NOTE: conditional_logl unnecessary for the AODE
 

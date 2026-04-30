@@ -60,7 +60,7 @@ class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
         """
         Calculates the log-likelihood of the model given the data.
         This method computes the log-likelihood by marginalizing over the classes:
-            logl(X) = log[ sum_j [ P(C_i = j) * P(X | C_i = j) ] ]
+            logl(X, C) = log[ sum_j [ P(C_i = j) * P(X | C_i = j) ] ]
         where:
             - P(C_i = j) = self.weights_[j] (the weight of class j)
             - P(X | C_i = j) = np.exp(self.bn_dict_[j].logl(X)) (the probability of instance X given the structure of class j)

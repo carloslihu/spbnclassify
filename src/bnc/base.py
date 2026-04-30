@@ -210,8 +210,6 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             result_df[f"logl_{j}"] = self.conditional_logl(
                 result_df[self.feature_names_in_], j
             )
-            # RFE: Replace in future with scaled log-likelihood?
-            # result_df[f"logl_{k}"] = -self.bn_dict_[k].anomaly_score(result_df[self.feature_names_in_])
 
         # We calculate the probability of each class given the data:
         for k in self.classes_:
@@ -248,7 +246,7 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
             raise ValueError("y must be set")
         super()._fit_parameters(X, y)
         self.classes_ = sorted(y.unique())
-        self.weights_ = y.value_counts(normalize=True)
+        self.weights_ = y.value_counts(normalize=True).sort_index()
         return self
 
 
@@ -511,7 +509,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         self.feature_names_in_ = X.columns.tolist()
         self.n_features_in_ = len(self.feature_names_in_)
         self.classes_ = sorted(y.unique())
-        self.weights_ = y.value_counts(normalize=True)
+        self.weights_ = y.value_counts(normalize=True).sort_index()
         return self
 
     @abstractmethod
