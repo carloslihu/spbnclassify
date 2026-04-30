@@ -22,7 +22,7 @@ from .test_bayesian_network_classifier import BaseTestKDEBayesianNetworkClassifi
 
 class TestKDEBayesianNetworkAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDEBayesianNetworkAugmentedNaiveBayes
-    model_filename = "kdebnc.pkl"
+    model_filename = "kde-ban.pkl"
     str_representation = "KDE Bayesian Augmented Network Classifier"
 
     def get_expected_arcs(
@@ -58,7 +58,7 @@ class TestKDEBayesianNetworkAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassi
 
 class TestKDENaiveBayes(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDENaiveBayes
-    model_filename = "kdenbnc.pkl"
+    model_filename = "kde-nb.pkl"
     str_representation = "Naive KDE Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -72,7 +72,7 @@ class TestKDENaiveBayes(BaseTestKDEBayesianNetworkClassifier):
 
 class TestKDESelectiveNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDESelectiveNaiveBayes
-    model_filename = "kdesnbnc.pkl"
+    model_filename = "kde-snb.pkl"
     str_representation = "Selective Naive KDE Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -83,7 +83,7 @@ class TestKDESelectiveNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
 
 class TestKDETreeAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDETreeAugmentedNaiveBayes
-    model_filename = "kdetanbnc.pkl"
+    model_filename = "kde-tan.pkl"
     str_representation = "Tree Augmented Naive KDE Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -98,7 +98,7 @@ class TestKDETreeAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
 
 class TestKDESuperParentOneDependenceEstimator(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDESuperParentOneDependenceEstimator
-    model_filename = "kdespodbnc.pkl"
+    model_filename = "kde-spode.pkl"
     str_representation = "Superparent-one-dependence KDE Bayesian Network Classifier"
     init_params = {"super_parent": SUPER_PARENT}
 
@@ -114,7 +114,7 @@ class TestKDESuperParentOneDependenceEstimator(BaseTestKDEBayesianNetworkClassif
 
 class TestKDEAveragedOneDependenceEstimator(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDEAveragedOneDependenceEstimator
-    model_filename = "kdeaodebnc.pkl"
+    model_filename = "kde-aode.pkl"
     str_representation = "Averaged one-dependence KDE Bayesian Network Classifier"
     init_params = {}
 
@@ -171,7 +171,7 @@ class TestKDEAveragedOneDependenceEstimator(BaseTestKDEBayesianNetworkClassifier
 
 class TestKDEKDependenceBayesian(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDEKDependenceBayesian
-    model_filename = "kdekdbnc.pkl"
+    model_filename = "kde-kdb.pkl"
     str_representation = "k-Dependence KDE Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -190,7 +190,7 @@ class TestKDEKDependenceBayesian(BaseTestKDEBayesianNetworkClassifier):
 
 class TestKDEMaxKAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDEMaxKAugmentedNaiveBayes
-    model_filename = "kdemaxkbnc.pkl"
+    model_filename = "kde-maxkbnc.pkl"
     str_representation = "Max-k KDE Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -206,7 +206,7 @@ class TestKDEMaxKAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
 
 class TestKDEBayesianMultinet(BaseTestKDEBayesianNetworkClassifier):
     bn_class = KDEBayesianMultinet
-    model_filename = "kdebmc.pkl"
+    model_filename = "kde-bm.pkl"
     str_representation = "KDE Bayesian Multinet Classifier"
 
     def get_expected_arcs(

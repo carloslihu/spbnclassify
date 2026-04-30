@@ -23,7 +23,7 @@ class TestGaussianBayesianNetworkAugmentedNaiveBayes(
     BaseTestGaussianBayesianNetworkClassifier
 ):
     bn_class = GaussianBayesianNetworkAugmentedNaiveBayes
-    model_filename = "gbnc.pkl"
+    model_filename = "g-banc.pkl"
     str_representation = "Gaussian Bayesian Augmented Network Classifier"
 
     def get_expected_arcs(
@@ -35,7 +35,7 @@ class TestGaussianBayesianNetworkAugmentedNaiveBayes(
 
 class TestGaussianNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianNaiveBayes
-    model_filename = "gnbnc.pkl"
+    model_filename = "g-nb.pkl"
     str_representation = "Naive Gaussian Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -49,7 +49,7 @@ class TestGaussianNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
 
 class TestGaussianSelectiveNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianSelectiveNaiveBayes
-    model_filename = "gsnbnc.pkl"
+    model_filename = "g-snb.pkl"
     str_representation = "Selective Naive Gaussian Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -60,7 +60,7 @@ class TestGaussianSelectiveNaiveBayes(BaseTestGaussianBayesianNetworkClassifier)
 
 class TestGaussianTreeAugmentedNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianTreeAugmentedNaiveBayes
-    model_filename = "gtanbnc.pkl"
+    model_filename = "g-tan.pkl"
     str_representation = "Tree Augmented Naive Gaussian Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -77,7 +77,7 @@ class TestGaussianSuperParentOneDependenceEstimator(
     BaseTestGaussianBayesianNetworkClassifier
 ):
     bn_class = GaussianSuperParentOneDependenceEstimator
-    model_filename = "gspodbnc.pkl"
+    model_filename = "g-spode.pkl"
     str_representation = (
         "Superparent-one-dependence Gaussian Bayesian Network Classifier"
     )
@@ -97,7 +97,7 @@ class TestGaussianAveragedOneDependenceEstimator(
     BaseTestGaussianBayesianNetworkClassifier
 ):
     bn_class = GaussianAveragedOneDependenceEstimator
-    model_filename = "gaodebnc.pkl"
+    model_filename = "g-aode.pkl"
     str_representation = "Averaged one-dependence Gaussian Bayesian Network Classifier"
     init_params = {}
 
@@ -155,7 +155,7 @@ class TestGaussianAveragedOneDependenceEstimator(
 
 class TestGaussianKDependenceBayesian(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianKDependenceBayesian
-    model_filename = "gkdbnc.pkl"
+    model_filename = "g-kdb.pkl"
     str_representation = "k-Dependence Gaussian Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -174,7 +174,7 @@ class TestGaussianKDependenceBayesian(BaseTestGaussianBayesianNetworkClassifier)
 
 class TestGaussianMaxKAugmentedNaiveBayes(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianMaxKAugmentedNaiveBayes
-    model_filename = "gmkbnc.pkl"
+    model_filename = "g-maxkbnc.pkl"
     str_representation = "Max-k Gaussian Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -189,7 +189,7 @@ class TestGaussianMaxKAugmentedNaiveBayes(BaseTestGaussianBayesianNetworkClassif
 
 class TestGaussianBayesianMultinet(BaseTestGaussianBayesianNetworkClassifier):
     bn_class = GaussianBayesianMultinet
-    model_filename = "gbmc.pkl"
+    model_filename = "g-bm.pkl"
     str_representation = "Gaussian Bayesian Multinet Classifier"
 
     def get_expected_arcs(

@@ -26,7 +26,7 @@ class TestSemiParametricBayesianNetworkAugmentedNaiveBayes(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricBayesianNetworkAugmentedNaiveBayes
-    model_filename = "spbnc.pkl"
+    model_filename = "sp-ban.pkl"
     str_representation = "SemiParametric Bayesian Augmented Network Classifier"
 
     def get_expected_arcs(
@@ -71,7 +71,7 @@ class TestSemiParametricBayesianNetworkAugmentedNaiveBayes(
 
 class TestSemiParametricNaiveBayes(BaseTestSemiParametricBayesianNetworkClassifier):
     bn_class = SemiParametricNaiveBayes
-    model_filename = "spnbnc.pkl"
+    model_filename = "sp-nb.pkl"
     str_representation = "Naive SemiParametric Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -95,7 +95,7 @@ class TestSemiParametricSelectiveNaiveBayes(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricSelectiveNaiveBayes
-    model_filename = "spsnbnc.pkl"
+    model_filename = "sp-snb.pkl"
     str_representation = "Selective Naive SemiParametric Bayesian Network Classifier"
 
     def get_expected_arcs(
@@ -108,7 +108,7 @@ class TestSemiParametricTreeAugmentedNaiveBayes(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricTreeAugmentedNaiveBayes
-    model_filename = "sptanbnc.pkl"
+    model_filename = "sp-tan.pkl"
     str_representation = (
         "Tree Augmented Naive SemiParametric Bayesian Network Classifier"
     )
@@ -135,7 +135,7 @@ class TestSemiParametricSuperParentOneDependenceEstimator(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricSuperParentOneDependenceEstimator
-    model_filename = "spsodbnc.pkl"
+    model_filename = "sp-spode.pkl"
     str_representation = (
         "Superparent-one-dependence SemiParametric Bayesian Network Classifier"
     )
@@ -163,7 +163,7 @@ class TestSemiParametricAveragedOneDependenceEstimator(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricAveragedOneDependenceEstimator
-    model_filename = "spaodebnc.pkl"
+    model_filename = "sp-aode.pkl"
     str_representation = (
         "Averaged one-dependence SemiParametric Bayesian Network Classifier"
     )
@@ -224,7 +224,7 @@ class TestSemiParametricKDependenceBayesian(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricKDependenceBayesian
-    model_filename = "spkdbnc.pkl"
+    model_filename = "sp-kdb.pkl"
     str_representation = "k-Dependence SemiParametric Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -245,7 +245,7 @@ class TestSemiParametricMaxKAugmentedNaiveBayes(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricMaxKAugmentedNaiveBayes
-    model_filename = "spmaxkbnc.pkl"
+    model_filename = "sp-maxkbnc.pkl"
     str_representation = "Max-k SemiParametric Bayesian Network Classifier"
     init_params = {"max_indegree": 1}
 
@@ -271,7 +271,7 @@ class TestSemiParametricBayesianMultinet(
     BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricBayesianMultinet
-    model_filename = "spbmc.pkl"
+    model_filename = "sp-bm.pkl"
     str_representation = "SemiParametric Bayesian Multinet Classifier"
 
     def get_expected_arcs(

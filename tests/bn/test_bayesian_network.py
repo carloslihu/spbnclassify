@@ -374,7 +374,7 @@ class BaseTestBayesianNetwork:
 
 class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = DiscreteBayesianNetwork
-    model_filename = "dbn.pkl"
+    model_filename = "d-bn.pkl"
     data_type = "discrete"
     expected_bn_type_key = "discrete"
 
@@ -402,7 +402,7 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
 
 class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = GaussianBayesianNetwork
-    model_filename = "gbn.pkl"
+    model_filename = "g-bn.pkl"
     data_type = "gaussian"
     expected_bn_type_key = "gaussian"
 
@@ -431,7 +431,7 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
 
 class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = KDEBayesianNetwork
-    model_filename = "kdebn.pkl"
+    model_filename = "kde-bn.pkl"
     data_type = "non_gaussian"
     expected_bn_type_key = "kde"
 
@@ -453,7 +453,7 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = SemiParametricBayesianNetwork
-    model_filename = "spbn.pkl"
+    model_filename = "sp-bn.pkl"
     data_type = "non_gaussian"
     expected_bn_type_key = "semiparametric"
 
