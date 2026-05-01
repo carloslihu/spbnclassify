@@ -60,20 +60,21 @@ BNC_MODEL_NAME_LIST = [
     "SemiParametricBayesianMultinet",
 ]
 BNC_BASELINE_MODEL_NAME_LIST = [
-    "GaussianNaiveBayes",
     "SemiParametricAveragedOneDependenceEstimator",
-    # "SemiParametricKDependenceBayesian",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
 ]
+# Ordered by AUC
 BASELINE_MODEL_NAME_LIST = [
-    # "LogisticRegression",
     # "Random_Forest",
     # "XGBoost",
-    # "SVM-RBF",
+    "LogisticRegression",
+    # "LDA",
+    # "QDA",
+    "MLP",
+    "SVM-RBF",
+    "kNN",
     # "GaussianNB",
-    "LDA",
-    "QDA",
 ]
 MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
@@ -115,6 +116,29 @@ if __name__ == "__main__":
     )
     experiment_file_name = RESULT_PATH / "gs_combined_results.csv"
     experiment_result_df.to_csv(experiment_file_name, index=False)
+
+    # experiment_result_df.loc[
+    #     experiment_result_df["model_name"].isin(
+    #         ["SemiParametricBayesianNetworkAugmentedNaiveBayes"]
+    #         + BASELINE_MODEL_NAME_LIST
+    #     ),
+    #     [
+    #         "dataset_name",
+    #         "model_name",
+    #         "search_score",
+    #         "cross_validation_avg/avg_metrics/weighted avg/accuracy",
+    #         "cross_validation_avg/avg_metrics/weighted avg/F1-score",
+    #         "cross_validation_avg/avg_metrics/weighted avg/ROC_AUC",
+    #     ],
+    # ].rename(
+    #     columns={
+    #         "cross_validation_avg/avg_metrics/weighted avg/accuracy": "accuracy",
+    #         "cross_validation_avg/avg_metrics/weighted avg/F1-score": "F1-score",
+    #         "cross_validation_avg/avg_metrics/weighted avg/ROC_AUC": "AUC",
+    #     }
+    # ).to_csv(
+    #     RESULT_PATH / "partial_results.csv", index=False
+    # )
     # endregion Read and combine experiment results
 
     # region Model Comparison for each metric

@@ -151,10 +151,6 @@ class ConditionalLogLikelihoodValidatedScore(pbn.ValidatedScore):
         self._target_values = (
             pd.Series(data[self.true_label]).dropna().sort_values().unique().tolist()
         )
-        if len(self._target_values) < 2:
-            raise ValueError(
-                "ConditionalLogLikelihoodScore requires at least two true_label values."
-            )
         # Use stratified holdout split
         stratified_shuffle = StratifiedShuffleSplit(
             n_splits=1, test_size=test_holdout_ratio, random_state=seed

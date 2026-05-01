@@ -53,7 +53,10 @@ class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
                 prediction_label=self.prediction_label,
             )
             filtered_X = data.loc[data[self.true_label] == k, self.feature_names_in_]
-            self.bn_dict_[k].fit(filtered_X)
+            # TODO: Adapt to CLL score
+            # filtered_y = data.loc[data[self.true_label] == k, self.true_label]
+            filtered_y = None
+            self.bn_dict_[k].fit(filtered_X, filtered_y)
         return self
 
     def logl(self, X: pd.DataFrame) -> np.ndarray:
