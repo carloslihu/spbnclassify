@@ -29,6 +29,7 @@ from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison imp
     get_ranking_matrix,
     plot_critical_difference_diagram,
     plot_sp_structure_boxplot,
+    plot_time_complexity,
     read_and_combine_experiment_results,
     sci_fmt,
 )
@@ -58,11 +59,13 @@ BNC_MODEL_NAME_LIST = [
     "SemiParametricKDependenceBayesian",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
+    # "SemiParametricBayesianNetworkAugmentedNaiveBayes-CLL",
 ]
 BNC_BASELINE_MODEL_NAME_LIST = [
     "SemiParametricAveragedOneDependenceEstimator",
     "SemiParametricBayesianNetworkAugmentedNaiveBayes",
     "SemiParametricBayesianMultinet",
+    # "SemiParametricBayesianNetworkAugmentedNaiveBayes-CLL",
 ]
 # Ordered by AUC
 BASELINE_MODEL_NAME_LIST = [
@@ -71,10 +74,10 @@ BASELINE_MODEL_NAME_LIST = [
     "LogisticRegression",
     # "LDA",
     # "QDA",
-    "MLP",
     "SVM-RBF",
+    "MLP",
     "kNN",
-    # "GaussianNB",
+    # "DecisionTree",
 ]
 MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
@@ -107,6 +110,7 @@ if __name__ == "__main__":
     BOXPLOT_RESULT_PATH.mkdir(parents=True, exist_ok=True)
     RANKING_TABLES_RESULT_PATH.mkdir(parents=True, exist_ok=True)
     CD_DIAGRAMS_RESULT_PATH.mkdir(parents=True, exist_ok=True)
+    dataset_details_df = pd.read_csv(DATASET_DETAIL_PATH / "public_dataset_details.csv")
 
     # region Read and combine experiment results
     experiment_result_df = read_and_combine_experiment_results(
@@ -417,6 +421,17 @@ if __name__ == "__main__":
         ).title()
         baseline_rankings_dict[simple_metric_name] = baseline_ranking_summary_df
         # endregion Ranking Table
+        if simple_metric_name in ["training_time", "testing_time"]:
+            plot_df = dataset_details_df.merge(
+                avg_std_metric_matrix, on="Dataset", how="inner"
+            )
+            plot_df["$KnN^2$"] = plot_df["$K$"] * plot_df["$n$"] * plot_df["$N$"] ** 2
+
+            plot_time_complexity(
+                plot_df,
+                simple_metric_name=simple_metric_name,
+                output_dir=DATASET_DETAIL_PATH,
+            )
     # endregion
 
     # region Concat model rankings across all classification metrics

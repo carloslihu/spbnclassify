@@ -587,12 +587,130 @@ def plot_sp_structure_boxplot(
         plt.close()
 
 
-# TODO
-# def plot_time_complexity(
-#     avg_std_metric_matrix,
-#     dataset_details_df,
-# ):
-#     pass
+def parse_mean_std(cell):
+    """Parse a cell containing mean±std notation and return numeric values.
+
+    Args:
+        cell: A cell value containing mean and standard deviation in the format
+              "mean$\\pm$std" (e.g., "0.85$\\pm$0.05").
+
+    Returns:
+        tuple: A tuple of (mean, std) as floats. If std is not present,
+               std defaults to float("inf").
+    """
+    parts = str(cell).split("$\\pm$")
+    mean = float(parts[0].strip())
+    std = float(parts[1].strip()) if len(parts) > 1 else float("inf")
+    return mean, std
+
+
+def plot_time_complexity(
+    plot_df: pd.DataFrame, simple_metric_name: str, output_dir: Path
+) -> None:
+    """Plot time complexity comparison across different SP algorithms.
+
+    Creates a line plot with confidence bands showing execution time versus
+    data complexity for various Selective Prediction (SP) algorithms. The plot
+    includes interpolated curves for smooth visualization and mean±std bands
+    for uncertainty quantification.
+
+    Args:
+        plot_df: DataFrame containing algorithm performance data with columns
+                 for each algorithm (SP-NB, SP-SNB, SP-TAN, SP-AODE, SP-$k$DB,
+                 SP-BAN, SP-BM), a "$KnN^2$" column for data complexity values,
+                 and an "$n$" column for normalization (used for SP-AODE).
+        simple_metric_name: Name of the metric being plotted (e.g., 'execution_time').
+                           Used as ylabel and for determining output filename.
+        output_dir: Directory path where the generated plot will be saved.
+
+    Returns:
+        None. Generates and saves a PNG plot file to output_dir.
+    """
+    x_label = "$KnN^2$"
+    label_fontsize = 20
+    legend_fontsize = 18
+    tick_fontsize = 16
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    all_sp_cols = [
+        "SP-NB",
+        "SP-SNB",
+        "SP-TAN",
+        "SP-AODE",  # keep in order to preserve color mapping
+        "SP-$k$DB",
+        "SP-BAN",
+        "SP-BM",
+    ]
+
+    x = pd.to_numeric(plot_df[x_label], errors="coerce")
+    x_order = np.argsort(x.to_numpy())
+    x_sorted = x.to_numpy()[x_order]
+
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    color_map = {
+        col: default_colors[i % len(default_colors)]
+        for i, col in enumerate(all_sp_cols)
+    }
+
+    for col in all_sp_cols:
+        parsed = plot_df[col].apply(parse_mean_std)
+
+        y_mean = np.array([m for m, _ in parsed], dtype=float)[x_order]
+        y_std = np.array([s for _, s in parsed], dtype=float)[x_order]
+        if col == "SP-AODE":
+            y_mean = y_mean / plot_df["$n$"].to_numpy()[x_order]
+            y_std = y_std / plot_df["$n$"].to_numpy()[x_order]
+
+        x_dense = np.linspace(x_sorted.min(), x_sorted.max())
+        y_dense = np.interp(x_dense, x_sorted, y_mean)
+        y_std_dense = np.interp(x_dense, x_sorted, y_std)
+
+        ax.plot(
+            x_dense,
+            y_dense,
+            linewidth=1.5,
+            label=col,
+            color=color_map[col],
+        )
+        ax.fill_between(
+            x_dense,
+            y_dense - y_std_dense,
+            y_dense + y_std_dense,
+            alpha=0.15,
+            color=color_map[col],
+        )
+
+    ax.set_xlabel("Data Complexity", fontsize=label_fontsize)
+    ax.set_ylabel(
+        simple_metric_name.replace("_", " ").title() + " (s)", fontsize=label_fontsize
+    )
+    ax.tick_params(axis="both", labelsize=tick_fontsize)
+    ax.legend(fontsize=legend_fontsize)
+
+    ax.set_facecolor("white")
+    ax.grid(
+        True,
+        which="major",
+        axis="y",
+        linestyle="-",
+        linewidth=0.5,
+        color="gray",
+        alpha=0.3,
+    )
+    ax.set_axisbelow(True)
+    plt.tight_layout()
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.2)
+        spine.set_color("black")
+
+    fig_path = output_dir / f"{simple_metric_name}_vs_knn2_sp_models.png"
+    fig.savefig(
+        fig_path,
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white",
+        edgecolor="none",
+    )
 
 
 def bold_best_cell(row: pd.Series, lower_better: bool = False) -> pd.Series:
@@ -626,11 +744,6 @@ def bold_best_cell(row: pd.Series, lower_better: bool = False) -> pd.Series:
 
     # Bold the best mean $\\pm$ std cell in each row
     # Extract means and stds from "mean $\\pm$ std" formatted strings
-    def parse_mean_std(cell):
-        parts = str(cell).split("$\\pm$")
-        mean = float(parts[0].strip())
-        std = float(parts[1].strip()) if len(parts) > 1 else float("inf")
-        return mean, std
 
     stats = row.apply(parse_mean_std)
     means = stats.apply(lambda x: x[0])
