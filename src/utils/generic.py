@@ -118,6 +118,8 @@ def bn_to_acronym(name: str) -> str:
                     suffix = "TAN"
                 case "BNANB":
                     suffix = "BAN"
+                case "BNANBCLL":
+                    suffix = "BAN-CLL"
                 case "KDB":
                     suffix = "$k$DB"
                 case _:

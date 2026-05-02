@@ -36,13 +36,27 @@ def sci_fmt(x):
 
 # Format both mean and std in each cell using sci_fmt
 def format_mean_std_cell(cell):
-    try:
-        mean_str, std_str = cell.split(" $\\pm$ ")
-        mean_val = float(mean_str)
-        std_val = float(std_str)
-        return f"{sci_fmt(mean_val)} $\\pm$ {sci_fmt(std_val)}"
-    except Exception:
+    if not isinstance(cell, str):
         return cell
+
+    separator = " $\\pm$ "
+    if separator not in cell:
+        return cell
+
+    parts = cell.split(separator)
+    if len(parts) != 2:
+        return cell
+
+    mean_str, std_str = parts
+    mean_str = mean_str.strip()
+    std_str = std_str.strip()
+
+    mean_val = pd.to_numeric(mean_str, errors="coerce")
+    std_val = pd.to_numeric(std_str, errors="coerce")
+    if pd.isna(mean_val) or pd.isna(std_val):
+        return cell
+
+    return f"{sci_fmt(float(mean_val))} $\\pm$ {sci_fmt(float(std_val))}"
 
 
 # endregion
