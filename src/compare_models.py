@@ -77,7 +77,7 @@ BASELINE_MODEL_NAME_LIST = [
     "SVM-RBF",
     "MLP",
     "kNN",
-    # "DecisionTree",
+    "DecisionTree",
 ]
 MODEL_NAME_LIST = BNC_MODEL_NAME_LIST + BASELINE_MODEL_NAME_LIST
 
@@ -85,6 +85,15 @@ BNC_MODEL_NAME_DICT = {name: bn_to_acronym(name) for name in BNC_MODEL_NAME_LIST
 BASELINE_MODEL_NAME_DICT = {name: name for name in BASELINE_MODEL_NAME_LIST} | {
     name: bn_to_acronym(name) for name in BNC_BASELINE_MODEL_NAME_LIST
 }
+# Custom baseline naming
+BASELINE_MODEL_NAME_DICT.update(
+    {
+        # "Random_Forest": "Random Forest",
+        "LogisticRegression": "LR",
+        "DecisionTree": "DT",
+        "kNN": "$k$-NN",
+    }
+)
 MODEL_NAME_DICT = BNC_MODEL_NAME_DICT | BASELINE_MODEL_NAME_DICT
 
 METRIC_CONFIG_DICT = {
@@ -121,28 +130,6 @@ if __name__ == "__main__":
     experiment_file_name = RESULT_PATH / "gs_combined_results.csv"
     experiment_result_df.to_csv(experiment_file_name, index=False)
 
-    # experiment_result_df.loc[
-    #     experiment_result_df["model_name"].isin(
-    #         ["SemiParametricBayesianNetworkAugmentedNaiveBayes"]
-    #         + BASELINE_MODEL_NAME_LIST
-    #     ),
-    #     [
-    #         "dataset_name",
-    #         "model_name",
-    #         "search_score",
-    #         "cross_validation_avg/avg_metrics/weighted avg/accuracy",
-    #         "cross_validation_avg/avg_metrics/weighted avg/F1-score",
-    #         "cross_validation_avg/avg_metrics/weighted avg/ROC_AUC",
-    #     ],
-    # ].rename(
-    #     columns={
-    #         "cross_validation_avg/avg_metrics/weighted avg/accuracy": "accuracy",
-    #         "cross_validation_avg/avg_metrics/weighted avg/F1-score": "F1-score",
-    #         "cross_validation_avg/avg_metrics/weighted avg/ROC_AUC": "AUC",
-    #     }
-    # ).to_csv(
-    #     RESULT_PATH / "partial_results.csv", index=False
-    # )
     # endregion Read and combine experiment results
 
     # region Model Comparison for each metric
@@ -155,12 +142,6 @@ if __name__ == "__main__":
             simple_metric_name = "AUC"
         lower_better = METRIC_CONFIG_DICT[metric_name]["lower_better"]
 
-        # metric_file_name = (
-        #     METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_matrix.csv"
-        # )
-        # summary_metric_latex_name = (
-        #     METRIC_MATRIX_RESULT_PATH / f"{simple_metric_name}_metric_summary.tex"
-        # )
         avg_std_csv_name = (
             AVG_STD_RESULT_PATH / f"{simple_metric_name}_avg_std_metric_matrix.csv"
         )
@@ -188,7 +169,6 @@ if __name__ == "__main__":
         metric_matrix_df = get_metric_matrix(
             experiment_result_df, MODEL_NAME_DICT, metric_name
         )
-        # metric_matrix_df.to_csv(metric_file_name, index=True)
         # Ensure non-NaN values are present
         # Drop columns with no Metric values at all (missing metric for all datasets for a model)
         metric_matrix_df = metric_matrix_df.dropna(axis=1, how="all")
@@ -209,62 +189,6 @@ if __name__ == "__main__":
             simple_metric_name,
             BOXPLOT_RESULT_PATH,
         )
-
-        # # Aggregate mean and std of each column (model) in the metric matrix
-        # metric_means = metric_matrix_df.mean(axis=0)
-        # metric_stds = metric_matrix_df.std(axis=0)
-        # metric_summary_df = pd.DataFrame(
-        #     {"Model": metric_means.index, "Mean": metric_means, "STD": metric_stds}
-        # )
-        # metric_summary_df["Family"] = metric_summary_df["Model"].apply(
-        #     get_model_parameter
-        # )
-        # metric_summary_df["Model"] = metric_summary_df["Model"].apply(
-        #     get_model_structure
-        # )
-
-        # # Retain original Structure and Parametric ordering in the pivot
-        # structure_order = metric_summary_df["Model"].unique()
-        # parametric_order = metric_summary_df["Family"].unique()
-
-        # # Metric Summary
-        # metric_summary_df = metric_summary_df.pivot(
-        #     index="Model",
-        #     columns="Family",
-        #     values=["Mean", "STD"],
-        # )
-        # # Reindex to preserve original order
-        # metric_summary_df = metric_summary_df.reindex(index=structure_order).reindex(
-        #     columns=parametric_order, level=1
-        # )
-
-        # # Combine mean and std into a single string per cell
-        # metric_summary_df = metric_summary_df.apply(
-        #     lambda row: {
-        #         col: f"{row['Mean'][col]:.2f} $\\pm$ {row['STD'][col]:.2f}"
-        #         for col in row["Mean"].index
-        #     },
-        #     axis=1,
-        #     result_type="expand",
-        # )
-        # metric_summary_df.index.name = "Model"
-        # metric_summary_df.columns.name = "Family"
-        # latex_df = metric_summary_df.copy()
-        # latex_df = latex_df.round(2)
-        # latex_bold_df = latex_df.apply(
-        #     bold_best_cell, lower_better=lower_better, axis=1
-        # )
-        # latex_bold_df.to_latex(
-        #     buf=summary_metric_latex_name,
-        #     float_format="%.2f",
-        #     caption=f"Average metric for each model over all datasets (mean $\\pm$ standard deviation). The best (highest) results are highlighted in bold. In case of a draw, all best results are highlighted.",
-        #     label=f"tab:{simple_metric_name}_metric_summary",
-        #     # column_format=col_format,
-        #     escape=False,
-        #     multicolumn=True,
-        #     multicolumn_format="c",
-        #     position="htbp",
-        # )
         # endregion Metric Matrix
 
         # region Average and Standard Deviation Metric Matrix
@@ -435,16 +359,12 @@ if __name__ == "__main__":
     # endregion
 
     # region Concat model rankings across all classification metrics
-    combined_rankings_df = pd.concat(
-        [df for key, df in all_rankings_dict.items() if key in CLASS_METRIC_LIST],
-        ignore_index=True,
-    )
     combined_baseline_rankings_df = pd.concat(
         [df for key, df in baseline_rankings_dict.items() if key in CLASS_METRIC_LIST],
         ignore_index=True,
     )
 
-    # One row per baseline model, one column per metric, cell = mean ± std.
+    # Baseline ranking
     baseline_metric_order = combined_baseline_rankings_df["Metric"].drop_duplicates()
     baseline_model_order = combined_baseline_rankings_df["Model"].drop_duplicates()
     combined_baseline_ranking_summary_df = combined_baseline_rankings_df.assign(
@@ -470,7 +390,11 @@ if __name__ == "__main__":
         escape=False,
         position="htbp",
     )
-
+    # BNC ranking
+    combined_rankings_df = pd.concat(
+        [df for key, df in all_rankings_dict.items() if key in CLASS_METRIC_LIST],
+        ignore_index=True,
+    )
     average_rankings_mean = combined_rankings_df.groupby("Metric", sort=False).mean()
     average_rankings_std = combined_rankings_df.groupby("Metric", sort=False).std()
     # Create a DataFrame with "mean $\\pm$ std" for each cell
@@ -543,11 +467,4 @@ if __name__ == "__main__":
             position="htbp",
         )
     # endregion Concat model rankings across all classification metrics
-
-    # region Training time analysis
-    # TODO
-    # endregion Training time analysis
-    # region External Baseline Comparison
-    # TODO
-    # endregion External Baseline Comparison
     print(f"Results saved in {RESULT_PATH}")

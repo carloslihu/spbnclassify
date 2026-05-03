@@ -34,8 +34,9 @@ def sci_fmt(x):
         return f"{x:.2f}"
 
 
-# Format both mean and std in each cell using sci_fmt
+
 def format_mean_std_cell(cell):
+    # Format both mean and std in each cell using sci_fmt
     if not isinstance(cell, str):
         return cell
 
@@ -332,8 +333,8 @@ def plot_critical_difference_diagram(
         None: The function saves the critical difference diagram as a PNG file.
     """
 
-    # Generate the critical difference diagram on the provided axis
     labels = list(model_name_dict.values())
+
     if not all(label in metric_matrix_df.columns for label in labels):
         print(
             "Warning: Not all model names from model_name_dict are present in metric_matrix_df columns. Skipping critical difference diagram."
@@ -355,6 +356,7 @@ def plot_critical_difference_diagram(
         )
         for label in labels
     }
+
     scores = metric_matrix_df[labels].values
 
     result = plot_critical_difference(
@@ -449,7 +451,6 @@ def plot_sp_structure_boxplot(
         - Saved image has 300 DPI for publication-quality output
         - If no SP models are found in the data, no plot is generated
     """
-    # Boxplot for SemiParametric models by Structure
     sp_parametric = "SP-"
     labels = []
     boxplot_data = []
@@ -636,7 +637,7 @@ def plot_time_complexity(
         "SP-NB",
         "SP-SNB",
         "SP-TAN",
-        "SP-AODE",  # keep in order to preserve color mapping
+        "SP-AODE",
         "SP-$k$DB",
         "SP-BAN",
         "SP-BM",
@@ -741,9 +742,6 @@ def bold_best_cell(row: pd.Series, lower_better: bool = False) -> pd.Series:
     Model_B                0.92 ± 0.03
     dtype: object
     """
-
-    # Bold the best mean $\\pm$ std cell in each row
-    # Extract means and stds from "mean $\\pm$ std" formatted strings
 
     stats = row.apply(parse_mean_std)
     means = stats.apply(lambda x: x[0])
