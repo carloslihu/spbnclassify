@@ -39,19 +39,18 @@ COMMAND="python3 grid_search.py \
     --n_splits 10 \
     --n_runs 5 \
     --max_workers 50"
-LOG_FILE="grid_search_complete.log"
+LOG_FILE="full-grid-search.log"
 
-# TODO: Parameterize datasets used
 # # Command for new datasets and models
 # COMMAND="python3 grid_search.py \
 #     -c \
-#     --experiment_name bnc_single \
+#     --experiment_name bnc_test \
 #     --data_source public \
-#     --dataset_name iris \
+#     --dataset_name algerian_forest_fires \
 #     --n_splits 10 \
-#     --n_runs 1 \
-#     --max_workers 25"
-# LOG_FILE="grid_search_single.log"
+#     --n_runs 5 \
+#     --max_workers 50"
+# LOG_FILE="grid-search-test.log"
 # endregion
 
 # region Command execution
