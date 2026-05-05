@@ -143,8 +143,12 @@ Use this space to show useful examples of how a project can be used. Additional 
 
 _For more examples, please refer to the [Documentation](https://example.com)_ -->
    ```sh
+   # To execute the experiments and obtain the results
    cd src
    bash full-grid-search.sh
+
+   # To obtain the aggregated results and comparisons
+   python compare_models.py
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
