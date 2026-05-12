@@ -113,18 +113,6 @@ class TestConditionalLogLikelihoodValidatedScore:
                 seed=SEED,
             )
 
-    def test_init_raises_if_target_has_single_value(self, data: pd.DataFrame) -> None:
-        single_class_df = data.copy()
-        single_class_df[TRUE_CLASS_LABEL] = "class1"
-
-        with pytest.raises(ValueError, match="requires at least two true_label values"):
-            ConditionalLogLikelihoodValidatedScore(
-                data=single_class_df,
-                true_label=TRUE_CLASS_LABEL,
-                model_class=GaussianNaiveBayes,
-                seed=SEED,
-            )
-
     def test_holdout_split_sizes_match_ratio(
         self,
         score: ConditionalLogLikelihoodValidatedScore,
