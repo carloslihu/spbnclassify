@@ -15,6 +15,7 @@ from ..utils.generic import safe_exp
 from .base import BaseMultiBayesianNetworkClassifier
 
 
+# RFE: Fix for when leaarning a BN with not enough samples per local BN
 class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
     bn_class = BayesianNetwork
 

@@ -776,24 +776,29 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         # Remove all existing arcs to avoid conflicts with the learned structure
         for source, target in self.arcs():
             self.remove_arc(source, target)
-            if self.graphic.existsArc(source, target):
-                self.graphic.eraseArc(source, target)
+            self.graphic.eraseArc(source, target)
 
         # We copy the nodes and node types
-        for node, new_type in node_types:
-            if not self.contains_node(node):
-                self.add_node(node)
-                if node not in self.graphic.names():  # type: ignore library
+        if isinstance(self.graphic, gum.BayesNet):
+            for node, new_type in node_types:
+                if not self.contains_node(node):
                     num_categories = node_num_categories_dict.get(node, 2)
+                    self.add_node(node)
                     self.graphic.add(node, num_categories)
-            self.set_node_type(node, new_type)
+                    # TODO: Adapt for CLG
+                self.set_node_type(node, new_type)
 
         # We copy the arcs
-        for source, target in arcs:
-            if not self.has_arc(source, target) and self.can_add_arc(source, target):
-                self.add_arc(source, target)
-                if not self.graphic.existsArc(source, target):
+        if isinstance(self.graphic, gum.BayesNet):
+            for source, target in arcs:
+                if self.can_add_arc(source, target):
+                    self.add_arc(source, target)
                     self.graphic.addArc(source, target)
+                else:
+                    print(
+                        f"Warning: Cannot add arc from {source} to {target} due to constraints. Skipping this arc."
+                    )
+        # TODO: Adapt for CLG
 
         # NOTE: Important to update the score_columns with the new structure
         self.score_columns = [n + "_score" for n in self.nodes()]
