@@ -6,6 +6,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import pyagrum as gum
+import pyagrum.clg as gclg
 import pyagrum.lib.image as gumimage
 import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
@@ -460,15 +461,29 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         """
         with open(model_file, "wb") as f:
             pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        self.graphic.saveBIFXML(str(model_file.with_suffix(".bifxml")))
+
         nodeColor = {
             node: NODE_TYPE_COLOR_MAP.get(node_type, 0.0)
             for node, node_type in self.node_types().items()
         }
+        bn_viz = None
+        if isinstance(self.graphic, gum.BayesNet):
+            self.graphic.saveBIFXML(str(model_file.with_suffix(".bifxml")))
+            bn_viz = self.graphic
+        elif isinstance(self.graphic, gclg.CLG):
+            gclg.SEM.saveCLG(self.graphic, str(model_file.with_suffix(".sem")))
+            # Create a BayesNet from CLG's structure for visualization
+            dag = self.graphic.dag()
+            bn_viz = gum.BayesNet()
+
+            # Map CLG node IDs to their names and create BayesNet structure
+            clg_names = self.graphic.names()
+            for node_id in dag.nodes():
+                bn_viz.add(clg_names[node_id])
+            for src, dst in dag.arcs():
+                bn_viz.addArc(clg_names[src], clg_names[dst])
         gumimage.export(
-            self.graphic,
-            str(model_file.with_suffix(".pdf")),
-            nodeColor=nodeColor,
+            bn_viz, str(model_file.with_suffix(".pdf")), nodeColor=nodeColor
         )
 
         # Store cpd strings for each node
@@ -488,7 +503,10 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         """
         with open(model_file, "rb") as f:
             return pickle.load(f)
-        self.graphic.loadBIFXML(str(model_file.with_suffix(".bifxml")))
+        if isinstance(self.graphic, gum.BayesNet):
+            self.graphic.loadBIFXML(str(model_file.with_suffix(".bifxml")))
+        elif isinstance(self.graphic, gclg.CLG):
+            self.graphic = gclg.SEM.loadCLG(str(model_file.with_suffix(".sem")))
 
     def _remove_zero_variance_nodes(
         self,
@@ -777,28 +795,24 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         for source, target in self.arcs():
             self.remove_arc(source, target)
             self.graphic.eraseArc(source, target)
-
+        # NOTE: Only "discrete nodes" are copied
         # We copy the nodes and node types
-        if isinstance(self.graphic, gum.BayesNet):
-            for node, new_type in node_types:
-                if not self.contains_node(node):
-                    num_categories = node_num_categories_dict.get(node, 2)
-                    self.add_node(node)
-                    self.graphic.add(node, num_categories)
-                    # TODO: Adapt for CLG
+        for node, new_type in node_types:
+            if not self.contains_node(node):
+                self.add_node(node)
                 self.set_node_type(node, new_type)
 
+                if isinstance(self.graphic, gum.BayesNet):  # General discrete BN
+                    num_categories = node_num_categories_dict.get(node, 2)
+                    var = gum.LabelizedVariable(node, node, num_categories)
+                    self.graphic.add(var)
+
         # We copy the arcs
-        if isinstance(self.graphic, gum.BayesNet):
-            for source, target in arcs:
-                if self.can_add_arc(source, target):
-                    self.add_arc(source, target)
+        for source, target in arcs:
+            if self.can_add_arc(source, target):
+                self.add_arc(source, target)
+                if isinstance(self.graphic, gum.BayesNet):  # General discrete BN
                     self.graphic.addArc(source, target)
-                else:
-                    print(
-                        f"Warning: Cannot add arc from {source} to {target} due to constraints. Skipping this arc."
-                    )
-        # TODO: Adapt for CLG
 
         # NOTE: Important to update the score_columns with the new structure
         self.score_columns = [n + "_score" for n in self.nodes()]

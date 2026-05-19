@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pyagrum.clg as gclg
 import pybnesian as pbn
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
@@ -107,6 +108,7 @@ class GaussianBayesianNetwork(
             true_label=true_label,
             prediction_label=prediction_label,
         )
+        self.graphic = gclg.CLG()
         self.joint_gaussian_ = {"mean": None, "cov": None}
 
     def __str__(self) -> str:
@@ -137,6 +139,21 @@ class GaussianBayesianNetwork(
     ) -> pbn.BayesianNetwork:
         data = pd.concat([X, y], axis=1)
         pbn.CLGNetwork.fit(self, data)
+        # NOTE: CLG nodes and arcs have to be added after the fit.
+        # Copies the nodes to the pyagrum graphic
+        for node in self.nodes():
+            cpd = self.cpd(node)
+            mu = cpd.beta[0]
+            std = np.sqrt(cpd.variance)
+            var = gclg.GaussianVariable(node, mu, std)
+            self.graphic.add(var)
+        # Copies the arcs to the pyagrum graphic
+        for source, target in self.arcs():
+            cpd = self.cpd(target)
+            parents = cpd.evidence()
+            parent_index = parents.index(source)
+            coef = cpd.beta[parent_index + 1]
+            self.graphic.addArc(source, target, coef)
         return self
 
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
