@@ -800,12 +800,11 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         for node, new_type in node_types:
             if not self.contains_node(node):
                 self.add_node(node)
-                self.set_node_type(node, new_type)
-
                 if isinstance(self.graphic, gum.BayesNet):  # General discrete BN
                     num_categories = node_num_categories_dict.get(node, 2)
                     var = gum.LabelizedVariable(node, node, num_categories)
                     self.graphic.add(var)
+            self.set_node_type(node, new_type)
 
         # We copy the arcs
         for source, target in arcs:

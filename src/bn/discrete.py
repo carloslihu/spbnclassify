@@ -491,10 +491,8 @@ class DiscreteBayesianNetwork(
             learner.addMandatoryArc(source, target)
 
         # Learn the structure and parameters
-        self.graphic = learner.learnBN()
-        bn = pbn.DiscreteBN(
-            nodes=list(self.graphic.names()), arcs=convert_arcs_to_names(self.graphic)  # type: ignore library
-        )
+        bn = learner.learnBN()
+        bn = pbn.DiscreteBN(nodes=list(bn.names()), arcs=convert_arcs_to_names(bn))
 
         return bn
 
