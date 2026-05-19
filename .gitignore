@@ -211,10 +211,11 @@ __marimo__/
 *.ipynb
 # *.sh
 *.bif
+*.bifxml
+*.sem
 *.pdf
 *.pkl
 *.txt
-*.bifxml
 
 # Ignore output directories
 src/out/
