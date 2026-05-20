@@ -537,12 +537,14 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
             for arc in self.arcs():
                 if arc[0] in removable_nodes or arc[1] in removable_nodes:
                     self.remove_arc(arc[0], arc[1])
-                    self.graphic.eraseArc(arc[0], arc[1])
-
+                    source_id = self.graphic.idFromName(arc[0])
+                    target_id = self.graphic.idFromName(arc[1])
+                    self.graphic.eraseArc(source_id, target_id)
             # Remove nodes
             for node in removable_nodes.intersection(self.nodes()):
                 self.remove_node(node)
-                self.graphic.erase(node)
+                node_id = self.graphic.idFromName(node)
+                self.graphic.erase(node_id)
 
             # Retain only arcs and types with valid nodes
             valid_nodes = set(self.feature_names_in_)
@@ -794,15 +796,19 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         # Remove all existing arcs to avoid conflicts with the learned structure
         for source, target in self.arcs():
             self.remove_arc(source, target)
-            self.graphic.eraseArc(source, target)
-        # NOTE: Only "discrete nodes" are copied
+            source_id = self.graphic.idFromName(source)
+            target_id = self.graphic.idFromName(target)
+            self.graphic.eraseArc(source_id, target_id)
         # We copy the nodes and node types
         for node, new_type in node_types:
             if not self.contains_node(node):
                 self.add_node(node)
-                if isinstance(self.graphic, gum.BayesNet):  # General discrete BN
+                if isinstance(self.graphic, gum.BayesNet):  # Discrete default variables
                     num_categories = node_num_categories_dict.get(node, 2)
                     var = gum.LabelizedVariable(node, node, num_categories)
+                    self.graphic.add(var)
+                elif isinstance(self.graphic, gclg.CLG):  # CLG default variables
+                    var = gclg.GaussianVariable(node, mu=0, sigma=1)
                     self.graphic.add(var)
             self.set_node_type(node, new_type)
 
@@ -810,9 +816,10 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         for source, target in arcs:
             if self.can_add_arc(source, target):
                 self.add_arc(source, target)
-                if isinstance(self.graphic, gum.BayesNet):  # General discrete BN
+                if isinstance(self.graphic, gum.BayesNet):  # Discrete default arcs
                     self.graphic.addArc(source, target)
-
+                elif isinstance(self.graphic, gclg.CLG):  # CLG default arcs
+                    self.graphic.addArc(source, target, coef=1)
         # NOTE: Important to update the score_columns with the new structure
         self.score_columns = [n + "_score" for n in self.nodes()]
 

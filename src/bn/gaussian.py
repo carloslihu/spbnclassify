@@ -175,6 +175,7 @@ class GaussianBayesianNetwork(
             with open(json_file_path, "w") as f:
                 json.dump(result_dict, f, indent=4)
         if pdf_file_path:
+            # RFE: Create one that shows the coefficients in the graphs
             gclgnb.exportInference(
                 clg=self.graphic,
                 filename=str(pdf_file_path),
@@ -183,14 +184,15 @@ class GaussianBayesianNetwork(
 
         return result_dict
 
-    def _copy_to_gum(self) -> None:
+    def _set_gum_params(self) -> None:
         # Copies the nodes to the pyagrum graphic
         for node in self.nodes():
             cpd = self.cpd(node)
             mu = cpd.beta[0]
             std = np.sqrt(cpd.variance)
-            var = gclg.GaussianVariable(node, mu, std)
-            self.graphic.add(var)
+            node_id = self.graphic.idFromName(node)
+            self.graphic.setMu(node_id, mu)
+            self.graphic.setSigma(node_id, std)
 
         # Copies the arcs to the pyagrum graphic
         for source, target in self.arcs():
@@ -198,7 +200,7 @@ class GaussianBayesianNetwork(
             parents = cpd.evidence()
             parent_index = parents.index(source)
             coef = cpd.beta[parent_index + 1]
-            self.graphic.addArc(source, target, coef)
+            self.graphic.setCoef(source, target, coef)
 
     def _fit_parameters(
         self, X: pd.DataFrame, y: pd.Series | None = None
@@ -206,7 +208,7 @@ class GaussianBayesianNetwork(
         data = pd.concat([X, y], axis=1)
         pbn.CLGNetwork.fit(self, data)
         # NOTE: CLG nodes and arcs have to be added after the fit.
-        self._copy_to_gum()
+        self._set_gum_params()
         return self
 
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
