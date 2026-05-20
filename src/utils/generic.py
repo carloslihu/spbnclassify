@@ -9,7 +9,7 @@ import pyagrum as gum
 def convert_arcs_to_names(bn: gum.BayesNet) -> list[tuple[str, str]]:
     """Convert arcs from node IDs to variable names"""
     arcs_with_names = []
-    for source_id, target_id in bn.arcs():  # type: ignore library
+    for source_id, target_id in bn.arcs():
         source_name = bn.variable(source_id).name()
         target_name = bn.variable(target_id).name()
         arcs_with_names.append((source_name, target_name))

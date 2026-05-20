@@ -92,7 +92,7 @@ def get_near_zero_variance_variables(
 
     removable_variables = variance_threshold(
         X,
-        features=input_variables,  # type: ignore library issue
+        features=input_variables,
         freq_cut=freq_cut,
         unique_cut=unique_cut,
     )

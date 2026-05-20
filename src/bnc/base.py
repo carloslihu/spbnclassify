@@ -461,7 +461,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         # Structural Comparison
         nodes1 = bn1.nodes()
         nodes2 = bn2.nodes()
-        shared_nodes_list = list(graph1.names())  # type: ignore library
+        shared_nodes_list = list(graph1.names())
 
         # We compare the shared nodes
         nd = node_presence_distance(nodes1, nodes2)
