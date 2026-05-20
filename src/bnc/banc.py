@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pyagrum.clg as gclg
 import pybnesian as pbn
 
 from ..bn import (
@@ -114,6 +115,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes_=classes_,
             weights_=weights_,
         )
+        self.graphic_dict = {}
 
     def __str__(self) -> str:
         """Returns the string representation of the Gaussian Bayesian Network
@@ -126,6 +128,26 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
     # TODO: Implement GBNC specific method
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
         return {}
+
+    def _set_gum_params(self) -> None:
+        # Copies the nodes to each class-specific pyagrum graphic
+        for class_value in self.classes_:
+            self.graphic_dict[class_value] = gclg.CLG()
+            for node in self.nodes():
+                cpd = self.conditional_factor(node, class_value)
+                if cpd.type() == pbn.LinearGaussianCPDType():
+                    mu = cpd.beta[0]
+                    std = np.sqrt(cpd.variance)
+                    var = gclg.GaussianVariable(node, mu, std)
+                    self.graphic_dict[class_value].add(var)
+
+            # Copies the arcs to the pyagrum graphic
+            for source, target in self.arcs():
+                cpd = self.conditional_factor(target, class_value)
+                parents = cpd.evidence()
+                parent_index = parents.index(source)
+                coef = cpd.beta[parent_index + 1]
+                self.graphic.addArc(source, target, coef)
 
 
 class SemiParametricBayesianNetworkAugmentedNaiveBayes(
