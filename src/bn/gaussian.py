@@ -1,6 +1,10 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
+import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
@@ -134,12 +138,52 @@ class GaussianBayesianNetwork(
         self.joint_gaussian_ = self._get_joint_gaussian()
         return self
 
-    def _fit_parameters(
-        self, X: pd.DataFrame, y: pd.Series | None = None
-    ) -> pbn.BayesianNetwork:
-        data = pd.concat([X, y], axis=1)
-        pbn.CLGNetwork.fit(self, data)
-        # NOTE: CLG nodes and arcs have to be added after the fit.
+    def infer(
+        self,
+        evidence: dict[str, float] = {},
+        json_file_path: Path | None = None,
+        pdf_file_path: Path | None = None,
+    ) -> dict[str, dict]:
+        """
+        Performs inference on the Bayesian network using the provided evidence and target nodes.
+        Args:
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+        Returns:
+            dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
+        """
+        ie = gclg.CLGVariableElimination(self.graphic)
+        ie.updateEvidence(evidence)
+
+        result_dict = {}
+        result_dict["structure"] = list(self.graphic.arcs())
+        result_dict["parameters"] = {}
+        for var_id, variable_name in enumerate(self.graphic.names()):
+            post = ie.posterior(variable_name)
+            result_dict["parameters"][var_id] = {
+                "variable_name": variable_name,
+                "probabilities": {
+                    "name": variable_name,
+                    "mean": post.mu(),
+                    "std": post.sigma(),
+                },
+            }
+
+        # export results
+        if json_file_path:
+            with open(json_file_path, "w") as f:
+                json.dump(result_dict, f, indent=4)
+        if pdf_file_path:
+            gclgnb.exportInference(
+                clg=self.graphic,
+                filename=str(pdf_file_path),
+                evs=evidence,
+            )
+
+        return result_dict
+
+    def _copy_to_gum(self) -> None:
         # Copies the nodes to the pyagrum graphic
         for node in self.nodes():
             cpd = self.cpd(node)
@@ -147,6 +191,7 @@ class GaussianBayesianNetwork(
             std = np.sqrt(cpd.variance)
             var = gclg.GaussianVariable(node, mu, std)
             self.graphic.add(var)
+
         # Copies the arcs to the pyagrum graphic
         for source, target in self.arcs():
             cpd = self.cpd(target)
@@ -154,6 +199,14 @@ class GaussianBayesianNetwork(
             parent_index = parents.index(source)
             coef = cpd.beta[parent_index + 1]
             self.graphic.addArc(source, target, coef)
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        data = pd.concat([X, y], axis=1)
+        pbn.CLGNetwork.fit(self, data)
+        # NOTE: CLG nodes and arcs have to be added after the fit.
+        self._copy_to_gum()
         return self
 
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:

@@ -147,16 +147,17 @@ class DiscreteBayesianNetwork(
     def infer(
         self,
         evidence: dict[str, float] = {},
-        file_path: Path | None = None,
+        json_file_path: Path | None = None,
+        pdf_file_path: Path | None = None,
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence and target nodes.
         Args:
-            evidence (dict[str, pydot.Dot], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
-            targets (set[str], optional): A set of node names for which to compute the inference results. Defaults to an empty set.
-            file_path (Path | None, optional): If provided, exports the HTML inference results to this file.
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
         Returns:
-            str: An HTML string representing the inference results.
+            dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
         """
         ie = gum.LazyPropagation(self.graphic)
         ie.setEvidence(evidence)
@@ -164,16 +165,13 @@ class DiscreteBayesianNetwork(
         # Calculate the posterior distribution for all variables given the evidence
         ie.makeInference()
 
-        # MPE (Most Probable Explanation)
-        mpe, mpe_log_prob = ie.mpeLog2Posterior()
-        # print(
-        #     f"The most probable explanation for observation {evidence} is \n - the configuration {mpe} \n - for a log probability of {mpe_log_prob:.6f}"
-        # )
+        # Most Probable Explanation (MPE) given the {evidence}: the configuration {mpe} that maximizes the posterior probability and its log probability {mpe_log_prob}
+        # mpe, mpe_log_prob = ie.mpeLog2Posterior()
 
         result_dict = {}
-        result_dict["structure"] = list(self.graphic.arcs())  # type: ignore library
+        result_dict["structure"] = list(self.graphic.arcs())
         result_dict["parameters"] = {}
-        for var_id, variable_name in enumerate(self.graphic.names()):  # type: ignore library
+        for var_id, variable_name in enumerate(self.graphic.names()):
             var = self.graphic.variable(variable_name)
             labels = var.labels()
 
@@ -182,12 +180,14 @@ class DiscreteBayesianNetwork(
                 "variable_name": variable_name,
                 "probabilities": dict(zip(labels, post.tolist())),
             }
-        if file_path:
-            with open(file_path.with_suffix(".json"), "w") as f:
+        # export results
+        if json_file_path:
+            with open(json_file_path, "w") as f:
                 json.dump(result_dict, f, indent=4)
+        if pdf_file_path:
             gumimage.exportInference(
                 model=self.graphic,
-                filename=str(file_path.with_suffix(".pdf")),
+                filename=str(pdf_file_path),
                 engine=ie,
                 evs=evidence,
             )
@@ -237,7 +237,7 @@ class DiscreteBayesianNetwork(
         node_shapvalue_dict = conditionalExplanation.importances
 
         if target_value is not None:
-            explnb.beeswarm(explanation=conditionalExplanation, y=target_value)  # type: ignore library
+            explnb.beeswarm(explanation=conditionalExplanation, y=target_value)
             if file_path:
                 plt.savefig(
                     file_path.parent / f"{file_path.stem}_beeswarm.png",
@@ -245,7 +245,7 @@ class DiscreteBayesianNetwork(
                     dpi=300,
                 )
                 plt.close()
-            explnb.showShapValues(self.graphic, conditionalExplanation, y=target_value)  # type: ignore library
+            explnb.showShapValues(self.graphic, conditionalExplanation, y=target_value)
             # TODO: This graph is not saved
             # if file_path:
             #     plt.savefig(
@@ -256,10 +256,10 @@ class DiscreteBayesianNetwork(
             #     plt.close()
             # TODO: local explanations
             # Local explanations
-            # explnb.waterfall(explanation=localExpl, y=target_value)  # type: ignore library
+            # explnb.waterfall(explanation=localExpl, y=target_value)
             # Global explanations
         # Local/Global explanations
-        explnb.bar(explanation=conditionalExplanation, y=target_value)  # type: ignore library
+        explnb.bar(explanation=conditionalExplanation, y=target_value)
         if file_path:
             plt.savefig(
                 file_path.parent / f"{file_path.stem}_bar.png",
