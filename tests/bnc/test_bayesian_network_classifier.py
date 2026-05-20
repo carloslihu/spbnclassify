@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
@@ -60,6 +62,21 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
             "b": pbn.LinearGaussianCPDType(),
             "c": pbn.LinearGaussianCPDType(),
         }
+
+    def test_infer(self, bn: BaseBayesianNetworkClassifier, tmp_path: Path):
+        """Test the infer method."""
+        evidence = {"a": 0, "b": 1}
+        json_file_path = tmp_path / "infer_result.json"
+        pdf_file_path = tmp_path / "infer_result.pdf"
+        result_dict = bn.infer(
+            evidence=evidence,
+            json_file_path=json_file_path,
+            pdf_file_path=pdf_file_path,
+        )
+        assert isinstance(result_dict, dict)
+        assert json_file_path.exists()
+        # TODO: Add later
+        # assert pdf_file_path.exists()
 
 
 class BaseTestSemiParametricBayesianNetworkClassifier(

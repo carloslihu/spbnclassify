@@ -1,6 +1,10 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
+import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
 
 from ..bn import (
@@ -115,6 +119,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes_=classes_,
             weights_=weights_,
         )
+        # RFE: Representar self.graphic como modelo marginalizado?
         self.graphic_dict = {}
 
     def __str__(self) -> str:
@@ -124,6 +129,78 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             str: The string representation
         """
         return "Gaussian " + BayesianNetworkAugmentedNaiveBayes.__str__(self)
+
+    def infer(
+        self,
+        evidence: dict[str, float] = {},
+        json_file_path: Path | None = None,
+        pdf_file_path: Path | None = None,
+    ) -> dict[str, dict]:
+        """
+        Performs inference on the Bayesian network using the provided evidence and target nodes.
+        Args:
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+        Returns:
+            dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
+        """
+        result_dict = {}
+        result_dict["structure"] = list(self.graphic.arcs())
+        result_dict["parameters"] = {}
+        # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
+        for class_value in self.classes_:
+            result_dict["parameters"][class_value] = {}
+            ie = gclg.CLGVariableElimination(self.graphic_dict[class_value])
+            ie.updateEvidence(evidence)
+
+            for var_id, variable_name in enumerate(
+                self.graphic_dict[class_value].names()
+            ):
+                # If the variable is in the evidence, we directly use the evidence value as the posterior.
+                if variable_name in evidence:
+                    post = gclg.GaussianVariable(
+                        variable_name, evidence[variable_name], 0
+                    )
+                # If the variable is not in the evidence, we perform inference to get the posterior distribution.
+                else:
+                    posterior_cf = ie.canonicalPosterior([variable_name])
+                    # If the posterior is a Gaussian, we extract the mean and variance to create a GaussianVariable. If the posterior is a scalar (which can happen in disconnected graphs), we directly get the variable from the graphic.
+                    if hasattr(posterior_cf, "toGaussian"):
+                        _, mu, var = posterior_cf.toGaussian()
+                        post = gclg.GaussianVariable(variable_name, mu, np.sqrt(var))
+                    else:
+                        post = self.graphic_dict[class_value].variable(variable_name)
+
+                result_dict["parameters"][class_value][var_id] = {
+                    "variable_name": variable_name,
+                    "probabilities": {
+                        "name": variable_name,
+                        "mean": post.mu(),
+                        "std": post.sigma(),
+                    },
+                }
+        # TODO: Marginalization
+        # export results
+        if json_file_path:
+            with open(json_file_path, "w") as f:
+                json.dump(result_dict, f, indent=4)
+        # TODO: Add a version marginalizing the CLG with the evidence and export that one instead of the original CLG.
+        # if pdf_file_path and self.classes_:
+        #     # RFE: Create one that shows the coefficients in the graphs.
+        #     # We export one representative class-specific CLG.
+        #     try:
+        #         gclgnb.exportInference(
+        #             clg=self.graphic_dict[self.classes_[0]],
+        #             filename=str(pdf_file_path),
+        #             evs=evidence,
+        #         )
+        #     except AttributeError:
+        #         # pyAgrum can fail to export inference on disconnected graphs.
+        #         # Keep API compatibility by at least materializing the target file.
+        #         pdf_file_path.touch(exist_ok=True)
+
+        return result_dict
 
     # TODO: Implement GBNC specific method
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
@@ -143,11 +220,12 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
             # Copies the arcs to the pyagrum graphic
             for source, target in self.arcs():
-                cpd = self.conditional_factor(target, class_value)
-                parents = cpd.evidence()
-                parent_index = parents.index(source)
-                coef = cpd.beta[parent_index + 1]
-                self.graphic.addArc(source, target, coef)
+                if source != TRUE_CLASS_LABEL:
+                    cpd = self.conditional_factor(target, class_value)
+                    parents = cpd.evidence()
+                    parent_index = parents.index(source)
+                    coef = cpd.beta[parent_index + 1]
+                    self.graphic_dict[class_value].addArc(source, target, coef)
 
 
 class SemiParametricBayesianNetworkAugmentedNaiveBayes(
