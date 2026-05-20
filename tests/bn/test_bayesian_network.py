@@ -450,6 +450,8 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         assert json_file_path.exists()
         assert pdf_file_path.exists()
 
+    # TODO: Test that checks that the self and self.graphic have the same structure and parameters
+
 
 class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = KDEBayesianNetwork

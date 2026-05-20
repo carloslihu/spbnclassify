@@ -244,9 +244,9 @@ class BaseBayesianNetworkClassifier(BayesianNetwork):
     ) -> pbn.BayesianNetwork:
         if y is None:
             raise ValueError("y must be set")
-        super()._fit_parameters(X, y)
         self.classes_ = sorted(y.unique())
         self.weights_ = y.value_counts(normalize=True).sort_index()
+        super()._fit_parameters(X, y)
         return self
 
 
