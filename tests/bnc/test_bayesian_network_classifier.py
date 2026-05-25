@@ -5,6 +5,7 @@ import pandas as pd
 import pybnesian as pbn
 from bn import BaseTestBayesianNetwork
 from helpers.data import (
+    BN_SAVE_FOLDER_PATH,
     TRUE_CLASS_LABEL,
     generate_discrete_data_classification,
     generate_non_normal_data_classification,
@@ -65,9 +66,18 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
 
     def test_infer(self, bn: BaseBayesianNetworkClassifier, tmp_path: Path):
         """Test the infer method."""
-        evidence = {"a": 0, "b": 1}
-        json_file_path = tmp_path / "infer_result.json"
-        pdf_file_path = tmp_path / "infer_result.pdf"
+        evidence = {"b": 1}
+        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.json"
+        )
+        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.pdf"
+        )
+
+        # Clean up any existing files before the test
+        json_file_path.unlink(missing_ok=True)
+        pdf_file_path.unlink(missing_ok=True)
+
         result_dict = bn.infer(
             evidence=evidence,
             json_file_path=json_file_path,
@@ -75,7 +85,6 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
         )
         assert isinstance(result_dict, dict)
         assert json_file_path.exists()
-        # TODO: Add later
         # assert pdf_file_path.exists()
 
 

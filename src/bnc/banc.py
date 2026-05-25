@@ -337,7 +337,8 @@ class SemiParametricBayesianNetworkAugmentedNaiveBayes(
         """
         return "SemiParametric " + BayesianNetworkAugmentedNaiveBayes.__str__(self)
 
-    # RFE: Refactor Inheritance
+    # TODO: Add method to bn.base and other parametric and nonparametric families
+    # TODO: Add tests
     @classmethod
     def generate(cls, seed) -> BayesianNetworkAugmentedNaiveBayes:
         bn = cls(

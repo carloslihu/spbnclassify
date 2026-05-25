@@ -184,6 +184,7 @@ class BaseTestBayesianNetwork:
     def test_initialization(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
         """Generic initialization test that uses get_expected_arcs and get_expected_node_types."""
         assert set(bn.nodes()) == set(data.columns)
+
         if self.expected_bn_type_key:
             expected_type = self.EXPECTED_BN_TYPES[self.expected_bn_type_key]
             assert bn.bn_type == expected_type
@@ -212,6 +213,15 @@ class BaseTestBayesianNetwork:
                 max(indegree_count.values()) - 1
             )  # Don't count class variable
             assert max_indegree <= bn.max_indegree
+
+        # TODO: Check that parameters are the same for Discrete and CLG
+        # Check that the bn and its pyagrum graphic are consistent in terms of nodes and arcs
+        graphic_arcs_named = {
+            (bn.graphic.variable(source).name(), bn.graphic.variable(target).name())
+            for source, target in bn.graphic.arcs()
+        }
+        assert set(bn.nodes()) == set(bn.graphic.names())
+        assert set(bn.arcs()) == graphic_arcs_named
 
     # def test_str(self, bn: BaseBayesianNetworkClassifier) -> None:
     #     """Generic string test that uses str_representation."""
@@ -301,11 +311,6 @@ class BaseTestBayesianNetwork:
         bn.save(graph_file)
         assert graph_file.exists()
 
-    # TODO: Implement this
-    def test_generate(self) -> None:
-        """Test the generate method of the Bayesian Network Classifier."""
-        return
-
     # TODO: Add later
     # def test_feature_logl(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
     #     """Test the feature_logl method of the Bayesian Network.
@@ -393,11 +398,20 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: BayesianNetwork, tmp_path: Path):
+    def test_infer(self, bn: BayesianNetwork):
         """Test the infer method."""
-        evidence = {"a": 0, "b": 1}
-        json_file_path = tmp_path / "infer_result.json"
-        pdf_file_path = tmp_path / "infer_result.pdf"
+        evidence = {"b": 1}
+        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.json"
+        )
+        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.pdf"
+        )
+
+        # Clean up any existing files before the test
+        json_file_path.unlink(missing_ok=True)
+        pdf_file_path.unlink(missing_ok=True)
+
         result_dict = bn.infer(
             evidence=evidence,
             json_file_path=json_file_path,
@@ -436,11 +450,20 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: BayesianNetwork, tmp_path: Path):
+    def test_infer(self, bn: BayesianNetwork):
         """Test the infer method."""
-        evidence = {"a": 0, "b": 1}
-        json_file_path = tmp_path / "infer_result.json"
-        pdf_file_path = tmp_path / "infer_result.pdf"
+        evidence = {"b": 1}
+        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.json"
+        )
+        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.pdf"
+        )
+
+        # Clean up any existing files before the test
+        json_file_path.unlink(missing_ok=True)
+        pdf_file_path.unlink(missing_ok=True)
+
         result_dict = bn.infer(
             evidence=evidence,
             json_file_path=json_file_path,
@@ -449,8 +472,6 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         assert isinstance(result_dict, dict)
         assert json_file_path.exists()
         assert pdf_file_path.exists()
-
-    # TODO: Test that checks that the self and self.graphic have the same structure and parameters
 
 
 class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
