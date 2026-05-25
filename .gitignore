@@ -219,3 +219,4 @@ __marimo__/
 
 # Ignore output directories
 src/out/
+tests/helpers/models/
