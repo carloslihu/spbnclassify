@@ -148,6 +148,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         result_dict = {}
         result_dict["structure"] = list(self.graphic.arcs())
         result_dict["parameters"] = {}
+
         # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
         for class_value in self.classes_:
             result_dict["parameters"][class_value] = {}
@@ -171,14 +172,11 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
                         post = gclg.GaussianVariable(variable_name, mu, np.sqrt(var))
                     else:
                         post = self.graphic_dict[class_value].variable(variable_name)
-
+                mu = post.mu()
+                std = post.sigma()
                 result_dict["parameters"][class_value][var_id] = {
                     "variable_name": variable_name,
-                    "probabilities": {
-                        "name": variable_name,
-                        "mean": post.mu(),
-                        "std": post.sigma(),
-                    },
+                    "probabilities": {"name": variable_name, "mean": mu, "std": std},
                 }
         # TODO: Marginalization
         # export results
