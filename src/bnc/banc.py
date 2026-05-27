@@ -230,14 +230,30 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
         return infer_dict
 
-    # TODO: Take into account if class_value is in evidence (simpler)
-    # TODO: Think if it makes sense to handle multiple query_vars?
     def posterior(
         self,
         query_var: str,
         evidence: dict[str, float],
         point: pd.Series,
     ) -> float:
+        """
+        Compute the posterior probability of a query variable given evidence.
+
+        This method calculates P(X | E) by marginalizing over the classes,
+        using the posterior distributions obtained from inference.
+
+        Args:
+            query_var: The variable to query (must be a subset of graph nodes).
+            evidence: Dictionary of evidence variables and their values (must be subset of graph nodes).
+            point: A pandas Series containing the point value for the query variable to evaluate.
+
+        Returns:
+            float: The posterior probability P(X | E) evaluated at the given point.
+
+        Raises:
+            ValueError: If query_var or evidence variables are not in the graph,
+                or if query_var and evidence share common variables.
+        """
         if not set(query_var).issubset(set(self.nodes())):
             raise ValueError(
                 "Query variables must be a subset of the nodes in the graph."
@@ -248,10 +264,16 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             )
         if set(evidence.keys()).intersection(set(query_var)):
             raise ValueError("Query variables and evidence variables must be disjoint.")
+        if self.true_label in evidence:
+            classes = [evidence[self.true_label]]
+            # Remove self.true_label from evidence
+            evidence = {k: v for k, v in evidence.items() if k != self.true_label}
+        else:  # If the class variable is not in the evidence, we need to marginalize over the classes to compute P(X | E).
+            classes = self.classes_
 
         infer_dict = self.infer(evidence=evidence)
         prob_x_given_e = 0
-        for class_value in self.classes_:
+        for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
             # for query_var in query_vars:
             variable_posterior = infer_dict["parameters"][class_value][query_var][

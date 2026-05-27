@@ -105,8 +105,14 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
             evidence=evidence,
             point=point,
         )
+        prob_c_given_e_class1 = bn.posterior(
+            query_var="c",
+            evidence={"b": 1, TRUE_CLASS_LABEL: "class1"},
+            point=point,
+        )
         assert prob_a_given_e >= 0
         assert prob_c_given_e >= 0
+        assert prob_c_given_e_class1 >= 0
 
 
 class BaseTestSemiParametricBayesianNetworkClassifier(
