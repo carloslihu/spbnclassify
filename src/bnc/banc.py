@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
-import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
+from scipy.stats import norm
 
 from ..bn import (
     GaussianBayesianNetwork,
@@ -20,6 +20,7 @@ from ..utils.constants import (
     PROB_GAUSSIAN,
     TRUE_CLASS_LABEL,
 )
+from ..utils.generic import safe_exp
 from .base import BaseBayesianNetworkClassifier
 from .probabilistic_model import FixedCLG, FixedDiscreteFactor, NormalMixtureCPD
 
@@ -130,6 +131,35 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         """
         return "Gaussian " + BayesianNetworkAugmentedNaiveBayes.__str__(self)
 
+    def _class_posterior_from_evidence(
+        self, evidence: dict[str, float]
+    ) -> dict[str, float]:
+        """Compute P(C | E) for every class using Bayes theorem.
+
+        The implementation builds a log-likelihood matrix where each row is a class and
+        each column is an evidence variable. The posterior is then computed as:
+
+            P(C = k | E) = P(C = k) * ∏_m P(E_m | C = k) / P(E)
+        """
+        # log P(C = k) is given by the class weights
+        log_scores = np.log(self.weights_)
+
+        for class_index, class_value in enumerate(self.classes_):
+            bn = self.graphic_dict[class_value]
+            for variable_name, observed_value in evidence.items():
+                variable = bn.variable(variable_name)
+                # log P(E_m | C = k)
+                log_prob_e_given_c = norm.logpdf(
+                    observed_value, loc=variable.mu(), scale=variable.sigma()
+                )
+                log_scores[class_index] += log_prob_e_given_c
+
+        posterior = safe_exp(log_scores)
+        posterior_sum = posterior.sum()
+        posterior /= posterior_sum
+
+        return dict(zip(self.classes_, posterior))
+
     def infer(
         self,
         evidence: dict[str, float] = {},
@@ -145,19 +175,18 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         Returns:
             dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
         """
-        result_dict = {}
-        result_dict["structure"] = list(self.graphic.arcs())
-        result_dict["parameters"] = {}
+        infer_dict = {}
+        infer_dict["structure"] = list(self.graphic.arcs())
+        infer_dict["parameters"] = {"evidence": evidence}
 
         # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
         for class_value in self.classes_:
-            result_dict["parameters"][class_value] = {}
-            ie = gclg.CLGVariableElimination(self.graphic_dict[class_value])
+            infer_dict["parameters"][class_value] = {}
+            bn = self.graphic_dict[class_value]
+            ie = gclg.CLGVariableElimination(bn)
             ie.updateEvidence(evidence)
 
-            for var_id, variable_name in enumerate(
-                self.graphic_dict[class_value].names()
-            ):
+            for var_id, variable_name in enumerate(bn.names()):
                 # If the variable is in the evidence, we directly use the evidence value as the posterior.
                 if variable_name in evidence:
                     post = gclg.GaussianVariable(
@@ -174,16 +203,39 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
                         post = self.graphic_dict[class_value].variable(variable_name)
                 mu = post.mu()
                 std = post.sigma()
-                result_dict["parameters"][class_value][var_id] = {
+                infer_dict["parameters"][class_value][var_id] = {
                     "variable_name": variable_name,
-                    "probabilities": {"name": variable_name, "mean": mu, "std": std},
+                    "probabilities": {"mean": mu, "std": std},
                 }
+        # TODO: Save output as GMM model parameters with
+        prob_c_given_e = self._class_posterior_from_evidence(evidence)
+        for class_value in self.classes_:
+            infer_dict["parameters"][class_value]["prob_c_given_e"] = prob_c_given_e[
+                class_value
+            ]
+        # prob_max_x_given_c = {}
+        # for variable_name in self.feature_names_in_:
+        #     prob_max_x_given_c[variable_name] = 0
+        #     for class_value in self.classes_:
+        #         variable = self.graphic_dict[class_value].variable(variable_name)
+        #         mu = variable.mu()
+        #         std = variable.sigma()
+        #         prob_max_x_given_c[variable_name] += prob_c_given_e[
+        #             class_value
+        #         ] * norm.pdf(variable.mu(), loc=mu, scale=std)
+
+        # TODO: I have calculated the prob_max_x_given_e, but the problem is that this is like a mixture, therefore, I do not know what I want to do with this?
+        # mpe = max(prob_max_x_given_c, key=prob_max_x_given_c.get)
+        # TODO: Calculate inference value or the most probable explanation probability?
+
         # TODO: Marginalization
+
         # export results
         if json_file_path:
             with open(json_file_path, "w") as f:
-                json.dump(result_dict, f, indent=4)
-        # TODO: Add a version marginalizing the CLG with the evidence and export that one instead of the original CLG.
+                json.dump(infer_dict, f, indent=4)
+        # TODO: Add self.graphic pdf file
+        # TODO: Add a version marginalizing the CLG with the evidence  and export that one instead of the original CLG.
         # if pdf_file_path and self.classes_:
         #     # RFE: Create one that shows the coefficients in the graphs.
         #     # We export one representative class-specific CLG.
