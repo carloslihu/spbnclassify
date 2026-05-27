@@ -85,7 +85,28 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
         )
         assert isinstance(result_dict, dict)
         assert json_file_path.exists()
-        # assert pdf_file_path.exists()
+        # for class_value in bn.classes_:
+        #     output_file = pdf_file_path.with_name(
+        #         f"{pdf_file_path.stem}_{class_value}.pdf"
+        #     )
+        #     assert output_file.exists()
+
+    def test_posterior(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
+        """Test the posterior method."""
+        evidence = {"b": 1}
+        point = data.iloc[0]
+        prob_a_given_e = bn.posterior(
+            query_var="a",
+            evidence=evidence,
+            point=point,
+        )
+        prob_c_given_e = bn.posterior(
+            query_var="c",
+            evidence=evidence,
+            point=point,
+        )
+        assert prob_a_given_e >= 0
+        assert prob_c_given_e >= 0
 
 
 class BaseTestSemiParametricBayesianNetworkClassifier(

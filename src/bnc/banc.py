@@ -185,7 +185,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             ie = gclg.CLGVariableElimination(bn)
             ie.updateEvidence(evidence)
 
-            for var_id, variable_name in enumerate(bn.names()):
+            for variable_name in bn.names():
                 # If the variable is in the evidence, we directly use the evidence value as the posterior.
                 if variable_name in evidence:
                     post = gclg.GaussianVariable(
@@ -202,7 +202,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
                         post = self.graphic_dict[class_value].variable(variable_name)
                 mu = post.mu()
                 std = post.sigma()
-                infer_dict["parameters"][class_value][var_id] = {
+                infer_dict["parameters"][class_value][variable_name] = {
                     "variable_name": variable_name,
                     "probabilities": {"mean": mu, "std": std},
                 }
@@ -216,35 +216,55 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         if json_file_path:
             with open(json_file_path, "w") as f:
                 json.dump(infer_dict, f, indent=4)
-        if pdf_file_path:
-            for class_value in self.classes_:
-                gclgnb.exportInference(
-                    clg=self.graphic_dict[class_value],
-                    filename=str(pdf_file_path.with_suffix(f"_{class_value}.pdf")),
-                    evs=evidence,
-                )
+        # TODO: Fix bug with export inference because of sparse graph?
+        # if pdf_file_path:
+        #     for class_value in self.classes_:
+        #         output_file = pdf_file_path.with_name(
+        #             f"{pdf_file_path.stem}_{class_value}.pdf"
+        #         )
+        #         gclgnb.exportInference(
+        #             clg=self.graphic_dict[class_value],
+        #             filename=str(output_file),
+        #             evs=evidence,
+        #         )
 
         return infer_dict
 
-    # TODO: This function should use infer and then calculate the posterior of a point given evidence
     # TODO: Take into account if class_value is in evidence (simpler)
+    # TODO: Think if it makes sense to handle multiple query_vars?
     def posterior(
         self,
+        query_var: str,
         evidence: dict[str, float],
         point: pd.Series,
-    ):
-        # prob_max_x_given_c = {}
-        # for variable_name in self.feature_names_in_:
-        #     prob_max_x_given_c[variable_name] = 0
-        #     for class_value in self.classes_:
-        #         variable = self.graphic_dict[class_value].variable(variable_name)
-        #         mu = variable.mu()
-        #         std = variable.sigma()
-        #         prob_max_x_given_c[variable_name] += prob_c_given_e[
-        #             class_value
-        #         ] * norm.pdf(variable.mu(), loc=mu, scale=std)
-        # mpe = max(prob_max_x_given_c, key=prob_max_x_given_c.get)
-        pass
+    ) -> float:
+        if not set(query_var).issubset(set(self.nodes())):
+            raise ValueError(
+                "Query variables must be a subset of the nodes in the graph."
+            )
+        if not set(evidence.keys()).issubset(set(self.nodes())):
+            raise ValueError(
+                "Evidence variables must be a subset of the nodes in the graph."
+            )
+        if set(evidence.keys()).intersection(set(query_var)):
+            raise ValueError("Query variables and evidence variables must be disjoint.")
+
+        infer_dict = self.infer(evidence=evidence)
+        prob_x_given_e = 0
+        for class_value in self.classes_:
+            prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
+            # for query_var in query_vars:
+            variable_posterior = infer_dict["parameters"][class_value][query_var][
+                "probabilities"
+            ]
+            mu = variable_posterior["mean"]
+            std = variable_posterior["std"]
+            # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
+            prob_x_given_c_e = norm.pdf(point[query_var], loc=mu, scale=std)
+            # We can then calculate P(X | E) by marginalizing over the classes:
+            # P(X | E) = ∑_k P(X | C = k, E) * P(C = k | E)
+            prob_x_given_e += prob_x_given_c_e * prob_c_given_e
+        return prob_x_given_e
 
     # TODO: Calculate inference value or the most probable explanation probability?
 
