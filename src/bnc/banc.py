@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
+import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
 from scipy.stats import norm
 
@@ -120,7 +121,6 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes_=classes_,
             weights_=weights_,
         )
-        # RFE: Representar self.graphic como modelo marginalizado?
         self.graphic_dict = {}
 
     def __str__(self) -> str:
@@ -178,7 +178,6 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         infer_dict = {}
         infer_dict["structure"] = list(self.graphic.arcs())
         infer_dict["parameters"] = {"evidence": evidence}
-
         # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
         for class_value in self.classes_:
             infer_dict["parameters"][class_value] = {}
@@ -207,12 +206,33 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
                     "variable_name": variable_name,
                     "probabilities": {"mean": mu, "std": std},
                 }
-        # TODO: Save output as GMM model parameters with
         prob_c_given_e = self._class_posterior_from_evidence(evidence)
         for class_value in self.classes_:
             infer_dict["parameters"][class_value]["prob_c_given_e"] = prob_c_given_e[
                 class_value
             ]
+
+        # export results
+        if json_file_path:
+            with open(json_file_path, "w") as f:
+                json.dump(infer_dict, f, indent=4)
+        if pdf_file_path:
+            for class_value in self.classes_:
+                gclgnb.exportInference(
+                    clg=self.graphic_dict[class_value],
+                    filename=str(pdf_file_path.with_suffix(f"_{class_value}.pdf")),
+                    evs=evidence,
+                )
+
+        return infer_dict
+
+    # TODO: This function should use infer and then calculate the posterior of a point given evidence
+    # TODO: Take into account if class_value is in evidence (simpler)
+    def posterior(
+        self,
+        evidence: dict[str, float],
+        point: pd.Series,
+    ):
         # prob_max_x_given_c = {}
         # for variable_name in self.feature_names_in_:
         #     prob_max_x_given_c[variable_name] = 0
@@ -223,34 +243,10 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         #         prob_max_x_given_c[variable_name] += prob_c_given_e[
         #             class_value
         #         ] * norm.pdf(variable.mu(), loc=mu, scale=std)
-
-        # TODO: I have calculated the prob_max_x_given_e, but the problem is that this is like a mixture, therefore, I do not know what I want to do with this?
         # mpe = max(prob_max_x_given_c, key=prob_max_x_given_c.get)
-        # TODO: Calculate inference value or the most probable explanation probability?
+        pass
 
-        # TODO: Marginalization
-
-        # export results
-        if json_file_path:
-            with open(json_file_path, "w") as f:
-                json.dump(infer_dict, f, indent=4)
-        # TODO: Add self.graphic pdf file
-        # TODO: Add a version marginalizing the CLG with the evidence  and export that one instead of the original CLG.
-        # if pdf_file_path and self.classes_:
-        #     # RFE: Create one that shows the coefficients in the graphs.
-        #     # We export one representative class-specific CLG.
-        #     try:
-        #         gclgnb.exportInference(
-        #             clg=self.graphic_dict[self.classes_[0]],
-        #             filename=str(pdf_file_path),
-        #             evs=evidence,
-        #         )
-        #     except AttributeError:
-        #         # pyAgrum can fail to export inference on disconnected graphs.
-        #         # Keep API compatibility by at least materializing the target file.
-        #         pdf_file_path.touch(exist_ok=True)
-
-        return result_dict
+    # TODO: Calculate inference value or the most probable explanation probability?
 
     # TODO: Implement GBNC specific method
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:

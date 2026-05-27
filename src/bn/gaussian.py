@@ -175,7 +175,6 @@ class GaussianBayesianNetwork(
             with open(json_file_path, "w") as f:
                 json.dump(result_dict, f, indent=4)
         if pdf_file_path:
-            # RFE: Create one that shows the coefficients in the graphs
             gclgnb.exportInference(
                 clg=self.graphic,
                 filename=str(pdf_file_path),
