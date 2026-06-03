@@ -93,26 +93,55 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
 
     def test_posterior(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
         """Test the posterior method."""
-        evidence = {"b": 1}
         point = data.iloc[0]
-        prob_a_given_e = bn.posterior(
-            query_var="a",
-            evidence=evidence,
+        query_vars = ["a", "c"]
+        evidence_b = {"b": point["b"]}
+        evidence_b_class = {"b": point["b"], TRUE_CLASS_LABEL: point[TRUE_CLASS_LABEL]}
+        # If the true class is class2, we can use class1 or class3 as another class evidence
+        evidence_b_not_class = {"b": point["b"], TRUE_CLASS_LABEL: "class3"}
+
+        # Compute P(a, c | b)
+        prob_a_c_given_b = bn.posterior(
+            query_vars=query_vars,
+            evidence=evidence_b,
             point=point,
         )
-        prob_c_given_e = bn.posterior(
-            query_var="c",
-            evidence=evidence,
+        # Compute P(a, c | b, class)
+        prob_a_c_given_b_class = bn.posterior(
+            query_vars=query_vars,
+            evidence=evidence_b_class,
             point=point,
         )
-        prob_c_given_e_class1 = bn.posterior(
-            query_var="c",
-            evidence={"b": 1, TRUE_CLASS_LABEL: "class1"},
+        # Compute P(a, c | b, not class)
+        prob_a_c_given_b_not_class = bn.posterior(
+            query_vars=query_vars,
+            evidence=evidence_b_not_class,
             point=point,
         )
-        assert prob_a_given_e >= 0
-        assert prob_c_given_e >= 0
-        assert prob_c_given_e_class1 >= 0
+
+        # Check that the probabilities are non-negative
+        assert np.all(prob_a_c_given_b >= 0)
+        assert np.all(prob_a_c_given_b_class >= 0)
+        assert np.all(prob_a_c_given_b_not_class >= 0)
+
+        # P(a, c | b, class) <= P(a, c | b)
+        assert np.all(prob_a_c_given_b_class <= prob_a_c_given_b)
+        # P(a, c | b, not class) <= P(a, c | b, class)
+        assert np.all(prob_a_c_given_b_not_class <= prob_a_c_given_b_class)
+
+    def test_mpe(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
+        """Test the mpe method."""
+        point = data.iloc[0]
+        evidence_b = {"b": point["b"]}
+        evidence_b_class = {"b": point["b"], TRUE_CLASS_LABEL: point[TRUE_CLASS_LABEL]}
+        # RFE: Improve test coverage
+        evidence_b_not_class = {"b": point["b"], TRUE_CLASS_LABEL: "class3"}
+
+        mpe_a_c_given_b = bn.mpe(evidence=evidence_b)
+        mpe_c_given_b_class = bn.mpe(evidence=evidence_b_class)
+
+        assert isinstance(mpe_a_c_given_b, dict)
+        assert isinstance(mpe_c_given_b_class, dict)
 
 
 class BaseTestSemiParametricBayesianNetworkClassifier(

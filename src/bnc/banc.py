@@ -232,10 +232,10 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
     def posterior(
         self,
-        query_var: str,
+        query_vars: list[str],
         evidence: dict[str, float],
         point: pd.Series,
-    ) -> float:
+    ) -> pd.Series:
         """
         Compute the posterior probability of a query variable given evidence.
 
@@ -248,13 +248,13 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             point: A pandas Series containing the point value for the query variable to evaluate.
 
         Returns:
-            float: The posterior probability P(X | E) evaluated at the given point.
+            pd.Series: The posterior probability P(X | E) evaluated at the given point.
 
         Raises:
             ValueError: If query_var or evidence variables are not in the graph,
                 or if query_var and evidence share common variables.
         """
-        if not set(query_var).issubset(set(self.nodes())):
+        if not set(query_vars).issubset(set(self.nodes())):
             raise ValueError(
                 "Query variables must be a subset of the nodes in the graph."
             )
@@ -262,8 +262,9 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             raise ValueError(
                 "Evidence variables must be a subset of the nodes in the graph."
             )
-        if set(evidence.keys()).intersection(set(query_var)):
+        if set(evidence.keys()).intersection(set(query_vars)):
             raise ValueError("Query variables and evidence variables must be disjoint.")
+
         if self.true_label in evidence:
             classes = [evidence[self.true_label]]
             # Remove self.true_label from evidence
@@ -272,23 +273,77 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes = self.classes_
 
         infer_dict = self.infer(evidence=evidence)
-        prob_x_given_e = 0
+        prob_x_given_e = pd.Series(0, index=query_vars, dtype=float)
         for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
-            # for query_var in query_vars:
-            variable_posterior = infer_dict["parameters"][class_value][query_var][
-                "probabilities"
-            ]
-            mu = variable_posterior["mean"]
-            std = variable_posterior["std"]
-            # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
-            prob_x_given_c_e = norm.pdf(point[query_var], loc=mu, scale=std)
-            # We can then calculate P(X | E) by marginalizing over the classes:
-            # P(X | E) = ∑_k P(X | C = k, E) * P(C = k | E)
-            prob_x_given_e += prob_x_given_c_e * prob_c_given_e
+            for query_var in query_vars:
+                variable_posterior = infer_dict["parameters"][class_value][query_var][
+                    "probabilities"
+                ]
+                mu = variable_posterior["mean"]
+                std = variable_posterior["std"]
+                # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
+                prob_x_given_c_e = norm.pdf(point[query_var], loc=mu, scale=std)
+                # We can then calculate P(X | E) by marginalizing over the classes:
+                # P(X | E) = ∑_k P(X | C = k, E) * P(C = k | E)
+                prob_x_given_e[query_var] += prob_x_given_c_e * prob_c_given_e
         return prob_x_given_e
 
-    # TODO: Calculate inference value or the most probable explanation probability?
+    def mpe(self, evidence: dict[str, float]) -> dict[str, float]:
+        """Compute the most probable explanation (MPE) given the evidence.
+
+        This method finds the assignment of all non-evidence variables that maximizes the joint probability P(X, E), where X are the non-evidence variables and E is the evidence. The MPE is computed by iterating over all classes and finding the most probable assignment for each class-specific CLG, then selecting the overall most probable assignment across classes.
+
+        Args:
+            evidence: A dictionary mapping variable names to their observed values.
+        Returns:
+            A dictionary containing the most probable assignment for each variable and its probability.
+        """
+        # TODO: Add probability of the MPE assignment in the output dictionary
+        mpe_dict = {}
+        if self.true_label in evidence:
+            classes = [evidence[self.true_label]]
+            # Remove self.true_label from evidence
+            evidence = {k: v for k, v in evidence.items() if k != self.true_label}
+        else:  # If the class variable is not in the evidence, we need to marginalize over the classes to compute P(X | E).
+            classes = self.classes_
+        infer_dict = self.infer(evidence=evidence)
+
+        for class_value in classes:
+            prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
+            prob_x_c_given_e_sum = 0
+            for query_var in self.feature_names_in_:
+                variable_posterior = infer_dict["parameters"][class_value][query_var][
+                    "probabilities"
+                ]
+                mu = variable_posterior["mean"]
+                std = variable_posterior["std"]
+
+                # The most probable assignment for a Gaussian variable is its mean.
+                infer_dict["parameters"][class_value][query_var]["mpe"] = mu
+
+                prob_x_given_c_e = norm.pdf(mu, loc=mu, scale=std)
+                # The joint probability P(X, C | E) = P(X | C, E) * P(C | E). We store this value for each class to find the overall MPE later.
+                prob_x_c_given_e = prob_x_given_c_e * prob_c_given_e
+                infer_dict["parameters"][class_value][query_var][
+                    "mpe_prob"
+                ] = prob_x_c_given_e
+                # TODO: Review if this value makes sense, we want to maximize prob_x_c_e
+                prob_x_c_given_e_sum += prob_x_c_given_e
+
+            infer_dict["parameters"][class_value][
+                "prob_x_c_given_e_sum"
+            ] = prob_x_c_given_e_sum
+
+        best_class = max(
+            classes, key=lambda c: infer_dict["parameters"][c]["prob_x_c_given_e_sum"]
+        )
+        mpe_dict[self.true_label] = best_class
+
+        for query_var in self.feature_names_in_:
+            best_value = infer_dict["parameters"][best_class][query_var]["mpe"]
+            mpe_dict[query_var] = best_value
+        return mpe_dict
 
     # TODO: Implement GBNC specific method
     def _get_joint_gaussian(self) -> dict[str, pd.DataFrame]:
