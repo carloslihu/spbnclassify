@@ -24,6 +24,7 @@ from src.bn import (
 )
 
 
+# TODO: Shared test_posterior
 class BaseTestBayesianNetwork:
     """
     BaseTestBayesianNetwork provides a reusable base class for testing Bayesian Network classifiers.
@@ -311,6 +312,29 @@ class BaseTestBayesianNetwork:
         bn.save(graph_file)
         assert graph_file.exists()
 
+    def test_infer(self, bn: BayesianNetwork):
+        """Test the infer method."""
+        evidence = {"b": 1}
+        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.json"
+        )
+        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
+            ".pkl", "_infer_result.pdf"
+        )
+
+        # Clean up any existing files before the test
+        json_file_path.unlink(missing_ok=True)
+        pdf_file_path.unlink(missing_ok=True)
+
+        result_dict = bn.infer(
+            evidence=evidence,
+            json_file_path=json_file_path,
+            pdf_file_path=pdf_file_path,
+        )
+        assert isinstance(result_dict, dict)
+        assert json_file_path.exists()
+        assert pdf_file_path.exists()
+
     # TODO: Add later
     # def test_feature_logl(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
     #     """Test the feature_logl method of the Bayesian Network.
@@ -398,29 +422,6 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: BayesianNetwork):
-        """Test the infer method."""
-        evidence = {"b": 1}
-        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
-            ".pkl", "_infer_result.json"
-        )
-        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
-            ".pkl", "_infer_result.pdf"
-        )
-
-        # Clean up any existing files before the test
-        json_file_path.unlink(missing_ok=True)
-        pdf_file_path.unlink(missing_ok=True)
-
-        result_dict = bn.infer(
-            evidence=evidence,
-            json_file_path=json_file_path,
-            pdf_file_path=pdf_file_path,
-        )
-        assert isinstance(result_dict, dict)
-        assert json_file_path.exists()
-        assert pdf_file_path.exists()
-
 
 class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = GaussianBayesianNetwork
@@ -450,29 +451,6 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: BayesianNetwork):
-        """Test the infer method."""
-        evidence = {"b": 1}
-        json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
-            ".pkl", "_infer_result.json"
-        )
-        pdf_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
-            ".pkl", "_infer_result.pdf"
-        )
-
-        # Clean up any existing files before the test
-        json_file_path.unlink(missing_ok=True)
-        pdf_file_path.unlink(missing_ok=True)
-
-        result_dict = bn.infer(
-            evidence=evidence,
-            json_file_path=json_file_path,
-            pdf_file_path=pdf_file_path,
-        )
-        assert isinstance(result_dict, dict)
-        assert json_file_path.exists()
-        assert pdf_file_path.exists()
-
 
 class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = KDEBayesianNetwork
@@ -494,6 +472,23 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
             "d": pbn.CKDEType(),
         }
         return expected_node_types
+
+    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame):
+        """Test the posterior method."""
+        point = data.iloc[0]
+        query_nodes = ["a", "c"]
+        evidence_b = {"b": point["b"]}
+
+        # Compute P(a, c | b)
+        prob_a_c_given_b = bn.posterior(
+            query_nodes=query_nodes,
+            evidence=evidence_b,
+            n_samples=10,
+            point=point,
+        )
+
+        # Check that the probabilities are non-negative
+        assert np.all(prob_a_c_given_b >= 0)
 
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):

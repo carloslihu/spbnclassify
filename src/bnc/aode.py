@@ -110,25 +110,25 @@ class AveragedOneDependenceEstimator(BaseMultiBayesianNetworkClassifier):
 
     # NOTE: conditional_logl unnecessary for the AODE
 
-    def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
+    def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
         """
         Generate a sample DataFrame by drawing samples uniformly from each super parent feature's Bayesian network.
         Parameters:
-            sample_size (int): Total number of samples to generate.
+            n_samples (int): Total number of samples to generate.
             seed (int | None, optional): Random seed for reproducibility.
         Returns:
             pd.DataFrame: A DataFrame containing the generated samples, shuffled and concatenated from each super parent feature.
         Notes:
             - The total sample size is distributed as evenly as possible among all super parent features.
-            - Any remainder from the division is added to the last feature to ensure the total number of samples matches `sample_size`.
+            - Any remainder from the division is added to the last feature to ensure the total number of samples matches `n_samples`.
             - The resulting DataFrame is shuffled using the provided seed.
         """
 
         # Calculate the number of samples for each super parent feature with uniform distribution
-        sp_sample_sizes = [int(sample_size / self.n_features_in_)] * self.n_features_in_
-        # Distribute the remaining samples to ensure the sum is equal to sample_size
-        if sum(sp_sample_sizes) != sample_size:
-            sp_sample_sizes[-1] += sample_size - sum(sp_sample_sizes)
+        sp_sample_sizes = [int(n_samples / self.n_features_in_)] * self.n_features_in_
+        # Distribute the remaining samples to ensure the sum is equal to n_samples
+        if sum(sp_sample_sizes) != n_samples:
+            sp_sample_sizes[-1] += n_samples - sum(sp_sample_sizes)
 
         # Generate samples for each super parent feature
         sp_sample_list = []
