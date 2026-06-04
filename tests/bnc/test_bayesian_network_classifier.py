@@ -94,7 +94,7 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
     def test_posterior(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
         """Test the posterior method."""
         point = data.iloc[0]
-        query_vars = ["a", "c"]
+        query_nodes = ["a", "c"]
         evidence_b = {"b": point["b"]}
         evidence_b_class = {"b": point["b"], TRUE_CLASS_LABEL: point[TRUE_CLASS_LABEL]}
         # If the true class is class2, we can use class1 or class3 as another class evidence
@@ -102,19 +102,19 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
 
         # Compute P(a, c | b)
         prob_a_c_given_b = bn.posterior(
-            query_vars=query_vars,
+            query_nodes=query_nodes,
             evidence=evidence_b,
             point=point,
         )
         # Compute P(a, c | b, class)
         prob_a_c_given_b_class = bn.posterior(
-            query_vars=query_vars,
+            query_nodes=query_nodes,
             evidence=evidence_b_class,
             point=point,
         )
         # Compute P(a, c | b, not class)
         prob_a_c_given_b_not_class = bn.posterior(
-            query_vars=query_vars,
+            query_nodes=query_nodes,
             evidence=evidence_b_not_class,
             point=point,
         )

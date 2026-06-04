@@ -232,7 +232,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
     def posterior(
         self,
-        query_vars: list[str],
+        query_nodes: list[str],
         evidence: dict[str, float],
         point: pd.Series,
     ) -> pd.Series:
@@ -254,7 +254,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             ValueError: If query_var or evidence variables are not in the graph,
                 or if query_var and evidence share common variables.
         """
-        if not set(query_vars).issubset(set(self.nodes())):
+        if not set(query_nodes).issubset(set(self.nodes())):
             raise ValueError(
                 "Query variables must be a subset of the nodes in the graph."
             )
@@ -262,7 +262,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             raise ValueError(
                 "Evidence variables must be a subset of the nodes in the graph."
             )
-        if set(evidence.keys()).intersection(set(query_vars)):
+        if set(evidence.keys()).intersection(set(query_nodes)):
             raise ValueError("Query variables and evidence variables must be disjoint.")
 
         if self.true_label in evidence:
@@ -273,10 +273,10 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes = self.classes_
 
         infer_dict = self.infer(evidence=evidence)
-        prob_x_given_e = pd.Series(0, index=query_vars, dtype=float)
+        prob_x_given_e = pd.Series(0, index=query_nodes, dtype=float)
         for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
-            for query_var in query_vars:
+            for query_var in query_nodes:
                 variable_posterior = infer_dict["parameters"][class_value][query_var][
                     "probabilities"
                 ]
