@@ -92,11 +92,11 @@ class BayesianNetworkInterface:
         pass
 
     @abstractmethod
-    def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
+    def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
         """Samples the Bayesian Network
 
         Args:
-            sample_size (int): The number of samples to generate
+            n_samples (int): The number of samples to generate
             seed (int | None, optional): The seed for the random number generator. Defaults to None.
 
         Returns:
@@ -428,8 +428,8 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         # else:
         return np.exp(self.logl(X))
 
-    def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
-        return super().sample(sample_size, seed, ordered=True).to_pandas()
+    def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
+        return super().sample(n_samples, seed, ordered=True).to_pandas()
 
     # TODO: Rename to plot
     def show(self, ax: matplotlib.axes.Axes | None = None, file_name: str = "") -> None:

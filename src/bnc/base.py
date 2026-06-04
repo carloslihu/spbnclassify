@@ -368,7 +368,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         source_class_name: str,
         target_class_name: str,
         output_path: str | Path | None = None,
-        sample_size: int = 1000,
+        n_samples: int = 1000,
         seed: int | None = None,
     ) -> tuple:
         """
@@ -384,7 +384,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
             source_class_name (str): Name of the source class whose BN will be compared.
             target_class_name (str): Name of the target class whose BN will be compared.
             output_path (str | Path | None, optional): Path to save the PDF report. If None, no PDF is saved. Defaults to None.
-            sample_size (int, optional): Number of samples to use for parametric comparison. Defaults to 1000.
+            n_samples (int, optional): Number of samples to use for parametric comparison. Defaults to 1000.
             seed (int | None, optional): Random seed for reproducibility. Defaults to None.
 
         Returns:
@@ -431,7 +431,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
             )
         # PARAMETRIC COMPARISON
         bn_distance = self._compare_bn_distribution(
-            source_class_name, target_class_name, shared_nodes_list, sample_size, seed
+            source_class_name, target_class_name, shared_nodes_list, n_samples, seed
         )
         return nd, sd, ntd, bn_distance
 
@@ -528,7 +528,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         pass
 
     @abstractmethod
-    def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
+    def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
         pass
 
     @abstractmethod
@@ -537,7 +537,7 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         source_class_name: str,
         target_class_name: str,
         shared_nodes_list: list,
-        sample_size: int = 1000,
+        n_samples: int = 1000,
         seed: int | None = None,
     ) -> float:
         pass

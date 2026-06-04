@@ -91,26 +91,24 @@ class BayesianMultinet(BaseMultiBayesianNetworkClassifier):
         log_likelihood = self.bn_dict_[class_value].logl(data[self.feature_names_in_])
         return log_likelihood
 
-    def sample(self, sample_size: int, seed: int | None = None) -> pd.DataFrame:
+    def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
         """
         Generate a stratified sample of data points from the Bayesian network classifiers according to class weights.
         Args:
-            sample_size (int): Total number of samples to generate.
+            n_samples (int): Total number of samples to generate.
             seed (int | None, optional): Random seed for reproducibility. Defaults to None.
         Returns:
             pd.DataFrame: A DataFrame containing the sampled data, with class proportions matching the learned class weights.
         Notes:
-            - The method ensures that the total number of samples equals `sample_size` by distributing any rounding errors.
+            - The method ensures that the total number of samples equals `n_samples` by distributing any rounding errors.
             - Each class's samples are generated using its corresponding Bayesian network.
             - The resulting DataFrame is shuffled before being returned.
         """
 
         # Calculate the number of samples for each class based on the weights
-        class_sample_sizes = np.floor(sample_size * self.weights_.to_numpy()).astype(
-            int
-        )
-        # Distribute the remaining samples to ensure the sum is equal to sample_size
-        remaining_samples = sample_size - class_sample_sizes.sum()
+        class_sample_sizes = np.floor(n_samples * self.weights_.to_numpy()).astype(int)
+        # Distribute the remaining samples to ensure the sum is equal to n_samples
+        remaining_samples = n_samples - class_sample_sizes.sum()
         if remaining_samples > 0:
             for i in np.argsort(-self.weights_.to_numpy())[:remaining_samples]:
                 class_sample_sizes[i] += 1
@@ -200,7 +198,7 @@ class GaussianBayesianMultinet(BayesianMultinet):
         source_class_name: str,
         target_class_name: str,
         shared_nodes_list: list,
-        sample_size: int = 1000,
+        n_samples: int = 1000,
         seed: int | None = None,
     ) -> float:
         bn_distance = gaussian_jensen_shannon_divergence(
@@ -270,15 +268,15 @@ class SemiParametricBayesianMultinet(BayesianMultinet):
         source_class_name: str,
         target_class_name: str,
         shared_nodes_list: list,
-        sample_size: int = 1000,
+        n_samples: int = 1000,
         seed: int | None = None,
     ) -> float:
         # TODO: Check if the sampling size is enough to get a good estimation of the distribution
         # We sample from the source and target BNs
-        source_sample = self.bn_dict_[source_class_name].sample(sample_size, seed)[
+        source_sample = self.bn_dict_[source_class_name].sample(n_samples, seed)[
             shared_nodes_list
         ]
-        target_sample = self.bn_dict_[source_class_name].sample(sample_size, seed)[
+        target_sample = self.bn_dict_[source_class_name].sample(n_samples, seed)[
             shared_nodes_list
         ]
         # We concatenate the samples
