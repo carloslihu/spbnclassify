@@ -40,7 +40,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
         seed: int = 0,
     ) -> pd.Series:
         """
-        Approximate p(query_nodes | evidence) using likelihood weighting.
+        Approximate the posterior density of query nodes at ``point`` using likelihood weighting.
 
         Parameters
         ----------
@@ -57,11 +57,12 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
         pd.Series
             Estimated posterior density for each query node evaluated at ``point``.
         """
-        # 1. Initialize
+        # Initialize batched assignments and per-sample log weights.
         topo_order = list(self.graph().topological_sort())
         assignments = pd.DataFrame(index=np.arange(n_samples), columns=topo_order)
         log_weights = np.zeros(n_samples, dtype=float)
-        # 2. Sample variables in topological order:
+
+        # Sample variables in topological order and accumulate likelihood weights.
         for node_index, node in enumerate(topo_order):
             cpd = self.cpd(node)
             parents = cpd.evidence()
@@ -70,7 +71,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
                 if len(parents) > 0
                 else pd.DataFrame(index=assignments.index)
             )
-            # 2a. If the variable is observed (part of the evidence), set its value to the observed value and update the weight by multiplying it with the conditional probability of the observed value given its parents.
+            # Clamp evidence and add its log-likelihood under the current parents.
             if node in evidence:
                 observed_value = float(evidence[node])
                 assignments[node] = observed_value
@@ -78,7 +79,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
                 point_df = parent_values.copy()
                 point_df.insert(0, node, observed_value)
                 log_weights += np.asarray(cpd.logl(point_df), dtype=float)
-            # 2b. If the variable is not observed, sample its value from its conditional distribution given its parents.
+            # Sample all rows at once from the conditional distribution of this node.
             else:
                 sampled_values = cpd.sample(
                     n_samples,
@@ -86,29 +87,28 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
                     seed=seed + node_index,
                 ).to_pandas()
                 assignments[node] = sampled_values.to_numpy().reshape(-1)
-        # 3. Store the Sample and its weight
         query_samples = assignments[query_nodes]
+        # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
 
-        posterior_values = {}
-        # 5. Estimate Probabilities: Use the weighted samples to estimate probabilities or expectations.
-        # Builds a weighted KDE per query variable
+        posterior_values = pd.Series(index=query_nodes, dtype=float)
+        # Estimate the density at ``point`` with a weighted Gaussian KDE per query node.
         for node in query_nodes:
-            # For each node in query_nodes, it extracts the likelihood-weighted samples collected during sampling.
             samples = query_samples[node].to_numpy(dtype=float)
-            # Chooses a bandwidth using Silverman’s rule of thumb: 1.06 * std * n**(-1/5). If that bandwidth is non-finite or ≤ 0, it falls back to max(std, 1.0).
+            # Silverman’s rule of thumb: 1.06 * std * n**(-1/5)
             bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
             if not np.isfinite(bandwidth) or bandwidth <= 0:
                 bandwidth = max(np.std(samples), 1.0)
+
             # Computes Gaussian kernel values at the target point[node]
             normalized_deltas = (float(point[node]) - samples) / bandwidth
             kernel_values = np.exp(-0.5 * normalized_deltas**2) / (
                 np.sqrt(2.0 * np.pi) * bandwidth
             )
-            # Returns the weighted sum of kernels, i.e. sum(weights * kernel_values), which is the estimated posterior density p(node = point[node] | evidence).
-            posterior_values[node] = float(np.sum(weights * kernel_values))
-        # Returns a Pandas Series of densities (not normalized probabilities) for the requested query nodes.
-        return pd.Series(posterior_values, index=query_nodes, dtype=float)
+            # Weighted sum of kernels
+            posterior_values[node] = np.sum(weights * kernel_values)
+
+        return posterior_values
 
     # TODO: Calculate from posterior
     # def infer(

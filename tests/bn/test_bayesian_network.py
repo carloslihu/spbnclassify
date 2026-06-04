@@ -15,6 +15,7 @@ from helpers.data import (
     generate_non_normal_data,
     generate_normal_data,
 )
+from scipy.special import logsumexp
 from src.bn import (
     BayesianNetwork,
     DiscreteBayesianNetwork,
@@ -489,6 +490,72 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
 
         # Check that the probabilities are non-negative
         assert np.all(prob_a_c_given_b >= 0)
+
+    def test_posterior_likelihood_weighting_exact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Posterior should match a hand-computed weighted KDE on a toy example."""
+
+        class FakeSamples:
+            def __init__(self, values: list[float]) -> None:
+                self.values = pd.Series(values)
+
+            def to_pandas(self) -> pd.Series:
+                return self.values
+
+        class FakeCpd:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            def evidence(self) -> list[str]:
+                return ["x"] if self.name == "y" else []
+
+            def sample(
+                self,
+                n: int,
+                evidence_values: pd.DataFrame,
+                seed: int,
+            ) -> FakeSamples:
+                assert n == 3
+                if self.name == "x":
+                    return FakeSamples([0.0, 1.0, 2.0])
+                raise AssertionError("Only the query node should be sampled")
+
+            def logl(self, point_df: pd.DataFrame) -> np.ndarray:
+                assert self.name == "y"
+                return np.log(np.array([1.0, 2.0, 4.0], dtype=float))
+
+        class FakeGraph:
+            def topological_sort(self) -> list[str]:
+                return ["x", "y"]
+
+        bn = KDEBayesianNetwork(seed=SEED)
+        monkeypatch.setattr(bn, "graph", lambda: FakeGraph())
+        monkeypatch.setattr(
+            bn,
+            "cpd",
+            lambda node: FakeCpd(node),
+        )
+
+        result = bn.posterior(
+            query_nodes=["x"],
+            evidence={"y": 1.0},
+            point=pd.Series({"x": 1.0}),
+            n_samples=3,
+            seed=SEED,
+        )
+
+        samples = np.array([0.0, 1.0, 2.0], dtype=float)
+        log_weights = np.log(np.array([1.0, 2.0, 4.0], dtype=float))
+        weights = np.exp(log_weights - logsumexp(log_weights))
+        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        normalized_deltas = (1.0 - samples) / bandwidth
+        kernel_values = np.exp(-0.5 * normalized_deltas**2) / (
+            np.sqrt(2.0 * np.pi) * bandwidth
+        )
+        expected = np.sum(weights * kernel_values)
+
+        np.testing.assert_allclose(result["x"], expected)
 
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
