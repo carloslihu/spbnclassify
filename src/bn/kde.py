@@ -58,50 +58,40 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
             Estimated posterior density for each query node evaluated at ``point``.
         """
         # 1. Initialize
-        query_samples = []
-        log_weights = []
-        # RFE: Adapt to pybnesian's n sampling
-        for _ in range(n_samples):
-            assignment = {}
-            # Set weight to 1.0 in log space.
-            log_w = 0.0
-            # 2. Sample variables in topological order:
-            for node in self.graph().topological_sort():
-                cpd = self.cpd(node)
-                parent_values = pd.DataFrame(
-                    [[assignment[p] for p in cpd.evidence()]],
-                    columns=cpd.evidence(),
-                )
-                # If the variable is observed (part of the evidence), set its value to the observed value and update the weight by multiplying it with the conditional probability of the observed value given its parents.
-                if node in evidence:
-                    # Clamp evidence.
-                    assignment[node] = evidence[node]
-                    point_df = pd.DataFrame(
-                        [
-                            {
-                                node: evidence[node],
-                                **{p: assignment[p] for p in cpd.evidence()},
-                            }
-                        ]
-                    )
-                    # Weight by likelihood of observed evidence under its parents.
-                    log_w += cpd.logl(point_df)
-                # If the variable is not observed, sample its value from its conditional distribution given its parents.
-                else:
-                    sampled_value = cpd.sample(
-                        n=1, evidence_values=parent_values, seed=seed
-                    ).to_pandas()
-                    assignment[node] = sampled_value.squeeze()
-            # 3. Store the Sample and its weight
-            query_samples.append([assignment[q] for q in query_nodes])
-            log_weights.append(log_w)
-        # 5. Estimate Probabilities
-        query_samples = pd.DataFrame(query_samples, columns=query_nodes)
-        log_weights = pd.Series(log_weights)
-        # Converts per-sample log-weights log_weights to normalized weights
-        weights = pd.Series(np.exp(log_weights - logsumexp(log_weights)))
+        topo_order = list(self.graph().topological_sort())
+        assignments = pd.DataFrame(index=np.arange(n_samples), columns=topo_order)
+        log_weights = np.zeros(n_samples, dtype=float)
+        # 2. Sample variables in topological order:
+        for node_index, node in enumerate(topo_order):
+            cpd = self.cpd(node)
+            parents = cpd.evidence()
+            parent_values = (
+                assignments[parents]
+                if len(parents) > 0
+                else pd.DataFrame(index=assignments.index)
+            )
+            # 2a. If the variable is observed (part of the evidence), set its value to the observed value and update the weight by multiplying it with the conditional probability of the observed value given its parents.
+            if node in evidence:
+                observed_value = float(evidence[node])
+                assignments[node] = observed_value
+
+                point_df = parent_values.copy()
+                point_df.insert(0, node, observed_value)
+                log_weights += np.asarray(cpd.logl(point_df), dtype=float)
+            # 2b. If the variable is not observed, sample its value from its conditional distribution given its parents.
+            else:
+                sampled_values = cpd.sample(
+                    n_samples,
+                    parent_values,
+                    seed=seed + node_index,
+                ).to_pandas()
+                assignments[node] = sampled_values.to_numpy().reshape(-1)
+        # 3. Store the Sample and its weight
+        query_samples = assignments[query_nodes]
+        weights = np.exp(log_weights - logsumexp(log_weights))
 
         posterior_values = {}
+        # 5. Estimate Probabilities: Use the weighted samples to estimate probabilities or expectations.
         # Builds a weighted KDE per query variable
         for node in query_nodes:
             # For each node in query_nodes, it extracts the likelihood-weighted samples collected during sampling.
@@ -116,7 +106,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
                 np.sqrt(2.0 * np.pi) * bandwidth
             )
             # Returns the weighted sum of kernels, i.e. sum(weights * kernel_values), which is the estimated posterior density p(node = point[node] | evidence).
-            posterior_values[node] = float(np.sum(weights.to_numpy() * kernel_values))
+            posterior_values[node] = float(np.sum(weights * kernel_values))
         # Returns a Pandas Series of densities (not normalized probabilities) for the requested query nodes.
         return pd.Series(posterior_values, index=query_nodes, dtype=float)
 
