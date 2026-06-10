@@ -164,7 +164,6 @@ class GaussianBayesianNetwork(
             result_dict["parameters"][var_id] = {
                 "variable_name": variable_name,
                 "probabilities": {
-                    "name": variable_name,
                     "mean": post.mu(),
                     "std": post.sigma(),
                 },
