@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -37,7 +38,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
     def infer(
         self,
         evidence: dict[str, float] = {},
-        n_samples: int = 10_000,
+        n_samples: int = 1000,
         seed: int = 0,
         json_file_path: Path | None = None,
         pdf_file_path: Path | None = None,
@@ -96,17 +97,17 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
             result_dict["parameters"][var_id] = {
                 "variable_name": variable_name,
             }
-        # TODO: Export results
-        # # export results
-        # if json_file_path:
-        #     with open(json_file_path, "w") as f:
-        #         json.dump(result_dict, f, indent=4)
-        # if pdf_file_path:
-        #     gclgnb.exportInference(
-        #         clg=self.graphic,
-        #         filename=str(pdf_file_path),
-        #         evs=evidence,
-        #     )
+        # export results
+        if json_file_path:
+            export_dict = result_dict.copy()
+            export_dict["parameters"]["weights"] = weights.tolist()
+            export_dict["parameters"]["assignments"] = assignments.to_dict(
+                orient="list"
+            )
+            with open(json_file_path, "w") as f:
+                json.dump(export_dict, f, indent=4)
+        if pdf_file_path:
+            self.save(pdf_file_path)
         return result_dict
 
     def posterior(
@@ -114,7 +115,7 @@ class KDEBayesianNetwork(SemiParametricBayesianNetwork):
         query_node: str,
         evidence: dict[str, float],
         point: pd.Series,
-        n_samples: int = 10_000,
+        n_samples: int = 1000,
         seed: int = 0,
         likelihood_weighting_dict: dict[str, dict] = {},
     ) -> pd.Series:

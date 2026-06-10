@@ -42,8 +42,7 @@ class SemiParametricBayesianNetwork(
             arcs (list[tuple[str, str]], optional): list of arcs. Defaults to [].
             node_types (list[tuple[str, pbn.FactorType]], optional): list of node types. Defaults to [].
             search_score (str): Search score to be used for the structure learning. The possible scores ((validate_options.cpp)) are:
-                - "cv-lik" (Cross-Validated likelihoo
-                d)
+                - "cv-lik" (Cross-Validated likelihood)
                 - "holdout-lik" (Hold-out likelihood)
                 - "validated-lik" (Validated likelihood with cross-validation). Defaults to "validated-lik".
             arc_blacklist (list[tuple[str, str]], optional): Arc blacklist (forbidden arcs). Defaults to [].
