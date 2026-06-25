@@ -6,6 +6,7 @@ import pandas as pd
 import pyagrum.clg as gclg
 import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
+from scipy.stats import norm
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
 from .base import BayesianNetwork
@@ -157,16 +158,13 @@ class GaussianBayesianNetwork(
         ie.updateEvidence(evidence)
 
         result_dict = {}
-        result_dict["structure"] = list(self.graphic.arcs())
+        result_dict["structure"] = self.arcs()
         result_dict["parameters"] = {}
-        for var_id, variable_name in enumerate(self.graphic.names()):
+        for variable_name in self.nodes():
             post = ie.posterior(variable_name)
-            result_dict["parameters"][var_id] = {
-                "variable_name": variable_name,
-                "probabilities": {
-                    "mean": post.mu(),
-                    "std": post.sigma(),
-                },
+            result_dict["parameters"][variable_name] = {
+                "mean": post.mu(),
+                "std": post.sigma(),
             }
 
         # export results
@@ -181,6 +179,32 @@ class GaussianBayesianNetwork(
             )
 
         return result_dict
+
+    def posterior(
+        self, query_node: str, evidence: dict[str, float], point: pd.Series
+    ) -> float:
+        """
+        Computes the posterior density of a query node at a specified point given the evidence using likelihood weighting inference.
+        Parameters
+        ----------
+        query_node : str
+            Variable to return posterior samples for.
+        evidence : dict[str, float]
+            Observed variables, e.g. {"A": A1, "D": D2}
+        point : pd.Series
+            The point at which to evaluate the posterior density, e.g. pd.Series({"A": A1, "D": D2})
+        Returns
+        -------
+        float
+            The estimated posterior density of the query node at the specified point.
+        """
+        infer_dict = self.infer(evidence=evidence)
+        node_parameters = infer_dict["parameters"][query_node]
+        mu = node_parameters["mean"]
+        std = node_parameters["std"]
+        # Calculate the posterior density using the Gaussian probability density function (PDF)
+        posterior_value = norm.pdf(point[query_node], loc=mu, scale=std)
+        return posterior_value
 
     def _set_gum_params(self) -> None:
         # Copies the nodes to the pyagrum graphic

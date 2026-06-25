@@ -169,17 +169,14 @@ class DiscreteBayesianNetwork(
         # mpe, mpe_log_prob = ie.mpeLog2Posterior()
 
         result_dict = {}
-        result_dict["structure"] = list(self.graphic.arcs())
+        result_dict["structure"] = self.arcs()
         result_dict["parameters"] = {}
-        for var_id, variable_name in enumerate(self.graphic.names()):
+        for variable_name in self.nodes():
             var = self.graphic.variable(variable_name)
             labels = var.labels()
 
             post = ie.posterior(variable_name)
-            result_dict["parameters"][var_id] = {
-                "variable_name": variable_name,
-                "probabilities": dict(zip(labels, post.tolist())),
-            }
+            result_dict["parameters"][variable_name] = dict(zip(labels, post.tolist()))
         # export results
         if json_file_path:
             with open(json_file_path, "w") as f:
@@ -193,6 +190,28 @@ class DiscreteBayesianNetwork(
             )
 
         return result_dict
+
+    def posterior(
+        self, query_node: str, evidence: dict[str, float], point: pd.Series
+    ) -> float:
+        """
+        Computes the posterior density of a query node at a specified point given the evidence using likelihood weighting inference.
+        Parameters
+        ----------
+        query_node : str
+            Variable to return posterior samples for.
+        evidence : dict[str, float]
+            Observed variables, e.g. {"A": A1, "D": D2}
+        point : pd.Series
+            The point at which to evaluate the posterior density, e.g. pd.Series({"A": A1, "D": D2})
+        Returns
+        -------
+        float
+            The estimated posterior density of the query node at the specified point.
+        """
+        infer_dict = self.infer(evidence=evidence)
+        posterior_value = infer_dict["parameters"][query_node][point[query_node]]
+        return posterior_value
 
     def conditional_shap(
         self,

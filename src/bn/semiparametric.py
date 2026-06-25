@@ -1,5 +1,10 @@
+import json
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import pybnesian as pbn
+from scipy.special import logsumexp
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
 from .base import BayesianNetwork
@@ -99,3 +104,139 @@ class SemiParametricBayesianNetwork(
         data = pd.concat([X, y], axis=1)
         pbn.SemiparametricBN.fit(self, data)
         return self
+
+    # TODO: Implement with RBLW
+    # RFE: Unify format with other infer methods
+    def infer(
+        self,
+        evidence: dict[str, float] = {},
+        n_samples: int = 1000,
+        seed: int = 0,
+        json_file_path: Path | None = None,
+        pdf_file_path: Path | None = None,
+    ) -> dict[str, dict]:
+        """
+        Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.
+        Args:
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
+            n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
+            seed (int, optional): The random seed for reproducibility. Defaults to 0.
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+        Returns:
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The structure is represented as a list of arcs, and the parameters include the weights and assignments from the likelihood weighting inference.
+        """
+        # Initialize batched assignments and per-sample log weights.
+        topo_order = list(self.graph().topological_sort())
+        assignments = pd.DataFrame(index=np.arange(n_samples), columns=topo_order)
+        log_weights = np.zeros(n_samples, dtype=float)
+
+        # Sample variables in topological order and accumulate log weights.
+        for node_index, node in enumerate(topo_order):
+            cpd = self.cpd(node)
+            parents = cpd.evidence()
+            parent_values = (
+                assignments[parents]
+                if len(parents) > 0
+                else pd.DataFrame(index=assignments.index)
+            )
+            # Clamp evidence and add its log-likelihood under the current parents.
+            if node in evidence:
+                observed_value = float(evidence[node])
+                assignments[node] = observed_value
+
+                point_df = parent_values.copy()
+                point_df.insert(0, node, observed_value)
+                log_weights += np.asarray(cpd.logl(point_df), dtype=float)
+            # Sample all rows at once from the conditional distribution of this node.
+            else:
+                assignments[node] = cpd.sample(
+                    n_samples,
+                    parent_values,
+                    seed=seed + node_index,
+                ).to_pandas()
+        # Normalize log weights to get importance weights.
+        weights = np.exp(log_weights - logsumexp(log_weights))
+        result_dict = {
+            "structure": self.arcs(),
+            "parameters": {
+                "weights": weights,
+                "assignments": assignments,
+            },
+        }
+        # export results
+        if json_file_path:
+            export_dict = result_dict.copy()
+            export_dict["parameters"]["weights"] = weights.tolist()
+            export_dict["parameters"]["assignments"] = assignments.to_dict(
+                orient="list"
+            )
+            with open(json_file_path, "w") as f:
+                json.dump(export_dict, f, indent=4)
+        if pdf_file_path:
+            self.save(pdf_file_path)
+        return result_dict
+
+    def posterior(
+        self,
+        query_node: str,
+        evidence: dict[str, float],
+        point: pd.Series,
+        n_samples: int = 1000,
+        seed: int = 0,
+        likelihood_weighting_dict: dict[str, dict] = {},
+    ) -> float:
+        """
+        Approximate the posterior density of query nodes at ``point`` using likelihood weighting.
+        Uses a weighted Gaussian kernel density estimation (KDE) to estimate the posterior density of the query nodes given the evidence and the point at which to evaluate the density.
+        The likelihood weighting inference is performed to obtain samples and weights, which are then used to compute the KDE.
+        Parameters
+        ----------
+        query_node : str
+            Variable to return posterior samples for.
+        evidence : dict[str, float]
+            Observed variables, e.g. {"A": 1.2, "D": -0.4}
+        point : pd.Series
+            The point at which to evaluate the posterior density, e.g. pd.Series({"A": 1.0, "D": -0.5})
+        n_samples : int
+            The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
+        seed : int
+            The random seed for reproducibility. Defaults to 0.
+        likelihood_weighting_dict : dict[str, dict]
+            Optional dictionary containing the results of a previous likelihood weighting inference. If provided, it will be used to avoid redundant computations. Defaults to an empty dictionary.
+        Returns
+        -------
+        float
+            The estimated posterior density of the query node at the specified point.
+        """
+
+        def _kernel_values(samples: np.ndarray) -> np.ndarray:
+            # Silverman’s rule of thumb: 1.06 * std * n**(-1/5)
+            bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+            if not np.isfinite(bandwidth) or bandwidth <= 0:
+                bandwidth = max(np.std(samples), 1.0)
+
+            # Computes Gaussian kernel values at the target point[query_node]
+            normalized_deltas = (float(point[query_node]) - samples) / bandwidth
+            kernel_values = np.exp(-0.5 * normalized_deltas**2) / (
+                np.sqrt(2.0 * np.pi) * bandwidth
+            )
+
+            return kernel_values
+
+        if likelihood_weighting_dict == {}:
+            # Use provided likelihood weighting results if available
+            likelihood_weighting_dict = self.infer(
+                evidence=evidence, n_samples=n_samples, seed=seed
+            )
+        assignments = likelihood_weighting_dict["parameters"]["assignments"]
+        weights = likelihood_weighting_dict["parameters"]["weights"]
+
+        # Estimate the density at ``point`` with a weighted Gaussian KDE per query node.
+        samples = assignments[query_node].to_numpy(dtype=float)
+        kernel_values = _kernel_values(samples)
+
+        # Weighted sum of kernels
+        posterior_value = np.sum(weights * kernel_values)
+
+        return posterior_value

@@ -335,6 +335,22 @@ class BaseTestBayesianNetwork:
         assert json_file_path.exists()
         assert pdf_file_path.exists()
 
+    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame):
+        """Test the posterior method."""
+        point = data.iloc[0]
+        query_node = "a"
+        evidence_b = {"b": point["b"]}
+
+        # Compute P(a | b)
+        prob_a_given_b = bn.posterior(
+            query_node=query_node,
+            evidence=evidence_b,
+            point=point,
+        )
+
+        # Check that the probabilities are non-negative
+        assert prob_a_given_b >= 0
+
     # TODO: Add later
     # def test_feature_logl(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
     #     """Test the feature_logl method of the Bayesian Network.
@@ -472,23 +488,6 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
             "d": pbn.CKDEType(),
         }
         return expected_node_types
-
-    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame):
-        """Test the posterior method."""
-        point = data.iloc[0]
-        query_node = "a"
-        evidence_b = {"b": point["b"]}
-
-        # Compute P(a | b)
-        prob_a_given_b = bn.posterior(
-            query_node=query_node,
-            evidence=evidence_b,
-            n_samples=10,
-            point=point,
-        )
-
-        # Check that the probabilities are non-negative
-        assert np.all(prob_a_given_b >= 0)
 
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
