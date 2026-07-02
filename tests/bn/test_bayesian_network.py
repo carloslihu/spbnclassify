@@ -312,9 +312,8 @@ class BaseTestBayesianNetwork:
         bn.save(graph_file)
         assert graph_file.exists()
 
-    def _infer_result(self, bn: BayesianNetwork) -> dict[str, float]:
+    def _infer_result(self, bn: BayesianNetwork, evidence: dict) -> dict:
         """Compute the inference result shared by infer-related tests."""
-        evidence = {"b": 1}
         json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
             ".pkl", "_infer_result.json"
         )
@@ -337,9 +336,11 @@ class BaseTestBayesianNetwork:
 
         return infer_dict
 
-    def test_infer(self, bn: BayesianNetwork) -> None:
+    def test_infer(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
         """Test the infer method."""
-        self._infer_result(bn)
+        evidence = {"b": 1}
+        infer_dict = self._infer_result(bn, evidence)
+        assert isinstance(infer_dict, dict)
 
     def _posterior_probability(self, bn: BayesianNetwork, data: pd.DataFrame) -> float:
         """Compute the posterior probability shared by posterior-related tests."""
@@ -448,11 +449,30 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
+    def test_infer(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
+        """Test the infer method for discrete Bayesian networks."""
+        evidence = {"b": 1}
+        infer_dict = self._infer_result(bn, evidence)
+        assert isinstance(infer_dict, dict)
+        parameter_dict = infer_dict["parameters"]
+
+        # Check that the parameters are valid probability distributions
+        for node in bn.nodes():
+            assert node in parameter_dict.keys()
+            for value, prob in parameter_dict[node].items():
+                assert isinstance(value, (int, float, str))
+                assert isinstance(prob, float)
+                assert 0 <= prob <= 1
+            # Check that probabilities sum to 1
+            total_prob = sum(parameter_dict[node].values())
+            np.testing.assert_allclose(total_prob, 1.0, rtol=1e-5, atol=1e-8)
+
     def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
         """Test the posterior method."""
         prob_a_given_b = self._posterior_probability(bn, data)
         assert np.isfinite(prob_a_given_b)
         assert prob_a_given_b >= 0
+
         # Additional checks for discrete Bayesian networks
         assert prob_a_given_b <= 1
 
@@ -485,6 +505,67 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
+    def _conditional_gaussian(self, joint_mean, joint_cov, query_nodes, evidence):
+        """
+        Compute the conditional mean and covariance for a set of query nodes given evidence.
+        """
+        evidence_nodes = list(evidence)
+        mu_q = joint_mean[query_nodes].to_numpy(dtype=float).ravel()
+        mu_e = joint_mean[evidence_nodes].to_numpy(dtype=float).ravel()
+        cov_qq = joint_cov.loc[query_nodes, query_nodes].to_numpy(dtype=float)
+        cov_qe = joint_cov.loc[query_nodes, evidence_nodes].to_numpy(dtype=float)
+        cov_eq = joint_cov.loc[evidence_nodes, query_nodes].to_numpy(dtype=float)
+        cov_ee = joint_cov.loc[evidence_nodes, evidence_nodes].to_numpy(dtype=float)
+
+        e = np.array([evidence[node] for node in evidence_nodes], dtype=float)
+        gain = cov_qe @ np.linalg.inv(cov_ee)
+        cond_mean = mu_q + gain @ (e - mu_e)
+        cond_cov = cov_qq - gain @ cov_eq
+        return cond_mean, cond_cov
+
+    def test_infer(self, bn: GaussianBayesianNetwork, data: pd.DataFrame) -> None:
+        query_nodes = bn.nodes()
+        evidence = {"b": data.iloc[0]["b"]}
+        infer_dict = self._infer_result(bn, evidence)
+
+        # Compute expected conditional mean and covariance using the joint Gaussian parameters
+        expected_mean, expected_cov = self._conditional_gaussian(
+            bn.joint_gaussian_["mean"],
+            bn.joint_gaussian_["cov"],
+            query_nodes,
+            evidence,
+        )
+        # Check that the inferred parameters match the expected conditional mean and covariance
+        for i, node in enumerate(query_nodes):
+            np.testing.assert_allclose(
+                infer_dict["parameters"][node]["mean"],
+                expected_mean[i],
+                rtol=1e-5,
+                atol=1e-8,
+            )
+            np.testing.assert_allclose(
+                infer_dict["parameters"][node]["std"],
+                np.sqrt(expected_cov[i, i]),
+                rtol=1e-5,
+                atol=1e-8,
+            )
+
+    def test_posterior(self, bn: GaussianBayesianNetwork, data: pd.DataFrame) -> None:
+        point = data.iloc[0]
+        evidence = {"b": point["b"]}
+        infer_dict = bn.infer(evidence=evidence)
+
+        mu = infer_dict["parameters"]["a"]["mean"]
+        std = infer_dict["parameters"]["a"]["std"]
+
+        # Compute the expected posterior probability using the Gaussian PDF formula
+        expected = np.exp(-0.5 * ((point["a"] - mu) / std) ** 2) / (
+            np.sqrt(2 * np.pi) * std
+        )
+        # Compute the actual posterior probability using the bn.posterior method
+        actual = bn.posterior("a", evidence=evidence, point=point)
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-8)
+
 
 class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = KDEBayesianNetwork
@@ -507,6 +588,66 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
+    def test_infer(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
+        evidence = {"b": data.iloc[0]["b"]}
+        infer_dict = bn.infer(evidence=evidence, n_samples=250, seed=SEED)
+
+        assignments = infer_dict["parameters"]["assignments"]
+        weights = infer_dict["parameters"]["weights"]
+
+        assert set(assignments.columns) == set(bn.nodes())
+        assert np.all(assignments["b"] == evidence["b"])
+
+        assert np.all(weights >= 0)
+        np.testing.assert_allclose(weights.sum(), 1.0, rtol=1e-12, atol=1e-12)
+
+        topo_order = list(bn.graph().topological_sort())
+        log_weights = np.zeros(len(assignments), dtype=float)
+
+        for node in topo_order:
+            if node not in evidence:
+                continue
+
+            cpd = bn.cpd(node)
+            parents = cpd.evidence()
+            point_df = (
+                assignments[parents].copy()
+                if parents
+                else pd.DataFrame(index=assignments.index)
+            )
+            point_df.insert(0, node, evidence[node])
+            log_weights += np.asarray(cpd.logl(point_df), dtype=float)
+
+        expected_weights = np.exp(log_weights - logsumexp(log_weights))
+        np.testing.assert_allclose(weights, expected_weights, rtol=1e-10, atol=1e-12)
+
+    def test_posterior(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
+        point = pd.Series({"a": 1.5})
+        samples = np.array([0.0, 1.0, 2.0, 4.0])
+        weights = np.array([0.1, 0.2, 0.6, 0.1])
+
+        lw = {
+            "parameters": {
+                "assignments": pd.DataFrame({"a": samples}),
+                "weights": weights,
+            }
+        }
+
+        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        kernel_values = np.exp(-0.5 * ((point["a"] - samples) / bandwidth) ** 2) / (
+            np.sqrt(2.0 * np.pi) * bandwidth
+        )
+        expected = np.sum(weights * kernel_values)
+
+        actual = bn.posterior(
+            query_node="a",
+            evidence={},
+            point=point,
+            likelihood_weighting_dict=lw,
+        )
+
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     bn_class = SemiParametricBayesianNetwork
@@ -528,3 +669,5 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             "d": pbn.LinearGaussianCPDType(),
         }
         return expected_node_types
+
+    # TODO: test_infer and test_posterior

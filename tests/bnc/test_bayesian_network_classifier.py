@@ -64,7 +64,7 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
             "c": pbn.LinearGaussianCPDType(),
         }
 
-    def test_infer(self, bn: BaseBayesianNetworkClassifier):
+    def test_infer(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame) -> None:
         """Test the infer method."""
         evidence = {"b": 1}
         json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
