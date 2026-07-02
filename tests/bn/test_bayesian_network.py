@@ -312,8 +312,8 @@ class BaseTestBayesianNetwork:
         bn.save(graph_file)
         assert graph_file.exists()
 
-    def test_infer(self, bn: BayesianNetwork):
-        """Test the infer method."""
+    def _infer_result(self, bn: BayesianNetwork) -> dict[str, float]:
+        """Compute the inference result shared by infer-related tests."""
         evidence = {"b": 1}
         json_file_path = BN_SAVE_FOLDER_PATH / self.model_filename.replace(
             ".pkl", "_infer_result.json"
@@ -326,29 +326,39 @@ class BaseTestBayesianNetwork:
         json_file_path.unlink(missing_ok=True)
         pdf_file_path.unlink(missing_ok=True)
 
-        result_dict = bn.infer(
+        infer_dict = bn.infer(
             evidence=evidence,
             json_file_path=json_file_path,
             pdf_file_path=pdf_file_path,
         )
-        assert isinstance(result_dict, dict)
+        assert isinstance(infer_dict, dict)
         assert json_file_path.exists()
         assert pdf_file_path.exists()
 
-    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame):
-        """Test the posterior method."""
+        return infer_dict
+
+    def test_infer(self, bn: BayesianNetwork) -> None:
+        """Test the infer method."""
+        self._infer_result(bn)
+
+    def _posterior_probability(self, bn: BayesianNetwork, data: pd.DataFrame) -> float:
+        """Compute the posterior probability shared by posterior-related tests."""
         point = data.iloc[0]
         query_node = "a"
         evidence_b = {"b": point["b"]}
 
         # Compute P(a | b)
         prob_a_given_b = bn.posterior(
-            query_node=query_node,
-            evidence=evidence_b,
-            point=point,
+            query_node=query_node, evidence=evidence_b, point=point
         )
 
-        # Check that the probabilities are non-negative
+        assert np.isfinite(prob_a_given_b)
+        return prob_a_given_b
+
+    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
+        """Test the posterior method."""
+        prob_a_given_b = self._posterior_probability(bn, data)
+        assert np.isfinite(prob_a_given_b)
         assert prob_a_given_b >= 0
 
     # TODO: Add later
@@ -437,6 +447,14 @@ class TestDiscreteBayesianNetwork(BaseTestBayesianNetwork):
             "d": pbn.DiscreteFactorType(),
         }
         return expected_node_types
+
+    def test_posterior(self, bn: BayesianNetwork, data: pd.DataFrame) -> None:
+        """Test the posterior method."""
+        prob_a_given_b = self._posterior_probability(bn, data)
+        assert np.isfinite(prob_a_given_b)
+        assert prob_a_given_b >= 0
+        # Additional checks for discrete Bayesian networks
+        assert prob_a_given_b <= 1
 
 
 class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
