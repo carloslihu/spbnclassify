@@ -8,7 +8,6 @@ import pyagrum.causal as csl
 import pyagrum.explain as expl
 import pyagrum.explain.notebook as explnb
 import pyagrum.lib.image as gumimage
-import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 import pydot
 from matplotlib import pyplot as plt
