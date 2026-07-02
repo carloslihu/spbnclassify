@@ -670,4 +670,62 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    # TODO: test_infer and test_posterior
+    def test_infer(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
+        evidence = {"b": data.iloc[0]["b"]}
+        infer_dict = bn.infer(evidence=evidence, n_samples=250, seed=SEED)
+
+        assignments = infer_dict["parameters"]["assignments"]
+        weights = infer_dict["parameters"]["weights"]
+
+        assert set(assignments.columns) == set(bn.nodes())
+        assert np.all(assignments["b"] == evidence["b"])
+
+        assert np.all(weights >= 0)
+        np.testing.assert_allclose(weights.sum(), 1.0, rtol=1e-12, atol=1e-12)
+
+        topo_order = list(bn.graph().topological_sort())
+        log_weights = np.zeros(len(assignments), dtype=float)
+
+        for node in topo_order:
+            if node not in evidence:
+                continue
+
+            cpd = bn.cpd(node)
+            parents = cpd.evidence()
+            point_df = (
+                assignments[parents].copy()
+                if parents
+                else pd.DataFrame(index=assignments.index)
+            )
+            point_df.insert(0, node, evidence[node])
+            log_weights += np.asarray(cpd.logl(point_df), dtype=float)
+
+        expected_weights = np.exp(log_weights - logsumexp(log_weights))
+        np.testing.assert_allclose(weights, expected_weights, rtol=1e-10, atol=1e-12)
+
+    def test_posterior(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
+        point = pd.Series({"a": 1.5})
+        samples = np.array([0.0, 1.0, 2.0, 4.0])
+        weights = np.array([0.1, 0.2, 0.6, 0.1])
+
+        lw = {
+            "parameters": {
+                "assignments": pd.DataFrame({"a": samples}),
+                "weights": weights,
+            }
+        }
+
+        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        kernel_values = np.exp(-0.5 * ((point["a"] - samples) / bandwidth) ** 2) / (
+            np.sqrt(2.0 * np.pi) * bandwidth
+        )
+        expected = np.sum(weights * kernel_values)
+
+        actual = bn.posterior(
+            query_node="a",
+            evidence={},
+            point=point,
+            likelihood_weighting_dict=lw,
+        )
+
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
