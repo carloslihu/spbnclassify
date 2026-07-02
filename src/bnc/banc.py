@@ -152,7 +152,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
                 log_prob_e_given_c = norm.logpdf(
                     observed_value, loc=variable.mu(), scale=variable.sigma()
                 )
-                log_scores[class_index] += log_prob_e_given_c
+                log_scores.iloc[class_index] += log_prob_e_given_c
 
         posterior = safe_exp(log_scores)
         posterior_sum = posterior.sum()
@@ -232,10 +232,10 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
     def posterior(
         self,
-        query_nodes: list[str],
+        query_node: str,
         evidence: dict[str, float],
         point: pd.Series,
-    ) -> pd.Series:
+    ) -> float:
         """
         Compute the posterior probability of a query variable given evidence.
 
@@ -243,27 +243,25 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         using the posterior distributions obtained from inference.
 
         Args:
-            query_var: The variable to query (must be a subset of graph nodes).
-            evidence: Dictionary of evidence variables and their values (must be subset of graph nodes).
-            point: A pandas Series containing the point value for the query variable to evaluate.
+            query_node: The node to query for the posterior probability.
+            evidence: Dictionary of evidence nodes and their values.
+            point: A pandas Series containing the point value for the query node to evaluate.
 
         Returns:
-            pd.Series: The posterior probability P(X | E) evaluated at the given point.
+            float: The posterior probability P(X | E) evaluated at the given point.
 
         Raises:
-            ValueError: If query_var or evidence variables are not in the graph,
-                or if query_var and evidence share common variables.
+            ValueError: If query_node or evidence nodes are not in the graph,
+                or if query_node and evidence share common nodes.
         """
-        if not set(query_nodes).issubset(set(self.nodes())):
-            raise ValueError(
-                "Query variables must be a subset of the nodes in the graph."
-            )
+        if query_node not in self.nodes():
+            raise ValueError(f"Query node '{query_node}' must be in the graph nodes.")
         if not set(evidence.keys()).issubset(set(self.nodes())):
             raise ValueError(
-                "Evidence variables must be a subset of the nodes in the graph."
+                "Evidence nodes must be a subset of the nodes in the graph."
             )
-        if set(evidence.keys()).intersection(set(query_nodes)):
-            raise ValueError("Query variables and evidence variables must be disjoint.")
+        if set(evidence.keys()).intersection({query_node}):
+            raise ValueError("Query node and evidence nodes must be disjoint.")
 
         if self.true_label in evidence:
             classes = [evidence[self.true_label]]
@@ -273,20 +271,20 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             classes = self.classes_
 
         infer_dict = self.infer(evidence=evidence)
-        prob_x_given_e = pd.Series(0, index=query_nodes, dtype=float)
+        prob_x_given_e = 0  # Initialize the posterior probability for the query node
         for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
-            for query_var in query_nodes:
-                variable_posterior = infer_dict["parameters"][class_value][query_var][
-                    "probabilities"
-                ]
-                mu = variable_posterior["mean"]
-                std = variable_posterior["std"]
-                # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
-                prob_x_given_c_e = norm.pdf(point[query_var], loc=mu, scale=std)
-                # We can then calculate P(X | E) by marginalizing over the classes:
-                # P(X | E) = ∑_k P(X | C = k, E) * P(C = k | E)
-                prob_x_given_e[query_var] += prob_x_given_c_e * prob_c_given_e
+            # for query_node in query_nodes:
+            variable_posterior = infer_dict["parameters"][class_value][query_node][
+                "probabilities"
+            ]
+            mu = variable_posterior["mean"]
+            std = variable_posterior["std"]
+            # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
+            prob_x_given_c_e = norm.pdf(point[query_node], loc=mu, scale=std)
+            # We can then calculate P(X | E) by marginalizing over the classes:
+            # P(X | E) = ∑_k P(X | C = k, E) * P(C = k | E)
+            prob_x_given_e += prob_x_given_c_e * prob_c_given_e
         return prob_x_given_e
 
     def mpe(self, evidence: dict[str, float]) -> dict[str, float]:
@@ -312,20 +310,20 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
             prob_x_c_given_e_sum = 0
-            for query_var in self.feature_names_in_:
-                variable_posterior = infer_dict["parameters"][class_value][query_var][
+            for query_node in self.feature_names_in_:
+                variable_posterior = infer_dict["parameters"][class_value][query_node][
                     "probabilities"
                 ]
                 mu = variable_posterior["mean"]
                 std = variable_posterior["std"]
 
                 # The most probable assignment for a Gaussian variable is its mean.
-                infer_dict["parameters"][class_value][query_var]["mpe"] = mu
+                infer_dict["parameters"][class_value][query_node]["mpe"] = mu
 
                 prob_x_given_c_e = norm.pdf(mu, loc=mu, scale=std)
                 # The joint probability P(X, C | E) = P(X | C, E) * P(C | E). We store this value for each class to find the overall MPE later.
                 prob_x_c_given_e = prob_x_given_c_e * prob_c_given_e
-                infer_dict["parameters"][class_value][query_var][
+                infer_dict["parameters"][class_value][query_node][
                     "mpe_prob"
                 ] = prob_x_c_given_e
                 # TODO: Review if this value makes sense, we want to maximize prob_x_c_e

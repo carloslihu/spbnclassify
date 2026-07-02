@@ -94,27 +94,27 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
     def test_posterior(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
         """Test the posterior method."""
         point = data.iloc[0]
-        query_nodes = ["a", "c"]
+        query_node = "a"
         evidence_b = {"b": point["b"]}
         evidence_b_class = {"b": point["b"], TRUE_CLASS_LABEL: point[TRUE_CLASS_LABEL]}
         # If the true class is class2, we can use class1 or class3 as another class evidence
         evidence_b_not_class = {"b": point["b"], TRUE_CLASS_LABEL: "class3"}
 
-        # Compute P(a, c | b)
+        # Compute P(a | b)
         prob_a_c_given_b = bn.posterior(
-            query_nodes=query_nodes,
+            query_node=query_node,
             evidence=evidence_b,
             point=point,
         )
-        # Compute P(a, c | b, class)
+        # Compute P(a | b, class)
         prob_a_c_given_b_class = bn.posterior(
-            query_nodes=query_nodes,
+            query_node=query_node,
             evidence=evidence_b_class,
             point=point,
         )
-        # Compute P(a, c | b, not class)
+        # Compute P(a | b, not class)
         prob_a_c_given_b_not_class = bn.posterior(
-            query_nodes=query_nodes,
+            query_node=query_node,
             evidence=evidence_b_not_class,
             point=point,
         )
@@ -124,9 +124,9 @@ class BaseTestGaussianBayesianNetworkClassifier(BaseTestBayesianNetworkClassifie
         assert np.all(prob_a_c_given_b_class >= 0)
         assert np.all(prob_a_c_given_b_not_class >= 0)
 
-        # P(a, c | b, class) <= P(a, c | b)
+        # P(a | b, class) <= P(a | b)
         assert np.all(prob_a_c_given_b_class <= prob_a_c_given_b)
-        # P(a, c | b, not class) <= P(a, c | b, class)
+        # P(a | b, not class) <= P(a | b, class)
         assert np.all(prob_a_c_given_b_not_class <= prob_a_c_given_b_class)
 
     def test_mpe(self, bn: BaseBayesianNetworkClassifier, data: pd.DataFrame):
