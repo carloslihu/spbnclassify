@@ -106,14 +106,13 @@ class SemiParametricBayesianNetwork(
         return self
 
     # TODO: Implement with RBLW
-    # RFE: Unify format with other infer methods
     def infer(
         self,
         evidence: dict[str, float] = {},
-        n_samples: int = 1000,
-        seed: int = 0,
         json_file_path: Path | None = None,
         pdf_file_path: Path | None = None,
+        n_samples: int = 1000,
+        seed: int = 0,
     ) -> dict[str, dict]:
         """
         Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.

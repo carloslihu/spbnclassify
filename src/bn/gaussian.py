@@ -157,12 +157,12 @@ class GaussianBayesianNetwork(
         ie = gclg.CLGVariableElimination(self.graphic)
         ie.updateEvidence(evidence)
 
-        result_dict = {}
-        result_dict["structure"] = self.arcs()
-        result_dict["parameters"] = {}
+        infer_dict = {}
+        infer_dict["structure"] = self.arcs()
+        infer_dict["parameters"] = {}
         for variable_name in self.nodes():
             post = ie.posterior(variable_name)
-            result_dict["parameters"][variable_name] = {
+            infer_dict["parameters"][variable_name] = {
                 "mean": post.mu(),
                 "std": post.sigma(),
             }
@@ -170,7 +170,7 @@ class GaussianBayesianNetwork(
         # export results
         if json_file_path:
             with open(json_file_path, "w") as f:
-                json.dump(result_dict, f, indent=4)
+                json.dump(infer_dict, f, indent=4)
         if pdf_file_path:
             gclgnb.exportInference(
                 clg=self.graphic,
@@ -178,10 +178,13 @@ class GaussianBayesianNetwork(
                 evs=evidence,
             )
 
-        return result_dict
+        return infer_dict
 
     def posterior(
-        self, query_node: str, evidence: dict[str, float], point: pd.Series
+        self,
+        query_node: str,
+        evidence: dict[str, float],
+        point: pd.Series,
     ) -> float:
         """
         Computes the posterior density of a query node at a specified point given the evidence using likelihood weighting inference.
@@ -190,13 +193,13 @@ class GaussianBayesianNetwork(
         query_node : str
             Variable to return posterior samples for.
         evidence : dict[str, float]
-            Observed variables, e.g. {"A": A1, "D": D2}
+            Observed variables, e.g. {"A": 1.2, "D": -0.4}
         point : pd.Series
-            The point at which to evaluate the posterior density, e.g. pd.Series({"A": A1, "D": D2})
+            The point at which to evaluate the posterior density, e.g. pd.Series({"A": 1.2, "D": -0.4})
         Returns
         -------
         float
-            The estimated posterior density of the query node at the specified point.
+            The posterior density of the query node at the specified point given the evidence.
         """
         infer_dict = self.infer(evidence=evidence)
         node_parameters = infer_dict["parameters"][query_node]

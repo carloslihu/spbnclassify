@@ -428,6 +428,48 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         # else:
         return np.exp(self.logl(X))
 
+    @abstractmethod
+    def infer(
+        self,
+        evidence: dict[str, float] = {},
+        json_file_path: Path | None = None,
+        pdf_file_path: Path | None = None,
+    ) -> dict[str, dict]:
+        """
+        Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.
+        Args:
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
+            n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
+            seed (int, optional): The random seed for reproducibility. Defaults to 0.
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+        Returns:
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The structure is represented as a list of arcs, and the parameters include the weights and assignments from the likelihood weighting inference.
+        """
+
+    @abstractmethod
+    def posterior(
+        self,
+        query_node: str,
+        evidence: dict[str, float],
+        point: pd.Series,
+    ) -> float:
+        """
+        Computes the posterior density of a query node at a specified point given the evidence using likelihood weighting inference.
+        Parameters
+        ----------
+        query_node : str
+            Variable to return posterior samples for.
+        evidence : dict[str, float]
+            Observed variables, e.g. {"A": A1, "D": D2}
+        point : pd.Series
+            The point at which to evaluate the posterior density, e.g. pd.Series({"A": A1, "D": D2})
+        Returns
+        -------
+        float
+            The posterior density of the query node at the specified point given the evidence.
+        """
+
     def sample(self, n_samples: int, seed: int | None = None) -> pd.DataFrame:
         return super().sample(n_samples, seed, ordered=True).to_pandas()
 

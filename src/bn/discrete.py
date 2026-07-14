@@ -191,7 +191,10 @@ class DiscreteBayesianNetwork(
         return result_dict
 
     def posterior(
-        self, query_node: str, evidence: dict[str, float], point: pd.Series
+        self,
+        query_node: str,
+        evidence: dict[str, float],
+        point: pd.Series,
     ) -> float:
         """
         Computes the posterior density of a query node at a specified point given the evidence using likelihood weighting inference.
@@ -206,7 +209,7 @@ class DiscreteBayesianNetwork(
         Returns
         -------
         float
-            The estimated posterior density of the query node at the specified point.
+            The posterior density of the query node at the specified point given the evidence.
         """
         infer_dict = self.infer(evidence=evidence)
         posterior_value = infer_dict["parameters"][query_node][point[query_node]]
