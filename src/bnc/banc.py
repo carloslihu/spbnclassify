@@ -177,8 +177,9 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         """
         infer_dict = {}
         infer_dict["structure"] = list(self.graphic.arcs())
-        infer_dict["parameters"] = {"evidence": evidence}
+        infer_dict["parameters"] = {}
         # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
+        # TODO: Make it use infer for each of the sub-graphs and then combine the results.
         for class_value in self.classes_:
             infer_dict["parameters"][class_value] = {}
             bn = self.graphic_dict[class_value]
