@@ -179,34 +179,11 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         infer_dict["structure"] = list(self.graphic.arcs())
         infer_dict["parameters"] = {}
         # For each class-specific CLG, we perform inference and extract the posterior distribution for each variable.
-        # TODO: Make it use infer for each of the sub-graphs and then combine the results.
         for class_value in self.classes_:
-            infer_dict["parameters"][class_value] = {}
-            bn = self.graphic_dict[class_value]
-            ie = gclg.CLGVariableElimination(bn)
-            ie.updateEvidence(evidence)
-
-            for variable_name in bn.names():
-                # If the variable is in the evidence, we directly use the evidence value as the posterior.
-                if variable_name in evidence:
-                    post = gclg.GaussianVariable(
-                        variable_name, evidence[variable_name], 0
-                    )
-                # If the variable is not in the evidence, we perform inference to get the posterior distribution.
-                else:
-                    posterior_cf = ie.canonicalPosterior([variable_name])
-                    # If the posterior is a Gaussian, we extract the mean and variance to create a GaussianVariable. If the posterior is a scalar (which can happen in disconnected graphs), we directly get the variable from the graphic.
-                    if hasattr(posterior_cf, "toGaussian"):
-                        _, mu, var = posterior_cf.toGaussian()
-                        post = gclg.GaussianVariable(variable_name, mu, np.sqrt(var))
-                    else:
-                        post = self.graphic_dict[class_value].variable(variable_name)
-                mu = post.mu()
-                std = post.sigma()
-                infer_dict["parameters"][class_value][variable_name] = {
-                    "variable_name": variable_name,
-                    "probabilities": {"mean": mu, "std": std},
-                }
+            class_infer_dict = super().infer(
+                evidence=evidence, json_file_path=None, pdf_file_path=None
+            )
+            infer_dict["parameters"][class_value] = class_infer_dict["parameters"]
         prob_c_given_e = self._class_posterior_from_evidence(evidence)
         for class_value in self.classes_:
             infer_dict["parameters"][class_value]["prob_c_given_e"] = prob_c_given_e[
@@ -276,9 +253,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
         for class_value in classes:
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
             # for query_node in query_nodes:
-            variable_posterior = infer_dict["parameters"][class_value][query_node][
-                "probabilities"
-            ]
+            variable_posterior = infer_dict["parameters"][class_value][query_node]
             mu = variable_posterior["mean"]
             std = variable_posterior["std"]
             # Calculate P(X | C, E) using the posterior distribution of the variable given the evidence. This is done by evaluating the Gaussian PDF at the point value for the variable.
@@ -312,9 +287,7 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
             prob_c_given_e = infer_dict["parameters"][class_value]["prob_c_given_e"]
             prob_x_c_given_e_sum = 0
             for query_node in self.feature_names_in_:
-                variable_posterior = infer_dict["parameters"][class_value][query_node][
-                    "probabilities"
-                ]
+                variable_posterior = infer_dict["parameters"][class_value][query_node]
                 mu = variable_posterior["mean"]
                 std = variable_posterior["std"]
 

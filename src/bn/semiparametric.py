@@ -105,7 +105,6 @@ class SemiParametricBayesianNetwork(
         pbn.SemiparametricBN.fit(self, data)
         return self
 
-    # TODO: Implement with RBLW
     def infer(
         self,
         evidence: dict[str, float] = {},

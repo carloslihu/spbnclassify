@@ -154,13 +154,30 @@ class GaussianBayesianNetwork(
         Returns:
             dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
         """
-        ie = gclg.CLGVariableElimination(self.graphic)
+        # In case the true label is present in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
+        if self.true_label in self.graphic.names():
+            evidence = {k: v for k, v in evidence.items() if k != self.true_label}
+            aux_graph = gclg.CLG()
+            # Better alternative if pyagrum allowed it...
+            # aux_graph.copy(self.graphic)
+            # aux_graph.erase(self.true_label)
+            for node in self.nodes():
+                if node != self.true_label:
+                    aux_graph.add(self.graphic.variable(node))
+            for source, target in self.arcs():
+                if source != self.true_label and target != self.true_label:
+                    aux_graph.addArc(
+                        source, target, self.graphic.coefArc(source, target)
+                    )
+        else:
+            aux_graph = self.graphic
+        ie = gclg.CLGVariableElimination(aux_graph)
         ie.updateEvidence(evidence)
 
         infer_dict = {}
         infer_dict["structure"] = self.arcs()
         infer_dict["parameters"] = {}
-        for variable_name in self.nodes():
+        for variable_name in self.feature_names_in_:
             post = ie.posterior(variable_name)
             infer_dict["parameters"][variable_name] = {
                 "mean": post.mu(),
@@ -173,7 +190,7 @@ class GaussianBayesianNetwork(
                 json.dump(infer_dict, f, indent=4)
         if pdf_file_path:
             gclgnb.exportInference(
-                clg=self.graphic,
+                clg=aux_graph,
                 filename=str(pdf_file_path),
                 evs=evidence,
             )
@@ -247,10 +264,13 @@ class GaussianBayesianNetwork(
 
         # Initializes the mean and covariance matrices with ones for further multiplications. They are row vectors
         joint_mean = pd.DataFrame(
-            1, index=np.arange(0, 1), columns=(["parent_0"] + self.nodes())
+            1,
+            index=np.arange(0, 1),
+            columns=(["parent_0"] + self.feature_names_in_),
+            dtype=float,
         )
         joint_cov = pd.DataFrame(
-            1, index=self.nodes(), columns=self.nodes(), dtype=float
+            1, index=self.feature_names_in_, columns=self.feature_names_in_, dtype=float
         )
 
         for i, node in enumerate(sorted_nodes):
