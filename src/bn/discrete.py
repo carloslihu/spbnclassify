@@ -500,6 +500,35 @@ class DiscreteBayesianNetwork(
             data = pd.concat([X, y], axis=1)
         else:
             data = X
+        aux_bn = self.__fit_pbn(data)
+        bn = pbn.DiscreteBN(
+            nodes=list(aux_bn.names()), arcs=convert_arcs_to_names(aux_bn)
+        )
+        return bn
+
+    def _fit_parameters(
+        self, X: pd.DataFrame, y: pd.Series | None = None
+    ) -> pbn.BayesianNetwork:
+        data = pd.concat([X, y], axis=1)
+        self.graphic = self.__fit_pbn(data)
+        # RFE: Directly pass the learnt parameters to pybnesian
+        pbn.DiscreteBN.fit(self, data.astype(str).astype("category"))
+        return self
+
+    def __fit_pbn(
+        self,
+        data: pd.DataFrame,
+    ):
+        """
+        Fits a Bayesian network to the provided data using the pyAgrum library.
+        Args:
+            data (pd.DataFrame): The input data for fitting the Bayesian network. It should contain both features and the target variable.
+        Returns:
+            gum.BayesNet: The fitted Bayesian network model.
+        Notes:
+            - The method uses the BNLearner class from pyAgrum to learn the structure and parameters of the Bayesian network.
+            - Forbidden and mandatory arcs can be specified using the arc_blacklist and arc_whitelist attributes of the class.
+        """
         # Create a Bayesian network learner
         learner = gum.BNLearner(data)
         # learner.useSmoothingPrior(0.0)
@@ -513,13 +542,4 @@ class DiscreteBayesianNetwork(
 
         # Learn the structure and parameters
         bn = learner.learnBN()
-        bn = pbn.DiscreteBN(nodes=list(bn.names()), arcs=convert_arcs_to_names(bn))
-
         return bn
-
-    def _fit_parameters(
-        self, X: pd.DataFrame, y: pd.Series | None = None
-    ) -> pbn.BayesianNetwork:
-        data = pd.concat([X, y], axis=1)
-        pbn.DiscreteBN.fit(self, data.astype(str).astype("category"))
-        return self
