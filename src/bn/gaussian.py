@@ -154,13 +154,11 @@ class GaussianBayesianNetwork(
         Returns:
             dict[str, dict]: A dictionary where keys are node names and values are dictionaries containing the posterior probabilities for each state of the node.
         """
-        # In case the true label is present in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
+        infer_dict = {"structure": self.arcs(), "parameters": {}}
+        # If the true label is in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
         if self.true_label in self.graphic.names():
             evidence = {k: v for k, v in evidence.items() if k != self.true_label}
             aux_graph = gclg.CLG()
-            # Better alternative if pyagrum allowed it...
-            # aux_graph.copy(self.graphic)
-            # aux_graph.erase(self.true_label)
             for node in self.nodes():
                 if node != self.true_label:
                     aux_graph.add(self.graphic.variable(node))
@@ -174,12 +172,9 @@ class GaussianBayesianNetwork(
         ie = gclg.CLGVariableElimination(aux_graph)
         ie.updateEvidence(evidence)
 
-        infer_dict = {}
-        infer_dict["structure"] = self.arcs()
-        infer_dict["parameters"] = {}
-        for variable_name in self.feature_names_in_:
-            post = ie.posterior(variable_name)
-            infer_dict["parameters"][variable_name] = {
+        for node in self.feature_names_in_:
+            post = ie.posterior(node)
+            infer_dict["parameters"][node] = {
                 "mean": post.mu(),
                 "std": post.sigma(),
             }

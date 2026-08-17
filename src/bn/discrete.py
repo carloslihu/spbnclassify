@@ -170,12 +170,12 @@ class DiscreteBayesianNetwork(
         result_dict = {}
         result_dict["structure"] = self.arcs()
         result_dict["parameters"] = {}
-        for variable_name in self.nodes():
-            var = self.graphic.variable(variable_name)
+        for node in self.nodes():
+            var = self.graphic.variable(node)
             labels = var.labels()
 
-            post = ie.posterior(variable_name)
-            result_dict["parameters"][variable_name] = dict(zip(labels, post.tolist()))
+            post = ie.posterior(node)
+            result_dict["parameters"][node] = dict(zip(labels, post.tolist()))
         # export results
         if json_file_path:
             with open(json_file_path, "w") as f:

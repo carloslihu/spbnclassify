@@ -146,8 +146,8 @@ class GaussianBayesianNetworkAugmentedNaiveBayes(
 
         for class_index, class_value in enumerate(self.classes_):
             bn = self.graphic_dict[class_value]
-            for variable_name, observed_value in evidence.items():
-                variable = bn.variable(variable_name)
+            for node, observed_value in evidence.items():
+                variable = bn.variable(node)
                 # log P(E_m | C = k)
                 log_prob_e_given_c = norm.logpdf(
                     observed_value, loc=variable.mu(), scale=variable.sigma()
