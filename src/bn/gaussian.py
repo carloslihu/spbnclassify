@@ -158,18 +158,18 @@ class GaussianBayesianNetwork(
         # If the true label is in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
         if self.true_label in self.graphic.names():
             evidence = {k: v for k, v in evidence.items() if k != self.true_label}
-            aux_graph = gclg.CLG()
+            parentless_graphic = gclg.CLG()
             for node in self.nodes():
                 if node != self.true_label:
-                    aux_graph.add(self.graphic.variable(node))
+                    parentless_graphic.add(self.graphic.variable(node))
             for source, target in self.arcs():
                 if source != self.true_label and target != self.true_label:
-                    aux_graph.addArc(
+                    parentless_graphic.addArc(
                         source, target, self.graphic.coefArc(source, target)
                     )
         else:
-            aux_graph = self.graphic
-        ie = gclg.CLGVariableElimination(aux_graph)
+            parentless_graphic = self.graphic
+        ie = gclg.CLGVariableElimination(parentless_graphic)
         ie.updateEvidence(evidence)
 
         for node in self.feature_names_in_:
@@ -185,7 +185,7 @@ class GaussianBayesianNetwork(
                 json.dump(infer_dict, f, indent=4)
         if pdf_file_path:
             gclgnb.exportInference(
-                clg=aux_graph,
+                clg=parentless_graphic,
                 filename=str(pdf_file_path),
                 evs=evidence,
             )
