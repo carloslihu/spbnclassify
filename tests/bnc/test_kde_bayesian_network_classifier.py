@@ -13,8 +13,6 @@ from src.bnc import (
     KDESuperParentOneDependenceEstimator,
     KDETreeAugmentedNaiveBayes,
 )
-
-# TODO: Remove rutile_ai dependency
 from src.utils.constants import TRUE_CLASS_LABEL
 
 from .test_bayesian_network_classifier import BaseTestKDEBayesianNetworkClassifier

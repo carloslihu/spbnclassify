@@ -12,8 +12,6 @@ from src.bnc import (
     GaussianSuperParentOneDependenceEstimator,
     GaussianTreeAugmentedNaiveBayes,
 )
-
-# TODO: Remove rutile_ai dependency
 from src.utils.constants import TRUE_CLASS_LABEL
 
 from .test_bayesian_network_classifier import BaseTestGaussianBayesianNetworkClassifier
