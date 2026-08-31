@@ -1,0 +1,33 @@
+{
+    "bayesian_classifier": {
+        "module_type": "BNC",
+        "model_args": {
+            "max_train_data_size": 0,
+            "structure": null,
+            "parametric": null,
+            "search_score": "validated-lik",
+            "arc_blacklist": [],
+            "arc_whitelist": [],
+            "type_blacklist": [],
+            "type_whitelist": [],
+            "callback": null,
+            "max_indegree": 0,
+            "max_iters": 10000,
+            "epsilon": 0,
+            "patience": 5,
+            "seed": 0,
+            "num_folds": 10,
+            "test_holdout_ratio": 0.2,
+            "verbose": false,
+            "classes": [],
+            "weights": {},
+            "feature_names_in_": [],
+            "n_features_in_": 0
+        },
+        "train_args": {}
+    },
+    "max_probability_thresholder": {
+        "module_type": "max_probability_thresholder",
+        "threshold": 0.5
+    }
+}
