@@ -1,12 +1,10 @@
 # RFE: Further refactor
-import sys
 from pathlib import Path
 
 import pandas as pd
 
-# TODO: Remove dependence
-RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
-DATA_PATH = RUTILE_AI_PATH / "data"
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+DATA_PATH = LIBRARY_ROOT_PATH / "data"
 PIPELINE_PATH = DATA_PATH / "pipelines" / "SPBNC"
 RESULT_PATH = DATA_PATH / "agg_results"
 AVG_STD_RESULT_PATH = RESULT_PATH / "avg_std_tables"
@@ -15,11 +13,9 @@ RANKING_TABLES_RESULT_PATH = RESULT_PATH / "ranking_tables"
 CD_DIAGRAMS_RESULT_PATH = RESULT_PATH / "cd_diagrams"
 DATASET_DETAIL_PATH = RESULT_PATH / "dataset_details"
 
-sys.path.append(str(RUTILE_AI_PATH))
-
-from rutile_ai.data_handler import DATASET_NAME_LIST
-from rutile_ai.engine.classification.spbnclassify.src.utils.generic import bn_to_acronym
-from rutile_ai.engine.classification.spbnclassify.src.utils.model_comparison import (
+from .data_handler import DATASET_NAME_LIST
+from .utils.generic import bn_to_acronym
+from .utils.model_comparison import (
     bold_best_cell,
     format_mean_std_cell,
     get_avg_std_metric_matrix,

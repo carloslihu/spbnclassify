@@ -11,14 +11,12 @@ import mlflow
 import pandas as pd
 from tqdm import tqdm
 
-RUTILE_AI_PATH = Path("/app/dev/rutile-ai")
-GRID_SEARCH_CONFIG_PATH = RUTILE_AI_PATH / "data/configs/gs"
-sys.path.append(str(RUTILE_AI_PATH))
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+GRID_SEARCH_CONFIG_PATH = LIBRARY_ROOT_PATH / "data/configs/"
 
-
-from rutile_ai import AnomalyPipeline, ClassifierPipeline, DataHandler
-from rutile_ai.module import Module
-from rutile_ai.utils import GridSearchArgs
+from .module import Module
+from .pipeline import AnomalyPipeline, ClassifierPipeline, DataHandler
+from .utils import GridSearchArgs
 
 # Disable mlflow logging
 logging.getLogger("mlflow").setLevel(logging.WARNING)
@@ -58,7 +56,7 @@ if __name__ == "__main__":
             # region MLFlow and experiment setup
             print(f"RUNNING GRID SEARCH FOR {dataset_name}")
             experiment_path = Path(
-                RUTILE_AI_PATH
+                LIBRARY_ROOT_PATH
                 / f"data/pipelines/SPBNC/{dataset_name}/gs_{args.experiment_name}/"
             )
             full_experiment_identifier = (
