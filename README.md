@@ -153,6 +153,23 @@ _For more examples, please refer to the [Documentation](https://example.com)_ --
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!-- REFERENCES -->
+
+## How to cite
+<!-- TODO Review how to cite -->
+If you use this code in your research, please cite the following paper:
+
+```bibtex
+@article{li-huSemiparametricBayesianNetwork2026,
+  title = {Semiparametric {{Bayesian}} Network Classifiers},
+  author = {{Li-Hu}, Carlos and Larra{\~n}aga, Pedro and Bielza, Concha},
+  year = 2026,
+  journal = {Pattern Recognition},
+  pages = {114740},
+  doi = {10.1016/j.patcog.2026.114740},
+  langid = {english}
+}
+```
 
 <!-- ROADMAP -->
 
@@ -210,7 +227,6 @@ Project Link: [https://github.com/carloslihu/spbnclassify](https://github.com/ca
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-<!-- TODO Add references and how to cite -->
 <!-- ACKNOWLEDGMENTS -->
 
 <!-- ## Acknowledgments
