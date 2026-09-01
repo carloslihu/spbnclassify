@@ -3,7 +3,6 @@ import itertools
 import json
 import logging
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -14,8 +13,9 @@ from tqdm import tqdm
 LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
 GRID_SEARCH_CONFIG_PATH = LIBRARY_ROOT_PATH / "data/configs/"
 
+from .data_handler import DataHandler
 from .module import Module
-from .pipeline import AnomalyPipeline, ClassifierPipeline, DataHandler
+from .pipeline import ClassifierPipeline
 from .utils import GridSearchArgs
 
 # Disable mlflow logging
@@ -45,11 +45,6 @@ if __name__ == "__main__":
         dict(zip(list(grid.keys()), combination))
         for combination in itertools.product(*grid.values())
     ]
-
-    if args.classification:
-        PipelineClass = ClassifierPipeline
-    else:
-        PipelineClass = AnomalyPipeline
     # endregion Initialization
     for dataset_name in args.dataset_names:
         try:
@@ -114,7 +109,7 @@ if __name__ == "__main__":
                     run_name = f"{grid_point_name}_{start_time}"
 
                     with mlflow.start_run(run_name=run_name):
-                        pipeline = PipelineClass(
+                        pipeline = ClassifierPipeline(
                             config_dict=fixed_config,
                             module_id=run_name,
                         )
