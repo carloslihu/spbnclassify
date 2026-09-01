@@ -142,6 +142,7 @@ To get a local copy up and running follow these simple example steps.
 Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
 
 _For more examples, please refer to the [Documentation](https://example.com)_ -->
+<!-- TODO Add experiment configuration instructions -->
    ```sh
    # To execute the experiments and obtain the results
    cd src
@@ -209,15 +210,16 @@ Project Link: [https://github.com/carloslihu/spbnclassify](https://github.com/ca
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+<!-- TODO Add references and how to cite -->
 <!-- ACKNOWLEDGMENTS -->
 
 <!-- ## Acknowledgments
 
 - []()
 - []()
-- []() -->
+- []()
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p> -->
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->

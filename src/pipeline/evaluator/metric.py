@@ -343,7 +343,7 @@ class ROCMetric(ScoreMetric):
                 fpr=fpr_plot,
                 tpr=tpr,
                 roc_auc=roc_auc,
-                estimator_name=f"{class_name} ROC curve",
+                name=f"{class_name} ROC curve",
             )
 
             disp.plot(

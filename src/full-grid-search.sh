@@ -41,14 +41,15 @@ COMMAND="python3 grid_search.py \
     --max_workers 50"
 LOG_FILE="full-grid-search.log"
 
-# # Command for new datasets and models
+# Command for new datasets and models
+# python3 -m src.grid_search -c --experiment_name bnc_test --data_source public --dataset_name algerian_forest_fires --n_splits 10 --n_runs 1 --max_workers 50
 # COMMAND="python3 grid_search.py \
 #     -c \
 #     --experiment_name bnc_test \
 #     --data_source public \
-#     --dataset_name algerian_forest_fires \
+#     --dataset_name iris \
 #     --n_splits 10 \
-#     --n_runs 5 \
+#     --n_runs 1 \
 #     --max_workers 50"
 # LOG_FILE="grid-search-test.log"
 # endregion
