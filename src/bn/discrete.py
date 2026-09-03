@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyagrum as gum
-import pyagrum.causal as csl
 import pyagrum.explain as expl
 import pyagrum.explain.notebook as explnb
 import pyagrum.lib.image as gumimage
@@ -464,9 +463,9 @@ class DiscreteBayesianNetwork(
                 raise ValueError(
                     f"Keys {missing_keys} in 'values' are not present in 'whatif' variables."
                 )
-        cm = csl.CausalModel(self.graphic, latentVarsDescriptor=[], keepArcs=False)
+        cm = gum.CausalModel(self.graphic, latentVarsDescriptor=[], keepArcs=False)
 
-        pot = csl.counterfactual(
+        pot = gum.counterfactual(
             cm=cm,
             profile=profile,
             on=on,

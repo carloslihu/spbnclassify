@@ -231,26 +231,24 @@ class SemiParametricBayesianNetwork(
                         seed=seed + node_index,
                     ).to_pandas()
 
-        # NOTE: Think how the CLG subnetwork is formed
-        # TODO: Remove true_label
+        # RFE: Remove true_label for BNCs
         # If the true label is in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
         # evidence = {k: v for k, v in evidence.items() if k != self.true_label}
 
-        # TODO: Learn CLG subgraph with pybnesian, then copy it to pyagrum CLG and use it for inference.
+        # The problem is that the arc should have a coefficient?
         clg_subgraphic = gclg.CLG()
-        # Copies the nodes to the pyagrum graphic
+        # Copies the nodes to the pyagrum graphic, for non-CLG nodes, we set the mean and std to 0 and 1 respectively, since they are not used in the inference
         for node in self.nodes():
             # if node != self.true_label:
             cpd = self.cpd(node)
             if self.cpd(node).type() == pbn.LinearGaussianCPDType():
-                clg_subgraphic.add(self.graphic.variable(node))
                 mu = cpd.beta[0]
                 std = np.sqrt(cpd.variance)
-                node_id = self.graphic.idFromName(node)
-                clg_subgraphic.setMu(node_id, mu)
-                clg_subgraphic.setSigma(node_id, std)
-
-        # Copies the arcs to the pyagrum graphic
+            else:
+                mu = 0.0
+                std = 1.0
+            clg_subgraphic.add(gclg.GaussianVariable(node, mu, std))
+        # Copies the arcs to the pyagrum graphic for CLG nodes, and sets the coefficients for the arcs
         for source, target in self.arcs():
             cpd = self.cpd(target)
             if self.cpd(target).type() == pbn.LinearGaussianCPDType():
@@ -258,33 +256,29 @@ class SemiParametricBayesianNetwork(
                 parent_index = parents.index(source)
                 coef = cpd.beta[parent_index + 1]
                 clg_subgraphic.addArc(source, target, coef)
-                # clg_subgraphic.setCoef(source, target, coef)
         ie = gclg.CLGVariableElimination(clg_subgraphic)
-        unique_evidence = assignments.unique()
+        unique_evidence = assignments.drop_duplicates().dropna(axis=1)
 
-        for index, row in unique_evidence.iterrows():
+        for _, row in unique_evidence.iterrows():
             aux_evidence = row.to_dict()
-            ie.updateEvidence(aux_evidence)
+            # We put the CKDE evidence in the CLG inference
+            ie.updateEvidence(aux_evidence)  # This overwrites all evidence
             for node in self.feature_names_in_:
                 if (
                     node not in evidence
                     and self.cpd(node).type() == pbn.LinearGaussianCPDType()
                 ):
                     post = ie.posterior(node)
-                    # RFE: Optimizable save
-                    assignments["parameters"][node][index] = {
-                        "row": aux_evidence,
-                        "mean": post.mu(),
-                        "std": post.sigma(),
-                    }
+                    # Assign to node where unique_evidence is the same
+                    assignments.loc[
+                        assignments[list(aux_evidence.keys())].eq(row).all(axis=1), node
+                    ] = post
         # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
-        infer_dict["parameters"] = (
-            {
-                "weights": weights,
-                "assignments": assignments,
-            },
-        )
+        infer_dict["parameters"] = {
+            "weights": weights,
+            "assignments": assignments,
+        }
         # export results
         if json_file_path:
             export_dict = infer_dict.copy()
@@ -350,16 +344,30 @@ class SemiParametricBayesianNetwork(
             likelihood_weighting_dict = self.infer(
                 evidence=evidence, n_samples=n_samples, seed=seed
             )
-        # TODO: Asssign for CLG nodes depending on the matching evidence
-        # assignments.loc["node"] = norm.pdf(point[query_node], loc=mu, scale=std)
+
         assignments = likelihood_weighting_dict["parameters"]["assignments"]
         weights = likelihood_weighting_dict["parameters"]["weights"]
 
-        # Estimate the density at ``point`` with a weighted Gaussian KDE per query node.
-        samples = assignments[query_node].to_numpy(dtype=float)
-        kernel_values = _kernel_values(samples)
+        cpd = self.cpd(query_node)
+        if cpd.type() == pbn.LinearGaussianCPDType():
+            # TODO: recalculate given point if not in assignments
+            # Assign for CLG nodes depending on the matching evidence
+            post = assignments.loc[
+                assignments[list(evidence.keys())]
+                .eq(point[list(evidence.keys())])
+                .all(axis=1),
+                query_node,
+            ]
+            mu = post.mean()
+            std = post.std()
+            # TODO: Review if this should be weighted
+            posterior_value = norm.pdf(point[query_node], loc=mu, scale=std)
+        else:
+            # Estimate the density at ``point`` with a weighted Gaussian KDE per query node.
+            samples = assignments[query_node].to_numpy(dtype=float)
+            kernel_values = _kernel_values(samples)
 
-        # Weighted sum of kernels
-        posterior_value = np.sum(weights * kernel_values)
+            # Weighted sum of kernels
+            posterior_value = np.sum(weights * kernel_values)
 
         return posterior_value

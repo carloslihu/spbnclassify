@@ -670,7 +670,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
+    def test_infer(self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame) -> None:
         evidence = {"b": data.iloc[0]["b"]}
         infer_dict = bn.infer(evidence=evidence, n_samples=250, seed=SEED)
 
@@ -703,14 +703,17 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         expected_weights = np.exp(log_weights - logsumexp(log_weights))
         np.testing.assert_allclose(weights, expected_weights, rtol=1e-10, atol=1e-12)
 
-    def test_posterior(self, bn: KDEBayesianNetwork, data: pd.DataFrame) -> None:
-        point = pd.Series({"a": 1.5})
+    def test_posterior(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
+        # NOTE: KDE query node case
+        point = pd.Series({"a": 1.5, "d": 2.0})
         samples = np.array([0.0, 1.0, 2.0, 4.0])
         weights = np.array([0.1, 0.2, 0.6, 0.1])
 
         lw = {
             "parameters": {
-                "assignments": pd.DataFrame({"a": samples}),
+                "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
             }
         }
@@ -729,3 +732,14 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+        # TODO: CLG query node case
+        # expected = np.exp(-0.5 * ((point["d"] - 2.0) / 1.0) ** 2) / (
+        #     np.sqrt(2 * np.pi) * 1.0
+        # )
+        actual = bn.posterior(
+            query_node="d",
+            evidence={},
+            point=point,
+            likelihood_weighting_dict=lw,
+        )
+        # np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
