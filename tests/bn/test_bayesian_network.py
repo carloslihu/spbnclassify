@@ -733,13 +733,10 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
         # TODO: CLG query node case
-        # expected = np.exp(-0.5 * ((point["d"] - 2.0) / 1.0) ** 2) / (
-        #     np.sqrt(2 * np.pi) * 1.0
-        # )
         actual = bn.posterior(
             query_node="d",
             evidence={},
             point=point,
-            likelihood_weighting_dict=lw,
+            # likelihood_weighting_dict=lw,
         )
         # np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)

@@ -350,24 +350,17 @@ class SemiParametricBayesianNetwork(
 
         cpd = self.cpd(query_node)
         if cpd.type() == pbn.LinearGaussianCPDType():
-            # TODO: recalculate given point if not in assignments
             # Assign for CLG nodes depending on the matching evidence
-            post = assignments.loc[
-                assignments[list(evidence.keys())]
-                .eq(point[list(evidence.keys())])
-                .all(axis=1),
-                query_node,
-            ]
-            mu = post.mean()
-            std = post.std()
-            # TODO: Review if this should be weighted
-            posterior_value = norm.pdf(point[query_node], loc=mu, scale=std)
+            samples_post = assignments[query_node]
+            # For each of the rows, we need to compute the posterior mean and std based on the evidence
+            mu = samples_post.apply(lambda x: x.mu())
+            std = samples_post.apply(lambda x: x.sigma())
+            kernel_values = norm.pdf(point[query_node], loc=mu, scale=std)
         else:
             # Estimate the density at ``point`` with a weighted Gaussian KDE per query node.
             samples = assignments[query_node].to_numpy(dtype=float)
             kernel_values = _kernel_values(samples)
 
-            # Weighted sum of kernels
-            posterior_value = np.sum(weights * kernel_values)
-
+        # Weighted sum of kernels
+        posterior_value = np.sum(weights * kernel_values)
         return posterior_value
