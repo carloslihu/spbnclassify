@@ -259,6 +259,7 @@ class SemiParametricBayesianNetwork(
         ie = gclg.CLGVariableElimination(clg_subgraphic)
         unique_evidence = assignments.drop_duplicates().dropna(axis=1)
 
+        # NOTE: Expensive inference for CLG nodes, we need to compute the posterior for each unique evidence and assign it to the corresponding rows in the assignments dataframe
         for _, row in unique_evidence.iterrows():
             aux_evidence = row.to_dict()
             # We put the CKDE evidence in the CLG inference

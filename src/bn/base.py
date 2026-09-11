@@ -543,12 +543,26 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         Returns:
             BayesianNetwork: The model
         """
-        with open(model_file, "rb") as f:
-            return pickle.load(f)
-        if isinstance(self.graphic, gum.BayesNet):
-            self.graphic.loadBIFXML(str(model_file.with_suffix(".bifxml")))
-        elif isinstance(self.graphic, gclg.CLG):
-            self.graphic = gclg.SEM.loadCLG(str(model_file.with_suffix(".sem")))
+        if model_file.suffix == ".pkl":
+            with open(model_file, "rb") as f:
+                return pickle.load(f)
+        else:
+            bn = cls()
+            if model_file.suffix == ".bifxml":
+                bn.graphic.loadBIFXML(str(model_file))
+            elif model_file.suffix == ".sem":
+                bn.graphic = gclg.SEM.loadCLG(str(model_file))
+            else:
+                raise ValueError(
+                    f"Unsupported file format: {model_file.suffix}. Supported formats are .pkl, .bifxml, and .sem"
+                )
+            for node in bn.graphic.names():
+                bn.add_node(node)
+            for source_id, target_id in bn.graphic.arcs():
+                source = bn.graphic.variable(source_id).name()
+                target = bn.graphic.variable(target_id).name()
+                bn.add_arc(source, target)
+            return bn
 
     def _remove_zero_variance_nodes(
         self,
