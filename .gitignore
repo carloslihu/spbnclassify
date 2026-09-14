@@ -221,3 +221,4 @@ __marimo__/
 src/out/
 data/pipelines/
 tests/helpers/models/
+!src/wheels/

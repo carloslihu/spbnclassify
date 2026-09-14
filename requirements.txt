@@ -1,0 +1,1 @@
+./src/wheels/pybnesian-0.5.3-cp310-cp310-linux_x86_64.whl # Local wheel for PyBNesian
