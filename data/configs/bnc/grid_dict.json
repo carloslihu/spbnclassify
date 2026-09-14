@@ -1,0 +1,21 @@
+{
+    "bayesian_classifier": {
+        "model_args": {
+            "parametric": [
+                "Gaussian",
+                "KDE",
+                "SemiParametric"
+            ],
+            "structure": [
+                "NaiveBayes",
+                "SelectiveNaiveBayes",
+                "TreeAugmentedNaiveBayes",
+                "KDependenceBayesian",
+                "BayesianNetworkAugmentedNaiveBayes",
+                "BayesianMultinet",
+                "AveragedOneDependenceEstimator"
+            ]
+        },
+        "train_args": {}
+    }
+}

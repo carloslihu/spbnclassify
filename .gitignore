@@ -219,4 +219,5 @@ __marimo__/
 
 # Ignore output directories
 src/out/
+data/pipelines/
 tests/helpers/models/

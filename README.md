@@ -88,7 +88,14 @@ The Semiparametric Bayesian Network Classifier family is a novel framework combi
   <img src="images/SP-BNC.png" alt="SP-BNC diagram">
 </p>
 
-A research article describing the methodology and experimental results is currently under review. Detailed results showing the average and standard deviation for each model and dataset presented in the article can be found [here](results/spbnc-article).
+A research article describing the methodology and experimental results is published in the journal **Pattern Recognition** [[1](#references)]. The article presents a comprehensive comparison of the Semiparametric Bayesian Network Classifier with other state-of-the-art classifiers, demonstrating its superior performance across various datasets and scenarios.
+
+**Detailed Results:** The average and standard deviation for each model and dataset presented in the article can be found [here](data/results/spbnc-article).
+
+### References
+
+[1] C. Li-Hu, P. Larrañaga, and C. Bielza, "Semiparametric Bayesian network classifiers," *Pattern Recognition*, vol. 182, p. 114740, Feb. 2027, doi: [10.1016/j.patcog.2026.114740](https://doi.org/10.1016/j.patcog.2026.114740).
+
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -142,6 +149,7 @@ To get a local copy up and running follow these simple example steps.
 Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
 
 _For more examples, please refer to the [Documentation](https://example.com)_ -->
+<!-- TODO Add experiment configuration instructions -->
    ```sh
    # To execute the experiments and obtain the results
    cd src
@@ -152,6 +160,24 @@ _For more examples, please refer to the [Documentation](https://example.com)_ --
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
+<!-- REFERENCES -->
+
+## How to cite
+If you use this code in your research, please cite the following paper:
+
+```bibtex
+@article{li-huSemiparametricBayesianNetwork2027,
+  title = {Semiparametric {{Bayesian}} Network Classifiers},
+  author = {{Li-Hu}, Carlos and Larra{\~n}aga, Pedro and Bielza, Concha},
+  year = 2027,
+  journal = {Pattern Recognition},
+  volume = {182},
+  pages = {114740},
+  doi = {10.1016/j.patcog.2026.114740},
+  urldate = {2026-09-02},
+  langid = {english}
+}
+```
 
 <!-- ROADMAP -->
 
@@ -215,9 +241,9 @@ Project Link: [https://github.com/carloslihu/spbnclassify](https://github.com/ca
 
 - []()
 - []()
-- []() -->
+- []()
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+<p align="right">(<a href="#readme-top">back to top</a>)</p> -->
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
