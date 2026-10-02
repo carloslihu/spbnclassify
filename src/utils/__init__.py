@@ -4,7 +4,7 @@ from .graph import (
     DirectedTree,
     Graph,
 )
-from .noisy import NoisyAND, NoisyOR
+from .noisy import NoisyAND, NoisyOR, NoisyProduct
 from .parsing import GridSearchArgs
 
 __all__ = [
@@ -14,5 +14,6 @@ __all__ = [
     "ConditionalMutualInformationGraph",
     "GridSearchArgs",
     "NoisyOR",
+    "NoisyProduct",
     "NoisyAND",
 ]

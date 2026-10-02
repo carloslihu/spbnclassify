@@ -153,7 +153,9 @@ class NoisyOR(_NoisyGate):
         self.leak = float(leak)
         self.weights = self._normalize_weights(weights)
         _check_probabilities(self.priors, "parent priors")
-        _check_probabilities(np.array([self.target_prior, self.leak]), "target prior and leak")
+        _check_probabilities(
+            np.array([self.target_prior, self.leak]), "target prior and leak"
+        )
         if self.leak >= 1:
             raise ValueError("The leak must be lower than 1")
         self.scale = self._solve_scale()
@@ -164,14 +166,23 @@ class NoisyOR(_NoisyGate):
             return np.ones(len(self.parents))
         w = np.array([weights[p] for p in self.parents], dtype=float)
         if np.any(w < 0) or not np.any(w > 0):
-            raise ValueError("Weights must be non-negative with at least one positive value")
+            raise ValueError(
+                "Weights must be non-negative with at least one positive value"
+            )
         return w / w.max()
 
     def _marginal(self, scale: float) -> float:
-        return float(1 - (1 - self.leak) * np.prod(1 - scale * self.weights * self.priors))
+        return float(
+            1 - (1 - self.leak) * np.prod(1 - scale * self.weights * self.priors)
+        )
 
     def _solve_scale(self) -> float:
         low, high = self._marginal(0.0), self._marginal(1.0)
+        # Tight tolerances: priors of rare events (e.g. 1e-5) must not snap to a bound
+        if np.isclose(self.target_prior, low, rtol=1e-9, atol=1e-12):
+            return 0.0
+        if np.isclose(self.target_prior, high, rtol=1e-9, atol=1e-12):
+            return 1.0
         if not low <= self.target_prior <= high:
             raise UnreachableTargetError(
                 self.target_prior,
@@ -180,10 +191,6 @@ class NoisyOR(_NoisyGate):
                 "Lower the leak if P(Y=1) is too small; the parents cannot explain "
                 "P(Y=1) if it is too large.",
             )
-        if np.isclose(self.target_prior, low):
-            return 0.0
-        if np.isclose(self.target_prior, high):
-            return 1.0
         return float(brentq(lambda s: self._marginal(s) - self.target_prior, 0.0, 1.0))
 
     def marginal(self) -> float:
@@ -192,7 +199,9 @@ class NoisyOR(_NoisyGate):
 
     def prob_true(self, x: np.ndarray) -> np.ndarray:
         x = np.atleast_2d(x)
-        return 1 - (1 - self.leak) * np.prod(np.where(x == 1, 1 - self.links, 1.0), axis=1)
+        return 1 - (1 - self.leak) * np.prod(
+            np.where(x == 1, 1 - self.links, 1.0), axis=1
+        )
 
 
 class NoisyAND(_NoisyGate):
@@ -232,7 +241,9 @@ class NoisyAND(_NoisyGate):
             UnreachableTargetError: If no inhibition strengths in [0, 1] reproduce
                 ``target_prior`` with the given inhibitor and weights.
         """
-        _check_probabilities(np.array(list(parent_priors.values()), dtype=float), "parent priors")
+        _check_probabilities(
+            np.array(list(parent_priors.values()), dtype=float), "parent priors"
+        )
         _check_probabilities(np.array([target_prior]), "target prior")
         try:
             self._dual = NoisyOR(
@@ -263,6 +274,45 @@ class NoisyAND(_NoisyGate):
 
     def prob_true(self, x: np.ndarray) -> np.ndarray:
         return 1 - self._dual.prob_true(1 - np.atleast_2d(x))
+
+
+class NoisyProduct(_NoisyGate):
+    """Conjunction of independent noisy gates over disjoint parents.
+
+    Y = 1 only if every gate outputs 1, so P(Y=1 | x) = prod_g P_g(Y=1 | x_g) and, with independent parents, P(Y=1) = prod_g P_g(Y=1).
+
+    Attributes:
+        gates (list[NoisyOR | NoisyAND]): The combined gates.
+        parents (list[str]): Parents of all gates, in gate order.
+    """
+
+    def __init__(self, gates: list["NoisyOR | NoisyAND"]) -> None:
+        """Combines the gates.
+
+        Args:
+            gates (list[NoisyOR | NoisyAND]): Fitted gates with disjoint parents.
+
+        Raises:
+            ValueError: If the gates share parents.
+        """
+        self.gates = list(gates)
+        self.parents = [p for gate in self.gates for p in gate.parents]
+        if len(set(self.parents)) != len(self.parents):
+            raise ValueError("The gates must have disjoint parents")
+
+    def marginal(self) -> float:
+        """Returns P(Y = 1) implied by the fitted gates and the parent priors."""
+        return float(np.prod([gate.marginal() for gate in self.gates]))
+
+    def prob_true(self, x: np.ndarray) -> np.ndarray:
+        x = np.atleast_2d(x)
+        result = np.ones(len(x))
+        start = 0
+        for gate in self.gates:
+            end = start + len(gate.parents)
+            result *= gate.prob_true(x[:, start:end])
+            start = end
+        return result
 
 
 def _check_probabilities(values: np.ndarray, name: str) -> None:

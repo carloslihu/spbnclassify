@@ -6,6 +6,7 @@ from src.utils.noisy import (
     PROB_TRUE_COLUMN,
     NoisyAND,
     NoisyOR,
+    NoisyProduct,
     UnreachableTargetError,
 )
 
@@ -120,3 +121,42 @@ class TestNoisyAND:
             NoisyAND({"a": 0.9, "b": 0.7}, 0.5, inhibitor=INHIBITOR)
         assert e.value.low == pytest.approx((1 - INHIBITOR) * 0.9 * 0.7)
         assert e.value.high == pytest.approx(1 - INHIBITOR)
+
+
+class TestNoisyProduct:
+    OR_PRIORS = {"a": 0.9, "b": 0.8}
+    AND_PRIORS = {"c": 0.95}
+
+    def product(self) -> NoisyProduct:
+        return NoisyProduct(
+            [
+                NoisyOR(self.OR_PRIORS, 0.97, leak=LEAK),
+                NoisyAND(self.AND_PRIORS, 0.92, inhibitor=INHIBITOR),
+            ]
+        )
+
+    def test_marginal_is_product_of_gates(self) -> None:
+        model = self.product()
+        assert model.parents == ["a", "b", "c"]
+        assert model.marginal() == pytest.approx(0.97 * 0.92)
+
+    def test_cpt_marginal_matches(self) -> None:
+        model = self.product()
+        cpt = model.cpt()
+        priors = np.array([0.9, 0.8, 0.95])
+        configs = cpt[model.parents].to_numpy()
+        weights = np.prod(np.where(configs == 1, priors, 1 - priors), axis=1)
+        assert weights @ cpt[PROB_TRUE_COLUMN].to_numpy() == pytest.approx(0.97 * 0.92)
+
+    def test_prob_true_multiplies_gates(self) -> None:
+        model = self.product()
+        or_gate, and_gate = model.gates
+        x = np.array([[1, 0, 0]])
+        expected = or_gate.prob_true(x[:, :2]) * and_gate.prob_true(x[:, 2:])
+        assert model.prob_true(x) == pytest.approx(expected)
+
+    def test_shared_parents_raise(self) -> None:
+        with pytest.raises(ValueError, match="disjoint"):
+            NoisyProduct(
+                [NoisyOR({"a": 0.5}, 0.4), NoisyAND({"a": 0.5}, 0.6)]
+            )
