@@ -11,6 +11,8 @@ from src.utils.noisy import (
 
 PARENT_PRIORS = {"a": 0.1, "b": 0.3, "c": 0.05}
 TARGET_PRIOR = 0.2
+LEAK = 0.02
+INHIBITOR = 0.05
 
 
 def cpt_marginal(model: NoisyOR | NoisyAND) -> float:
@@ -94,27 +96,27 @@ class TestNoisyGates:
 
 class TestNoisyOR:
     def test_leak_is_probability_without_active_parents(self) -> None:
-        model = NoisyOR(PARENT_PRIORS, TARGET_PRIOR, leak=0.02)
-        assert model.prob_true(np.zeros(3))[0] == pytest.approx(0.02)
+        model = NoisyOR(PARENT_PRIORS, TARGET_PRIOR, leak=LEAK)
+        assert model.prob_true(np.zeros(3))[0] == pytest.approx(LEAK)
 
     def test_single_active_parent(self) -> None:
-        model = NoisyOR(PARENT_PRIORS, TARGET_PRIOR, leak=0.02)
-        expected = 1 - 0.98 * (1 - model.links[1])
+        model = NoisyOR(PARENT_PRIORS, TARGET_PRIOR, leak=LEAK)
+        expected = 1 - (1 - LEAK) * (1 - model.links[1])
         assert model.prob_true(np.array([0, 1, 0]))[0] == pytest.approx(expected)
 
 
 class TestNoisyAND:
     def test_inhibitor_is_failure_with_all_parents_active(self) -> None:
-        model = NoisyAND(PARENT_PRIORS, 0.01, inhibitor=0.05)
-        assert model.prob_true(np.ones(3))[0] == pytest.approx(0.95)
+        model = NoisyAND(PARENT_PRIORS, 0.01, inhibitor=INHIBITOR)
+        assert model.prob_true(np.ones(3))[0] == pytest.approx(1 - INHIBITOR)
 
     def test_single_inactive_parent(self) -> None:
-        model = NoisyAND(PARENT_PRIORS, 0.01, inhibitor=0.05)
-        expected = 0.95 * (1 - model.inhibitions[0])
+        model = NoisyAND(PARENT_PRIORS, 0.01, inhibitor=INHIBITOR)
+        expected = (1 - INHIBITOR) * (1 - model.inhibitions[0])
         assert model.prob_true(np.array([0, 1, 1]))[0] == pytest.approx(expected)
 
     def test_unreachable_range_is_in_child_terms(self) -> None:
         with pytest.raises(UnreachableTargetError) as e:
-            NoisyAND({"a": 0.9, "b": 0.7}, 0.5, inhibitor=0.01)
-        assert e.value.low == pytest.approx(0.99 * 0.9 * 0.7)
-        assert e.value.high == pytest.approx(0.99)
+            NoisyAND({"a": 0.9, "b": 0.7}, 0.5, inhibitor=INHIBITOR)
+        assert e.value.low == pytest.approx((1 - INHIBITOR) * 0.9 * 0.7)
+        assert e.value.high == pytest.approx(1 - INHIBITOR)
