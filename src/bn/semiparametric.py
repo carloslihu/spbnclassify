@@ -107,76 +107,6 @@ class SemiParametricBayesianNetwork(
         pbn.SemiparametricBN.fit(self, data)
         return self
 
-    # def infer(
-    #     self,
-    #     evidence: dict[str, float] = {},
-    #     json_file_path: Path | None = None,
-    #     pdf_file_path: Path | None = None,
-    #     n_samples: int = 1000,
-    #     seed: int = 0,
-    # ) -> dict[str, dict]:
-    #     """
-    #     Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.
-    #     Args:
-    #         evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
-    #         n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
-    #         seed (int, optional): The random seed for reproducibility. Defaults to 0.
-    #         json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
-    #         pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
-    #     Returns:
-    #         dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The structure is represented as a list of arcs, and the parameters include the weights and assignments from the likelihood weighting inference.
-    #     """
-    #     # Initialize batched assignments and per-sample log weights.
-    #     topo_order = list(self.graph().topological_sort())
-    #     assignments = pd.DataFrame(index=np.arange(n_samples), columns=topo_order)
-    #     log_weights = np.zeros(n_samples, dtype=float)
-
-    #     # Sample variables in topological order and accumulate log weights.
-    #     for node_index, node in enumerate(topo_order):
-    #         cpd = self.cpd(node)
-    #         parents = cpd.evidence()
-    #         parent_values = (
-    #             assignments[parents]
-    #             if len(parents) > 0
-    #             else pd.DataFrame(index=assignments.index)
-    #         )
-    #         # Clamp evidence and add its log-likelihood under the current parents.
-    #         if node in evidence:
-    #             observed_value = float(evidence[node])
-    #             assignments[node] = observed_value
-
-    #             point_df = parent_values.copy()
-    #             point_df.insert(0, node, observed_value)
-    #             log_weights += np.asarray(cpd.logl(point_df), dtype=float)
-    #         # Sample all rows at once from the conditional distribution of this node.
-    #         else:
-    #             assignments[node] = cpd.sample(
-    #                 n_samples,
-    #                 parent_values,
-    #                 seed=seed + node_index,
-    #             ).to_pandas()
-    #     # Normalize log weights to get importance weights.
-    #     weights = np.exp(log_weights - logsumexp(log_weights))
-    #     infer_dict = {
-    #         "structure": self.arcs(),
-    #         "parameters": {
-    #             "weights": weights,
-    #             "assignments": assignments,
-    #         },
-    #     }
-    #     # export results
-    #     if json_file_path:
-    #         export_dict = infer_dict.copy()
-    #         export_dict["parameters"]["weights"] = weights.tolist()
-    #         export_dict["parameters"]["assignments"] = assignments.to_dict(
-    #             orient="list"
-    #         )
-    #         with open(json_file_path, "w") as f:
-    #             json.dump(export_dict, f, indent=4)
-    #     if pdf_file_path:
-    #         self.save(pdf_file_path)
-    #     return infer_dict
-
     # RFE: Allow automatic sampling stop criterion
     def infer(
         self,
@@ -248,6 +178,7 @@ class SemiParametricBayesianNetwork(
                 mu = 0.0
                 std = 1.0
             clg_subgraphic.add(gclg.GaussianVariable(node, mu, std))
+
         # Copies the arcs to the pyagrum graphic for CLG nodes, and sets the coefficients for the arcs
         for source, target in self.arcs():
             cpd = self.cpd(target)
@@ -274,6 +205,7 @@ class SemiParametricBayesianNetwork(
                     assignments.loc[
                         assignments[list(aux_evidence.keys())].eq(row).all(axis=1), node
                     ] = post
+
         # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
         infer_dict["parameters"] = {
