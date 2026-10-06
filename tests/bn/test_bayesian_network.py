@@ -740,3 +740,84 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             # likelihood_weighting_dict=lw,
         )
         # np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+    def test_infer_GS(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
+        evidence = {"b": data.iloc[0]["b"]}
+        n_samples = 250
+        infer_dict = bn.infer_GS(
+            evidence=evidence, n_samples=n_samples, n_chains=50, burn_in=20, seed=SEED
+        )
+
+        assignments = infer_dict["parameters"]["assignments"]
+        weights = infer_dict["parameters"]["weights"]
+        acceptance_rate = infer_dict["parameters"]["acceptance_rate"]
+
+        assert set(assignments.columns) == set(bn.nodes())
+        assert len(assignments) == n_samples
+        assert np.all(assignments["b"] == evidence["b"])
+
+        # MCMC samples are equally weighted
+        np.testing.assert_allclose(weights, 1.0 / n_samples, rtol=1e-12, atol=1e-12)
+        np.testing.assert_allclose(weights.sum(), 1.0, rtol=1e-12, atol=1e-12)
+
+        assert set(acceptance_rate) == set(bn.nodes()) - set(evidence)
+        assert all(0.0 <= rate <= 1.0 for rate in acceptance_rate.values())
+
+        # Non-evidence CLG nodes are Rao-Blackwellized into CLG posteriors
+        assert all(np.isfinite(x.mu()) and x.sigma() > 0 for x in assignments["d"])
+
+    def test_infer_GS_matches_LW(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
+        evidence = {"b": data.iloc[0]["b"]}
+        lw = bn.infer(evidence=evidence, n_samples=2000, seed=SEED)
+        gs = bn.infer_GS(evidence=evidence, n_samples=2000, n_chains=200, seed=SEED)
+
+        lw_samples = lw["parameters"]["assignments"]["a"].to_numpy(dtype=float)
+        lw_mean = np.sum(lw["parameters"]["weights"] * lw_samples)
+        gs_mean = gs["parameters"]["assignments"]["a"].to_numpy(dtype=float).mean()
+
+        np.testing.assert_allclose(gs_mean, lw_mean, atol=0.25 * np.std(lw_samples))
+
+    def test_posterior_GS(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
+        # NOTE: KDE query node case
+        point = pd.Series({"a": 1.5, "d": 2.0})
+        samples = np.array([0.0, 1.0, 2.0, 4.0])
+        weights = np.full(len(samples), 1.0 / len(samples))
+
+        gs = {
+            "parameters": {
+                "assignments": pd.DataFrame({"a": samples, "d": samples}),
+                "weights": weights,
+            }
+        }
+
+        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        kernel_values = np.exp(-0.5 * ((point["a"] - samples) / bandwidth) ** 2) / (
+            np.sqrt(2.0 * np.pi) * bandwidth
+        )
+        expected = np.sum(weights * kernel_values)
+
+        actual = bn.posterior_GS(
+            query_node="a",
+            evidence={},
+            point=point,
+            gibbs_sampling_dict=gs,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+        # CLG query node case (smoke test)
+        actual = bn.posterior_GS(
+            query_node="d",
+            evidence={},
+            point=point,
+            n_samples=200,
+            n_chains=50,
+            burn_in=20,
+            seed=SEED,
+        )
+        assert np.isfinite(actual) and actual >= 0
