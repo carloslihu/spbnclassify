@@ -320,18 +320,21 @@ class SemiParametricBayesianNetwork(
         seed: int = 0,
     ) -> dict[str, dict]:
         """
-        Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.
+        Performs likelihood weighting inference on the Bayesian network using the provided evidence.
         It is Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
         The weights include the evidence likelihood of the sampled nodes and the marginal likelihood of the evidence on the remaining LinearGaussian nodes.
         The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows).
         Args:
-            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
-            n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4}. Defaults to an empty dictionary.
+            n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 1,000.
             seed (int, optional): The random seed for reproducibility. Defaults to 0.
             json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
             pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The structure is represented as a list of arcs, and the parameters include the weights and assignments from the likelihood weighting inference.
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence and the parameters of the inference results.
+            The parameters include the normalized weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and
+            the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``). A small n_eff compared to ``n_samples`` means the weights are
+            degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable and more samples are needed.
         """
         # Initialize batched assignments and per-sample log weights.
         topo_order = list(self.graph().topological_sort())
@@ -375,6 +378,7 @@ class SemiParametricBayesianNetwork(
             "weights": weights,
             "assignments": assignments,
             "posterior_std": posterior_std,
+            "effective_sample_size": float(1.0 / np.sum(weights**2)),
         }
         self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
@@ -401,7 +405,7 @@ class SemiParametricBayesianNetwork(
         point : pd.Series
             The point at which to evaluate the posterior density, e.g. pd.Series({"A": 1.0, "D": -0.5})
         n_samples : int
-            The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
+            The number of samples to draw for the likelihood weighting inference. Defaults to 1,000.
         seed : int
             The random seed for reproducibility. Defaults to 0.
         likelihood_weighting_dict : dict[str, dict]
