@@ -771,7 +771,8 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         np.testing.assert_allclose(weights, 1.0 / n_samples, rtol=1e-12, atol=1e-12)
         np.testing.assert_allclose(weights.sum(), 1.0, rtol=1e-12, atol=1e-12)
 
-        assert set(acceptance_rate) == set(bn.nodes()) - set(evidence)
+        # Only the CKDE nodes and their ancestors are sampled, the rest is integrated out
+        assert set(acceptance_rate) == bn._sampled_nodes() - set(evidence)
         assert all(0.0 <= rate <= 1.0 for rate in acceptance_rate.values())
 
         # Nodes without CKDE children are always drawn exactly from their full conditional
@@ -791,7 +792,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     ) -> None:
         evidence = {"b": data.iloc[0]["b"]}
         lw = bn.infer(evidence=evidence, n_samples=2000, seed=SEED)
-        gs = bn.infer_GS(evidence=evidence, n_samples=2000, n_chains=200, seed=SEED)
+        gs = bn.infer_GS(
+            evidence=evidence, n_samples=1000, n_chains=100, burn_in=30, seed=SEED
+        )
 
         lw_samples = lw["parameters"]["assignments"]["a"].to_numpy(dtype=float)
         lw_mean = np.sum(lw["parameters"]["weights"] * lw_samples)
@@ -926,10 +929,12 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
     @classmethod
     def _toy_bn(
-        cls, node_types: dict[str, pbn.FactorType]
+        cls, node_types: dict[str, pbn.FactorType], with_label: bool = False
     ) -> SemiParametricBayesianNetwork:
         """A (LG) -> B -> C -> D -> E with A -> D and C -> E, and F a child of A and B.
-        Nodes missing from ``node_types`` are LinearGaussian."""
+        Nodes missing from ``node_types`` are LinearGaussian. With ``with_label``, a 0/1 label Y (child of C and E)
+        is added as the network's ``true_label``, so it is a node but not one of the ``feature_names_in_``.
+        """
         rng = np.random.default_rng(SEED)
         n = 500
         a = rng.normal(0, 1, n)
@@ -939,15 +944,20 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         e = d - c + rng.normal(0, 0.5, n)
         f = np.sin(2 * b) + 0.2 * a + 0.3 * rng.normal(size=n)
         df = pd.DataFrame({"A": a, "B": b, "C": c, "D": d, "E": e, "F": f})
-        bn = SemiParametricBayesianNetwork()
+        features = list(df.columns)
+        arcs = list(cls.TOY_ARCS)
+        if with_label:
+            df["Y"] = (c + e > 1.5).astype(float)
+            arcs += [("C", "Y"), ("E", "Y")]
+        bn = SemiParametricBayesianNetwork(true_label="Y")
         for node in df.columns:
             bn.add_node(node)
-        for source, target in cls.TOY_ARCS:
+        for source, target in arcs:
             bn.add_arc(source, target)
         for node in df.columns:
             bn.set_node_type(node, node_types.get(node, pbn.LinearGaussianCPDType()))
         pbn.SemiparametricBN.fit(bn, df)
-        bn.feature_names_in_ = list(df.columns)
+        bn.feature_names_in_ = features
         return bn
 
     @staticmethod
@@ -1088,7 +1098,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         np.testing.assert_allclose(
             np.mean(estimates, axis=0),
             [expected[node] for node in "ABC"],
-            atol=0.1,
+            atol=0.05,
         )
 
     def test_infer_GS_uses_ckde_evidence_on_lg_parents(self) -> None:
@@ -1177,11 +1187,53 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         stuck = iid + np.arange(n_chains)[None, :]
         assert SemiParametricBayesianNetwork._split_rhat(stuck) > 1.5
 
-        # Too few draws per chain
+        # Tail ESS of independent draws ~ number of draws
+        np.testing.assert_allclose(
+            SemiParametricBayesianNetwork._tail_effective_sample_size(iid),
+            n_draws * n_chains,
+            rtol=0.15,
+        )
+
+        # Too few draws per chain, or a single chain for R-hat
         assert np.isnan(SemiParametricBayesianNetwork._split_rhat(iid[:3]))
+        assert np.isnan(SemiParametricBayesianNetwork._split_rhat(iid[:, :1]))
         assert np.isnan(
             SemiParametricBayesianNetwork._mcmc_effective_sample_size(iid[:3])
         )
+
+    def test_mcmc_diagnostics_match_arviz(self) -> None:
+        az = pytest.importorskip("arviz")
+        rng = np.random.default_rng(SEED)
+        ar = np.zeros((501, 4))
+        ar[0] = rng.normal(size=4)
+        for t in range(1, len(ar)):
+            ar[t] = 0.9 * ar[t - 1] + rng.normal(size=4)
+        draws_cases = {
+            "iid_odd_draws": rng.normal(size=(1001, 6)),
+            "autocorrelated": ar,
+            "stuck_heavy_tails": rng.standard_t(2, size=(300, 5)) + np.arange(5),
+            "ties": np.round(rng.normal(size=(200, 4)), 1),
+        }
+        for name, draws in draws_cases.items():
+            # arviz expects (n_chains, n_draws)
+            np.testing.assert_allclose(
+                SemiParametricBayesianNetwork._split_rhat(draws),
+                float(az.rhat(draws.T)),
+                rtol=1e-10,
+                err_msg=name,
+            )
+            np.testing.assert_allclose(
+                SemiParametricBayesianNetwork._mcmc_effective_sample_size(draws),
+                float(az.ess(draws.T, method="bulk")),
+                rtol=1e-10,
+                err_msg=name,
+            )
+            np.testing.assert_allclose(
+                SemiParametricBayesianNetwork._tail_effective_sample_size(draws),
+                float(az.ess(draws.T, method="tail")),
+                rtol=1e-10,
+                err_msg=name,
+            )
 
     def test_infer_GS_diagnostics(self) -> None:
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
@@ -1197,8 +1249,10 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         assert gs["evidence"] == evidence
         rhat = gs["parameters"]["rhat"]
         ess = gs["parameters"]["effective_sample_size"]
+        tail_ess = gs["parameters"]["tail_effective_sample_size"]
         free_nodes = set(bn.nodes()) - set(evidence)
         assert set(rhat) == free_nodes and set(ess) == free_nodes
+        assert set(tail_ess) == free_nodes
 
         # n_samples is a multiple of n_chains, so the diagnostics are those of the returned assignments (posterior
         # means for the Rao-Blackwellized nodes C and E), whose rows are ordered sweep by sweep
@@ -1208,9 +1262,15 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             draws = assignments[node].to_numpy(dtype=float).reshape(-1, n_chains)
             assert rhat[node] == bn._split_rhat(draws)
             assert ess[node] == bn._mcmc_effective_sample_size(draws)
+            assert tail_ess[node] == bn._tail_effective_sample_size(draws)
             # R-hat is close to 1 (the exact value depends on the chain length relative to the autocorrelation)
             assert 0.95 < rhat[node] < 1.5
-            assert 0.0 < ess[node] <= 1.5 * n_samples
+            # The ESS can exceed the number of draws (antithetic chains), up to n log10(n)
+            assert 0.0 < ess[node] <= n_samples * np.log10(n_samples)
+
+        # B and C are strongly dependent (C = 1 + 2 B + small noise), which made Gibbs sampling mix slowly before C was
+        # integrated out of the chains (R-hat ~1.1-1.2 with 20 draws per chain)
+        assert rhat["B"] < 1.05 and rhat["C"] < 1.05
 
         # posterior_GS uses the autocorrelation-aware ESS of the query node for the KDE bandwidth
         point = pd.Series({"A": 1.0})
@@ -1236,3 +1296,95 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.posterior_GS("D", {"D": 2.0}, point, gibbs_sampling_dict=gs)
         with pytest.raises(ValueError, match="different evidence"):
             bn.posterior_GS("A", {"D": 1.0}, point, gibbs_sampling_dict=gs)
+
+    def test_infer_label_node(self) -> None:
+        # The label Y is a node of the network but not one of the feature_names_in_
+        bn = self._toy_bn({}, with_label=True)
+        assert "Y" in bn.nodes() and "Y" not in bn.feature_names_in_
+        evidence = {"B": 0.5, "D": 2.0}
+
+        # Without CKDE nodes both methods are exact (nothing is sampled)
+        nodes = list(bn.graph().topological_sort())
+        index = {node: i for i, node in enumerate(nodes)}
+        intercepts = np.zeros(len(nodes))
+        variances = np.zeros(len(nodes))
+        coefficients = np.zeros((len(nodes), len(nodes)))
+        for node in nodes:
+            cpd = bn.cpd(node)
+            intercepts[index[node]] = cpd.beta[0]
+            variances[index[node]] = cpd.variance
+            for parent, coef in zip(cpd.evidence(), cpd.beta[1:]):
+                coefficients[index[node], index[parent]] = coef
+        A = np.linalg.inv(np.eye(len(nodes)) - coefficients)
+        joint_mean = pd.Series(A @ intercepts, index=nodes)
+        joint_cov = pd.DataFrame((A * variances) @ A.T, index=nodes, columns=nodes)
+        cond_mean, cond_cov = _conditional_gaussian(
+            joint_mean, joint_cov, ["Y"], evidence
+        )
+        point = pd.Series({"Y": cond_mean[0] + 0.1})
+        expected = norm.pdf(point["Y"], loc=cond_mean[0], scale=np.sqrt(cond_cov[0, 0]))
+        np.testing.assert_allclose(
+            bn.posterior("Y", evidence, point, n_samples=10), expected, rtol=1e-8
+        )
+        np.testing.assert_allclose(
+            bn.posterior_GS("Y", evidence, point, n_samples=40, n_chains=10),
+            expected,
+            rtol=1e-8,
+        )
+
+        # With CKDE nodes, the label is Rao-Blackwellized by both methods
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()}, with_label=True)
+        evidence = {"F": 0.9, "D": 1.0}
+        lw = bn.infer(evidence=evidence, n_samples=5000, seed=SEED)
+        gs = bn.infer_GS(
+            evidence=evidence, n_samples=500, n_chains=50, burn_in=30, seed=SEED
+        )
+        for result in (lw, gs):
+            assert result["parameters"]["posterior_std"]["Y"] > 0
+            assert np.all(
+                np.isfinite(result["parameters"]["assignments"]["Y"].to_numpy(float))
+            )
+        lw_mean = np.sum(
+            lw["parameters"]["weights"] * lw["parameters"]["assignments"]["Y"]
+        )
+        gs_mean = gs["parameters"]["assignments"]["Y"].mean()
+        np.testing.assert_allclose(gs_mean, lw_mean, atol=0.05)
+
+    def test_inference_warnings_and_json(self, tmp_path: Path) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+
+        # Degenerate likelihood weights
+        with pytest.warns(RuntimeWarning, match="Effective sample size"):
+            bn.infer(evidence={"F": 0.9}, n_samples=50, seed=SEED)
+
+        # Too few Gibbs samples
+        with pytest.warns(RuntimeWarning, match="Effective sample size below"):
+            bn.infer_GS(
+                evidence={"F": 0.9, "D": 1.0},
+                n_samples=40,
+                n_chains=5,
+                burn_in=5,
+                seed=SEED,
+            )
+        # Unconverged chains (the collapsed sampler converges too fast to trigger it reliably end to end)
+        with pytest.warns(RuntimeWarning, match="R-hat above"):
+            bn._warn_diagnostics({"A": 1.2, "B": 1.0}, {"A": 500.0, "B": 500.0})
+
+        # Fewer than 4 draws per chain: NaN diagnostics, exported as JSON null
+        json_file_path = tmp_path / "gs_result.json"
+        gs = bn.infer_GS(
+            evidence={"D": 1.0},
+            n_samples=20,
+            n_chains=10,
+            burn_in=5,
+            seed=SEED,
+            json_file_path=json_file_path,
+        )
+        assert np.isnan(gs["parameters"]["rhat"]["A"])
+
+        def _reject_constant(constant: str):
+            raise ValueError(f"Non-standard JSON constant {constant}")
+
+        with open(json_file_path) as f:
+            exported = json.loads(f.read(), parse_constant=_reject_constant)
+        assert exported["parameters"]["rhat"]["A"] is None

@@ -1,4 +1,5 @@
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -6,10 +7,14 @@ import pandas as pd
 import pybnesian as pbn
 from scipy.linalg import cho_solve, cholesky, solve_triangular
 from scipy.special import logsumexp
-from scipy.stats import norm
+from scipy.stats import norm, rankdata
 
 from ..utils.constants import TRUE_ANOMALY_LABEL
 from .base import BayesianNetwork
+
+# Thresholds of the inference diagnostics below which a RuntimeWarning is emitted
+MIN_EFFECTIVE_SAMPLE_SIZE = 100
+MAX_RHAT = 1.05
 
 
 class SemiParametricBayesianNetwork(
@@ -262,9 +267,46 @@ class SemiParametricBayesianNetwork(
                 },
             }
             with open(json_file_path, "w") as f:
-                json.dump(export_dict, f, indent=4)
+                json.dump(self._json_safe(export_dict), f, indent=4)
         if pdf_file_path:
             self.save(pdf_file_path)
+
+    @classmethod
+    def _json_safe(cls, value):
+        """Recursively replaces the non-finite floats (e.g., NaN diagnostics) by None, which strict JSON parsers accept as null"""
+        if isinstance(value, dict):
+            return {key: cls._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._json_safe(item) for item in value]
+        if isinstance(value, float) and not np.isfinite(value):
+            return None
+        return value
+
+    @staticmethod
+    def _warn_diagnostics(
+        rhat: dict[str, float], effective_sample_size: dict[str, float]
+    ) -> None:
+        """Emits a RuntimeWarning for the nodes whose R-hat exceeds ``MAX_RHAT`` or whose effective sample size is below ``MIN_EFFECTIVE_SAMPLE_SIZE``"""
+        high_rhat = {node: value for node, value in rhat.items() if value > MAX_RHAT}
+        if high_rhat:
+            warnings.warn(
+                f"R-hat above {MAX_RHAT} for {high_rhat}: the chains have not converged or are too short for their "
+                "autocorrelation, increase burn_in or the draws per chain (n_samples / n_chains).",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        low_ess = {
+            node: value
+            for node, value in effective_sample_size.items()
+            if value < MIN_EFFECTIVE_SAMPLE_SIZE
+        }
+        if low_ess:
+            warnings.warn(
+                f"Effective sample size below {MIN_EFFECTIVE_SAMPLE_SIZE} for {low_ess}: the estimates are unreliable, "
+                "increase n_samples.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
     def _posterior_density(
         self,
@@ -343,7 +385,8 @@ class SemiParametricBayesianNetwork(
             dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence and the parameters of the inference results.
             The parameters include the normalized weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and
             the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``). A small n_eff compared to ``n_samples`` means the weights are
-            degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable and more samples are needed.
+            degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable and more samples are needed:
+            a RuntimeWarning is emitted below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
         """
         # Initialize batched assignments and per-sample log weights.
         topo_order = list(self.graph().topological_sort())
@@ -383,11 +426,20 @@ class SemiParametricBayesianNetwork(
 
         # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
+        effective_sample_size = float(1.0 / np.sum(weights**2))
+        # Without sampled nodes every row is the exact posterior, so the sample size does not matter
+        if len(sampled) > 0 and effective_sample_size < MIN_EFFECTIVE_SAMPLE_SIZE:
+            warnings.warn(
+                f"Effective sample size {effective_sample_size:.1f} below {MIN_EFFECTIVE_SAMPLE_SIZE}: the weights are "
+                "degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable, increase n_samples.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         infer_dict["parameters"] = {
             "weights": weights,
             "assignments": assignments,
             "posterior_std": posterior_std,
-            "effective_sample_size": float(1.0 / np.sum(weights**2)),
+            "effective_sample_size": effective_sample_size,
         }
         self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
@@ -555,6 +607,68 @@ class SemiParametricBayesianNetwork(
         tau2 = 1.0 / precision
         return tau2 * weighted_sum, tau2
 
+    def _rb_evidence_model(
+        self, sampled_nodes: set[str], evidence: dict[str, float]
+    ) -> dict | None:
+        """Precomputes p(e_E | S) = N(e_E; c_E + C_E s, Sigma_EE) of the evidence E on the non-sampled LinearGaussian nodes
+        given the sampled values s (see ``_clg_conditional``). Returns None if there is no such evidence.
+        """
+        clg = self._clg_conditional(sampled_nodes)
+        evidence_index = [i for i, node in enumerate(clg["nodes"]) if node in evidence]
+        if len(evidence_index) == 0:
+            return None
+        return {
+            "conditioning_nodes": clg["conditioning_nodes"],
+            "evidence_values": np.array(
+                [float(evidence[clg["nodes"][i]]) for i in evidence_index]
+            ),
+            "intercept": clg["intercept"][evidence_index],
+            "coefficients": clg["coefficients"][evidence_index],
+            "precision": np.linalg.inv(
+                clg["covariance"][np.ix_(evidence_index, evidence_index)]
+            ),
+        }
+
+    @staticmethod
+    def _rb_evidence_gaussian(
+        node: str, state: pd.DataFrame, rb_evidence: dict
+    ) -> tuple[np.ndarray, float] | None:
+        """p(e_E | S) as a function of the sampled ``node`` x = s_j. With a = C_E[:, j], P = Sigma_EE^-1 and the residual
+        r = e_E - c_E - C_E s + a x (which does not depend on x), it is N(x; a^T P r / a^T P a, 1 / a^T P a) up to a constant.
+        Returns None if the evidence does not depend on ``node``."""
+        a = rb_evidence["coefficients"][
+            :, rb_evidence["conditioning_nodes"].index(node)
+        ]
+        if not np.any(a):
+            return None
+        precision_a = rb_evidence["precision"] @ a
+        tau2 = 1.0 / (a @ precision_a)
+        conditioning_values = state[rb_evidence["conditioning_nodes"]].to_numpy(
+            dtype=float
+        )
+        residuals = (
+            rb_evidence["evidence_values"][None, :]
+            - rb_evidence["intercept"][None, :]
+            - conditioning_values @ rb_evidence["coefficients"].T
+            + state[node].to_numpy(dtype=float)[:, None] * a[None, :]
+        )
+        return tau2 * (residuals @ precision_a), tau2
+
+    @staticmethod
+    def _gaussian_product(
+        first: tuple[np.ndarray, float] | None,
+        second: tuple[np.ndarray, float] | None,
+    ) -> tuple[np.ndarray, float] | None:
+        """N(x; mu1, tau1) N(x; mu2, tau2) is N(x; mu, tau) up to a constant, with 1 / tau = 1 / tau1 + 1 / tau2 and
+        mu = tau (mu1 / tau1 + mu2 / tau2). A None factor is ignored."""
+        if first is None:
+            return second
+        if second is None:
+            return first
+        (mu1, tau1), (mu2, tau2) = first, second
+        tau = 1.0 / (1.0 / tau1 + 1.0 / tau2)
+        return tau * (mu1 / tau1 + mu2 / tau2), tau
+
     @staticmethod
     def _sample_mixture(
         log_w: np.ndarray, means: np.ndarray, var: float, rng: np.random.Generator
@@ -573,10 +687,12 @@ class SemiParametricBayesianNetwork(
         ckde_children: list[str],
         rng: np.random.Generator,
         max_rejection_tries: int,
+        rb_evidence: dict | None = None,
     ) -> tuple[np.ndarray, int, int]:
         """Samples ``node`` from its full conditional p(x | Markov blanket) for every chain.
 
-        q(x) = p(x | pa) * prod_{LG children} p(c | .) is a Gaussian mixture sampled exactly. CKDE children
+        q(x) = p(x | pa) * prod_{LG children} p(c | .) * p(e_E | S) is a Gaussian mixture sampled exactly, where p(e_E | S)
+        is the evidence likelihood of the integrated-out LinearGaussian nodes (see ``_rb_evidence_gaussian``). CKDE children
         g(x) = prod_{CKDE children} p(c | .) are handled by rejection sampling with the bound g <= B, and the chains
         still pending after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with proposal q.
 
@@ -584,7 +700,14 @@ class SemiParametricBayesianNetwork(
             tuple[np.ndarray, int, int]: The new values, the number of exact draws and the number of changed values.
         """
         log_w, means, var = self._conditional_mixture(kernels[node], state)
-        lg_gaussian = self._lg_children_gaussian(node, state, lg_children)
+        lg_gaussian = self._gaussian_product(
+            self._lg_children_gaussian(node, state, lg_children),
+            (
+                self._rb_evidence_gaussian(node, state, rb_evidence)
+                if rb_evidence is not None
+                else None
+            ),
+        )
         if lg_gaussian is not None:
             mu_lg, tau2 = lg_gaussian
             # N(x; m_j, var) N(x; mu_lg, tau2) = N(m_j; mu_lg, var + tau2) N(x; m*_j, v*)
@@ -631,38 +754,54 @@ class SemiParametricBayesianNetwork(
 
     @staticmethod
     def _split_chains(draws: np.ndarray) -> np.ndarray:
-        """Splits each chain of ``draws`` (n_draws, n_chains) in two halves, dropping the first draw if n_draws is odd,
-        so that within-chain trends show up as between-chain differences. Returns (n_draws // 2, 2 * n_chains).
+        """Splits each chain of ``draws`` (n_draws, n_chains) into its first and last halves (dropping the middle draw if n_draws
+        is odd), so that within-chain trends show up as between-chain differences. Returns (n_draws // 2, 2 * n_chains).
         """
         half = draws.shape[0] // 2
-        return np.concatenate([draws[-2 * half : -half], draws[-half:]], axis=1)
+        return np.concatenate([draws[:half], draws[draws.shape[0] - half :]], axis=1)
+
+    @staticmethod
+    def _rank_normalize(draws: np.ndarray) -> np.ndarray:
+        """Rank-normalizes the pooled ``draws``: z = Phi^-1((rank - 3/8) / (n + 1/4)) with average ranks for ties (Vehtari et al., 2021)"""
+        ranks = rankdata(draws, method="average").reshape(draws.shape)
+        return norm.ppf((ranks - 3.0 / 8.0) / (draws.size + 1.0 / 4.0))
+
+    @staticmethod
+    def _rhat_raw(chains: np.ndarray) -> float:
+        """R-hat of already split ``chains`` (n, m): sqrt(var+ / W), with W the mean within-chain variance and
+        var+ = (n - 1) / n W + B / n the pooled variance. Returns NaN for constant draws.
+        """
+        n = chains.shape[0]
+        within = np.mean(np.var(chains, axis=0, ddof=1))
+        if within == 0.0:
+            return np.nan
+        between_over_n = np.var(np.mean(chains, axis=0), ddof=1)
+        return float(np.sqrt(((n - 1) / n * within + between_over_n) / within))
 
     @classmethod
     def _split_rhat(cls, draws: np.ndarray) -> float:
-        """Split-R-hat (Gelman et al., BDA3) of ``draws`` (n_draws, n_chains): sqrt(var+ / W), with W the mean within-chain
-        variance and var+ = (n - 1) / n W + B / n the pooled variance. Values close to 1 (e.g., < 1.01-1.05) indicate convergence.
-        Returns NaN with fewer than 4 draws per chain or constant draws."""
-        if draws.shape[0] < 4:
-            return np.nan
-        chains = cls._split_chains(draws)
-        n = chains.shape[0]
-        within = np.mean(np.var(chains, axis=0, ddof=1))
-        between_over_n = np.var(np.mean(chains, axis=0), ddof=1)
-        if within == 0.0:
-            return np.nan
-        var_plus = (n - 1) / n * within + between_over_n
-        return float(np.sqrt(var_plus / within))
-
-    @classmethod
-    def _mcmc_effective_sample_size(cls, draws: np.ndarray) -> float:
-        """Autocorrelation-aware effective sample size (Stan/BDA3) of ``draws`` (n_draws, n_chains) on split chains:
-        n_draws * n_chains / tau, with the integrated autocorrelation time tau = -1 + 2 sum_t rho_t truncated with
-        Geyer's initial monotone positive sequence. Returns NaN with fewer than 4 draws per chain or constant draws.
+        """Rank-normalized split-R-hat (Vehtari et al., 2021) of ``draws`` (n_draws, n_chains): the maximum of the split-R-hat
+        of the rank-normalized draws (bulk) and of the rank-normalized folded draws |x - median| (tails). Values close to 1
+        (e.g., < 1.01-1.05) indicate convergence. Returns NaN with fewer than 4 draws or 2 chains, or constant draws.
         """
-        if draws.shape[0] < 4:
+        if draws.shape[0] < 4 or draws.shape[1] < 2:
             return np.nan
         chains = cls._split_chains(draws)
+        rhat_bulk = cls._rhat_raw(cls._rank_normalize(chains))
+        rhat_tail = cls._rhat_raw(
+            cls._rank_normalize(np.abs(chains - np.median(chains)))
+        )
+        return float(max(rhat_bulk, rhat_tail))
+
+    @staticmethod
+    def _ess_raw(chains: np.ndarray) -> float:
+        """Autocorrelation-aware effective sample size (Stan/BDA3) of already split ``chains`` (n, m): n m / tau, with the
+        integrated autocorrelation time tau = -1 + 2 sum_t rho_t truncated with Geyer's initial monotone positive sequence.
+        """
         n, m = chains.shape
+        n_total = n * m
+        if np.max(chains) - np.min(chains) < np.finfo(float).resolution:
+            return float(n_total)
         # Biased autocovariance of each chain at every lag via FFT
         centered = chains - np.mean(chains, axis=0)
         n_fft = 2 ** int(np.ceil(np.log2(2 * n)))
@@ -671,9 +810,9 @@ class SemiParametricBayesianNetwork(
         mean_acov = np.mean(acov, axis=1)
 
         within = mean_acov[0] * n / (n - 1)
-        var_plus = within * (n - 1) / n + np.var(np.mean(chains, axis=0), ddof=1)
-        if var_plus == 0.0:
-            return np.nan
+        var_plus = within * (n - 1) / n
+        if m > 1:
+            var_plus += np.var(np.mean(chains, axis=0), ddof=1)
         rho = np.zeros(n)
         rho[0] = 1.0
         rho_even = 1.0
@@ -697,10 +836,32 @@ class SemiParametricBayesianNetwork(
             if rho[t + 1] + rho[t + 2] > rho[t - 1] + rho[t]:
                 rho[t + 1] = rho[t + 2] = (rho[t - 1] + rho[t]) / 2.0
             t += 2
-        n_total = n * m
-        tau = -1.0 + 2.0 * np.sum(rho[: max_t + 1]) + rho[max_t + 1]
+        tau = -1.0 + 2.0 * np.sum(rho[: max_t + 1]) + np.sum(rho[max_t + 1 : max_t + 2])
         tau = max(tau, 1.0 / np.log10(n_total))
         return float(n_total / tau)
+
+    @classmethod
+    def _mcmc_effective_sample_size(cls, draws: np.ndarray) -> float:
+        """Bulk effective sample size (Vehtari et al., 2021) of ``draws`` (n_draws, n_chains): the autocorrelation-aware ESS
+        of the rank-normalized split chains. Returns NaN with fewer than 4 draws per chain.
+        """
+        if draws.shape[0] < 4:
+            return np.nan
+        return cls._ess_raw(cls._rank_normalize(cls._split_chains(draws)))
+
+    @classmethod
+    def _tail_effective_sample_size(cls, draws: np.ndarray) -> float:
+        """Tail effective sample size (Vehtari et al., 2021) of ``draws`` (n_draws, n_chains): the minimum ESS of the indicators
+        I(x <= q_0.05) and I(x <= q_0.95), i.e. of the 5% and 95% quantile estimates. Returns NaN with fewer than 4 draws per chain.
+        """
+        if draws.shape[0] < 4:
+            return np.nan
+        return min(
+            cls._ess_raw(
+                cls._split_chains((draws <= np.quantile(draws, prob)).astype(float))
+            )
+            for prob in (0.05, 0.95)
+        )
 
     # RFE: Use the convergence diagnostics (R-hat) as automatic stop criterion
     def infer_GS(
@@ -716,12 +877,14 @@ class SemiParametricBayesianNetwork(
         max_rejection_tries: int = 10,
     ) -> dict[str, dict]:
         """
-        Performs Gibbs sampling inference on the Bayesian network using the provided evidence.
-        Each unobserved node X is sampled from its full conditional p(x | MB(x)) ∝ p(x | Pa(x)) prod_c p(c | Pa(c)):
-            - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children (Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
+        Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
+        As in ``infer``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R
+        are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
+        Each unobserved node X of S is sampled from its full conditional p(x | .) ∝ p(x | Pa(x)) prod_{c in S} p(c | Pa(c)) p(e_R | S):
+            - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children in S and by p(e_R | S) (both Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
             - CKDE children have no closed form, so they are handled by rejection sampling using the bound p(c | .) <= 1 / sqrt(2 pi s2_c).
             Chains not accepted after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with the same proposal, which still leaves the full conditional invariant.
-        ``n_chains`` independent chains are run in batch. As in ``infer``, the LinearGaussian nodes that are not ancestors of CKDE nodes are finally Rao-Blackwellized with their exact CLG posterior given the rest.
+        ``n_chains`` independent chains are run in batch. Integrating R out avoids the slow mixing of Gibbs sampling between strongly dependent nodes of S and R.
         Args:
             evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary.
             json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
@@ -733,14 +896,17 @@ class SemiParametricBayesianNetwork(
             seed (int, optional): The random seed for reproducibility. Defaults to 0.
             max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Defaults to 10.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network, the evidence and the parameters of the inference results. The parameters include the (uniform) weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and, per free node:
-                - ``exact_rate``: the fraction of exact draws from the full conditional.
-                - ``acceptance_rate``: the fraction of updates that changed the value.
-                - ``rhat``: the split-R-hat over the chains of the returned values (posterior means for the Rao-Blackwellized nodes). Values above ~1.01-1.05 mean that
-                  the chains have not converged or are too short for their autocorrelation (increase ``burn_in`` or the draws per chain, i.e. ``n_samples / n_chains``).
-                - ``effective_sample_size``: the autocorrelation-aware effective sample size of the returned values. Much smaller than ``n_samples`` means highly
-                  autocorrelated chains, e.g. strongly dependent nodes that Gibbs sampling explores slowly (increase ``n_samples`` or ``thinning``).
-            Both diagnostics are NaN with fewer than 4 kept sweeps per chain.
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network, the evidence and the parameters of the inference results. The parameters include the (uniform) weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and:
+                - ``exact_rate`` (per sampled node): the fraction of exact draws from the full conditional.
+                - ``acceptance_rate`` (per sampled node): the fraction of updates that changed the value.
+                - ``rhat`` (per non-evidence node): the rank-normalized split-R-hat over the chains of the returned values (posterior means for the Rao-Blackwellized
+                  nodes). Values above ~1.01-1.05 mean that the chains have not converged or are too short for their autocorrelation (increase ``burn_in`` or the
+                  draws per chain, i.e. ``n_samples / n_chains``).
+                - ``effective_sample_size`` (per non-evidence node): the bulk effective sample size of the returned values. Much smaller than ``n_samples`` means
+                  highly autocorrelated chains (increase ``n_samples`` or ``thinning``).
+                - ``tail_effective_sample_size`` (per non-evidence node): the effective sample size of the 5% and 95% quantile estimates.
+            The diagnostics are NaN with fewer than 4 kept sweeps per chain (and R-hat with fewer than 2 chains or constant values).
+            A RuntimeWarning is emitted if any R-hat exceeds ``MAX_RHAT`` or any bulk effective sample size is below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
         """
         rng = np.random.default_rng(seed)
 
@@ -748,25 +914,40 @@ class SemiParametricBayesianNetwork(
             return int(rng.integers(2**31 - 1))
 
         topo_order = list(self.graph().topological_sort())
-        free_nodes = [node for node in topo_order if node not in evidence]
-        kernels = {node: self._kernel_cache(node) for node in topo_order}
+        # Only the ancestor-closed set S of CKDE nodes and their LinearGaussian ancestors is sampled, the rest is integrated out.
+        sampled = self._sampled_nodes()
+        sampled_order = [node for node in topo_order if node in sampled]
+        free_nodes = [node for node in sampled_order if node not in evidence]
+        kernels = {node: self._kernel_cache(node) for node in sampled_order}
+        # Children outside S are integrated out, and their evidence enters through p(e_R | S)
         lg_children = {
-            node: [c for c in self.children(node) if kernels[c]["type"] == "lg"]
+            node: [
+                c
+                for c in self.children(node)
+                if c in sampled and kernels[c]["type"] == "lg"
+            ]
             for node in free_nodes
         }
         ckde_children = {
-            node: [c for c in self.children(node) if kernels[c]["type"] == "ckde"]
+            node: [
+                c
+                for c in self.children(node)
+                if c in sampled and kernels[c]["type"] == "ckde"
+            ]
             for node in free_nodes
         }
+        rb_evidence = self._rb_evidence_model(sampled, evidence)
         infer_dict = {
             "structure": self.arcs(),
             "evidence": dict(evidence),
             "parameters": {},
         }
 
-        # Initialize the chains by forward sampling with the evidence clamped.
-        state = pd.DataFrame(index=np.arange(n_chains), columns=topo_order, dtype=float)
-        for node in topo_order:
+        # Initialize the chains by forward sampling S (ancestor-closed) with the evidence clamped.
+        state = pd.DataFrame(
+            index=np.arange(n_chains), columns=sampled_order, dtype=float
+        )
+        for node in sampled_order:
             if node in evidence:
                 state[node] = float(evidence[node])
             else:
@@ -795,6 +976,7 @@ class SemiParametricBayesianNetwork(
                     ckde_children[node],
                     rng,
                     max_rejection_tries,
+                    rb_evidence,
                 )
                 state[node] = new_values
                 exact[node] += n_exact
@@ -804,27 +986,38 @@ class SemiParametricBayesianNetwork(
                 kept_states.append(state.copy())
 
         # The chains sample p(S | e), so the Rao-Blackwellized nodes only need p(R | S, e) and the evidence likelihood is not a weight.
-        # S must be ancestor-closed: conditioning on the CKDE nodes alone would ignore their likelihood on their LinearGaussian parents.
-        all_assignments = pd.concat(kept_states, ignore_index=True)
-        _, all_assignments, posterior_std = self._rao_blackwellize_clg(
-            all_assignments, evidence, self._sampled_nodes()
+        all_assignments = pd.DataFrame(
+            np.concatenate([kept.to_numpy(dtype=float) for kept in kept_states]),
+            columns=sampled_order,
         )
+        _, all_assignments, posterior_std = self._rao_blackwellize_clg(
+            all_assignments, evidence, sampled
+        )
+        all_assignments = all_assignments[topo_order]
 
         # Convergence diagnostics of the returned values (posterior means for the Rao-Blackwellized nodes) on all the kept
         # sweeps, whose rows are ordered sweep by sweep, i.e. (n_kept_sweeps, n_chains) per node
         n_kept = len(kept_states)
+        query_nodes = [node for node in topo_order if node not in evidence]
         draws = {
             node: all_assignments[node].to_numpy(dtype=float).reshape(n_kept, n_chains)
-            for node in free_nodes
+            for node in query_nodes
         }
         assignments = all_assignments.iloc[:n_samples].reset_index(drop=True)
-        # Only the first n_samples draws are returned, so the effective sample size is scaled accordingly
+        # Only the first n_samples draws are returned, so the effective sample sizes are scaled accordingly
         kept_fraction = len(assignments) / len(all_assignments)
-        rhat = {node: self._split_rhat(draws[node]) for node in free_nodes}
+        rhat = {node: self._split_rhat(draws[node]) for node in query_nodes}
         effective_sample_size = {
             node: kept_fraction * self._mcmc_effective_sample_size(draws[node])
-            for node in free_nodes
+            for node in query_nodes
         }
+        tail_effective_sample_size = {
+            node: kept_fraction * self._tail_effective_sample_size(draws[node])
+            for node in query_nodes
+        }
+        # Without free sampled nodes every row is the exact posterior, so there is nothing to diagnose
+        if len(free_nodes) > 0:
+            self._warn_diagnostics(rhat, effective_sample_size)
 
         # MCMC samples are equally weighted.
         weights = np.full(len(assignments), 1.0 / len(assignments))
@@ -840,6 +1033,7 @@ class SemiParametricBayesianNetwork(
             },
             "rhat": rhat,
             "effective_sample_size": effective_sample_size,
+            "tail_effective_sample_size": tail_effective_sample_size,
         }
         self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
