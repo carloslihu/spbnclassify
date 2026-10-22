@@ -580,6 +580,19 @@ class SemiParametricBayesianNetwork(
             log_w = -0.5 * np.maximum(sq_dist, 0.0)
         return log_w, means, kernel["var"]
 
+    @classmethod
+    def _mixture_logl(cls, kernel: dict, node: str, state: pd.DataFrame) -> np.ndarray:
+        """Row-wise log p(x | pa) of ``node`` from its cached Gaussian mixture (see ``_kernel_cache``), equal to ``_node_logl``
+        but in numpy: log sum_j w_j N(x; m_j, var) with the weights normalized in log space.
+        """
+        log_w, means, var = cls._conditional_mixture(kernel, state)
+        x = state[node].to_numpy(dtype=float)[:, None]
+        return (
+            logsumexp(log_w - 0.5 * (x - means) ** 2 / var, axis=1)
+            - logsumexp(log_w, axis=1)
+            - 0.5 * np.log(2.0 * np.pi * var)
+        )
+
     def _lg_children_gaussian(
         self, node: str, state: pd.DataFrame, lg_children: list[str]
     ) -> tuple[np.ndarray, float] | None:
@@ -693,7 +706,8 @@ class SemiParametricBayesianNetwork(
 
         q(x) = p(x | pa) * prod_{LG children} p(c | .) * p(e_E | S) is a Gaussian mixture sampled exactly, where p(e_E | S)
         is the evidence likelihood of the integrated-out LinearGaussian nodes (see ``_rb_evidence_gaussian``). CKDE children
-        g(x) = prod_{CKDE children} p(c | .) are handled by rejection sampling with the bound g <= B, and the chains
+        g(x) = prod_{CKDE children} p(c | .), evaluated with their cached mixtures (``_mixture_logl``), are handled by
+        rejection sampling with the bound g <= B, and the chains
         still pending after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with proposal q.
 
         Returns:
@@ -725,7 +739,10 @@ class SemiParametricBayesianNetwork(
         def _log_g(rows: np.ndarray, values: np.ndarray) -> np.ndarray:
             proposed_state = state.loc[rows].copy()
             proposed_state[node] = values
-            log_g = sum(self._node_logl(c, proposed_state) for c in ckde_children)
+            # The cached mixture is much faster than the pybnesian CKDE logl
+            log_g = sum(
+                self._mixture_logl(kernels[c], c, proposed_state) for c in ckde_children
+            )
             return np.nan_to_num(log_g, nan=-np.inf)
 
         log_bound = sum(kernels[c]["log_bound"] for c in ckde_children)

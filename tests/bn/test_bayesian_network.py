@@ -856,15 +856,25 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     ) -> None:
         points = data.iloc[:20].reset_index(drop=True)
         for node in bn.nodes():
-            log_w, means, var = bn._conditional_mixture(bn._kernel_cache(node), points)
-            log_w = log_w - logsumexp(log_w, axis=1, keepdims=True)
-            x = points[node].to_numpy(dtype=float)[:, None]
-            mixture_logl = logsumexp(
-                log_w - 0.5 * np.log(2.0 * np.pi * var) - 0.5 * (x - means) ** 2 / var,
-                axis=1,
-            )
+            mixture_logl = bn._mixture_logl(bn._kernel_cache(node), node, points)
             np.testing.assert_allclose(
                 mixture_logl, bn._node_logl(node, points), rtol=1e-8, atol=1e-8
+            )
+
+    def test_mixture_logl_extreme_points(self) -> None:
+        # Far from the training data (|A|, |B| = 40) the mixture stays finite and still matches pybnesian
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        rng = np.random.default_rng(SEED)
+        points = pd.DataFrame(
+            {node: rng.normal(0, 1, 40) for node in ["A", "B", "C", "D", "E", "F"]}
+        )
+        points.loc[20:, ["A", "B"]] = rng.choice([-1.0, 1.0], size=(20, 2)) * 40.0
+        for node in ["B", "F"]:
+            mixture_logl = bn._mixture_logl(bn._kernel_cache(node), node, points)
+            pybnesian_logl = bn._node_logl(node, points)
+            assert np.all(np.isfinite(mixture_logl))
+            np.testing.assert_allclose(
+                mixture_logl, pybnesian_logl, rtol=1e-8, atol=1e-8
             )
 
     @staticmethod
