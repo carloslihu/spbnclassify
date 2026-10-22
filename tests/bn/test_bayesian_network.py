@@ -765,6 +765,14 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         assert set(acceptance_rate) == set(bn.nodes()) - set(evidence)
         assert all(0.0 <= rate <= 1.0 for rate in acceptance_rate.values())
 
+        # Nodes without CKDE children are always drawn exactly from their full conditional
+        exact_rate = infer_dict["parameters"]["exact_rate"]
+        assert set(exact_rate) == set(acceptance_rate)
+        for node, rate in exact_rate.items():
+            assert 0.0 <= rate <= acceptance_rate[node]
+            if not any(bn.cpd(c).type() == pbn.CKDEType() for c in bn.children(node)):
+                assert rate == 1.0
+
         # Non-evidence CLG nodes are Rao-Blackwellized into CLG posteriors
         assert all(np.isfinite(x.mu()) and x.sigma() > 0 for x in assignments["d"])
 
@@ -821,3 +829,72 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             seed=SEED,
         )
         assert np.isfinite(actual) and actual >= 0
+
+    def test_conditional_mixture_matches_logl(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
+        points = data.iloc[:20].reset_index(drop=True)
+        for node in bn.nodes():
+            log_w, means, var = bn._conditional_mixture(bn._kernel_cache(node), points)
+            log_w = log_w - logsumexp(log_w, axis=1, keepdims=True)
+            x = points[node].to_numpy(dtype=float)[:, None]
+            mixture_logl = logsumexp(
+                log_w - 0.5 * np.log(2.0 * np.pi * var) - 0.5 * (x - means) ** 2 / var,
+                axis=1,
+            )
+            np.testing.assert_allclose(
+                mixture_logl, bn._node_logl(node, points), rtol=1e-8, atol=1e-8
+            )
+
+    @staticmethod
+    def _two_node_bn(child_type: pbn.FactorType) -> SemiParametricBayesianNetwork:
+        """x (bimodal CKDE) -> y (``child_type``)"""
+        rng = np.random.default_rng(SEED)
+        n = 300
+        x = np.concatenate([rng.normal(-2, 0.5, n // 2), rng.normal(2, 0.7, n // 2)])
+        y = 0.8 * x + np.sin(x) + 0.6 * rng.normal(size=n)
+        bn = SemiParametricBayesianNetwork()
+        bn.add_node("x")
+        bn.add_node("y")
+        bn.add_arc("x", "y")
+        bn.set_node_type("x", pbn.CKDEType())
+        bn.set_node_type("y", child_type)
+        pbn.SemiparametricBN.fit(bn, pd.DataFrame({"x": x, "y": y}))
+        bn.feature_names_in_ = ["x", "y"]
+        return bn
+
+    @staticmethod
+    def _grid_posterior_moments(
+        bn: SemiParametricBayesianNetwork, y_obs: float
+    ) -> tuple[float, float]:
+        """Brute-force mean and variance of p(x | y = y_obs) ∝ p(x) p(y_obs | x) on a grid"""
+        grid = np.linspace(-6.0, 6.0, 4001)
+        points = pd.DataFrame({"x": grid, "y": y_obs})
+        log_p = bn._node_logl("x", points) + bn._node_logl("y", points)
+        w = np.exp(log_p - logsumexp(log_p))
+        mean = np.sum(w * grid)
+        return mean, np.sum(w * (grid - mean) ** 2)
+
+    @pytest.mark.parametrize(
+        "child_type", [pbn.LinearGaussianCPDType(), pbn.CKDEType()], ids=["lg", "ckde"]
+    )
+    def test_infer_GS_matches_exact_posterior(self, child_type: pbn.FactorType) -> None:
+        bn = self._two_node_bn(child_type)
+        for y_obs in [0.5, 3.0]:
+            gs = bn.infer_GS(
+                evidence={"y": y_obs},
+                n_samples=4000,
+                n_chains=200,
+                burn_in=20,
+                seed=SEED,
+            )
+            samples = gs["parameters"]["assignments"]["x"].to_numpy(dtype=float)
+            exact_rate = gs["parameters"]["exact_rate"]["x"]
+            if child_type == pbn.LinearGaussianCPDType():
+                assert exact_rate == 1.0
+            else:
+                assert 0.0 < exact_rate <= 1.0
+
+            expected_mean, expected_var = self._grid_posterior_moments(bn, y_obs)
+            np.testing.assert_allclose(samples.mean(), expected_mean, atol=0.1)
+            np.testing.assert_allclose(samples.var(), expected_var, rtol=0.15)

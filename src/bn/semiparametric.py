@@ -357,6 +357,183 @@ class SemiParametricBayesianNetwork(
             likelihood_weighting_dict["parameters"]["weights"],
         )
 
+    def _kernel_cache(self, node: str) -> dict:
+        """Precomputes the Gaussian-mixture representation of the CPD of ``node``.
+
+        A CKDE conditional p(x | pa) = f(x, pa) / f(pa) with Gaussian kernels of bandwidth H is the mixture
+        sum_j w_j(pa) N(x; m_j(pa), s2), with w_j ∝ N(pa; pa_j, H_pp), m_j = x_j + H_xp H_pp^-1 (pa - pa_j)
+        and s2 = H_xx - H_xp H_pp^-1 H_px. A LinearGaussian CPD is the single component N(x; beta0 + beta·pa, variance).
+        """
+        cpd = self.cpd(node)
+        if cpd.type() == pbn.LinearGaussianCPDType():
+            beta = np.asarray(cpd.beta, dtype=float)
+            return {
+                "type": "lg",
+                "parents": cpd.evidence(),
+                "beta0": beta[0],
+                "betas": beta[1:],
+                "var": float(cpd.variance),
+            }
+
+        kde = cpd.kde_joint()
+        variables = kde.variables()  # [node, *parents]
+        H = np.atleast_2d(np.asarray(kde.bandwidth, dtype=float))
+        D = kde.dataset().to_pandas()[variables].to_numpy(dtype=float)
+        parents = variables[1:]
+        x_train = D[:, 0]
+        if len(parents) == 0:
+            s2 = H[0, 0]
+            cache = {"whiten": None, "reg": np.zeros(0), "offset": x_train}
+        else:
+            H_pp_inv = np.linalg.inv(H[1:, 1:])
+            reg = H[0, 1:] @ H_pp_inv
+            s2 = H[0, 0] - reg @ H[1:, 0]
+            # H_pp^-1 = A A^T, so (pa - pa_j)^T H_pp^-1 (pa - pa_j) = ||pa A - pa_j A||^2
+            whiten = np.linalg.cholesky(H_pp_inv)
+            z_train = D[:, 1:] @ whiten
+            cache = {
+                "whiten": whiten,
+                "z_train": z_train,
+                "z_train_sq": np.sum(z_train**2, axis=1),
+                "reg": reg,
+                "offset": x_train - D[:, 1:] @ reg,
+            }
+        cache.update(
+            {
+                "type": "ckde",
+                "parents": parents,
+                "var": float(s2),
+                # Each conditional is a mixture of Gaussians with common variance s2, hence bounded
+                "log_bound": -0.5 * np.log(2.0 * np.pi * s2),
+            }
+        )
+        return cache
+
+    @staticmethod
+    def _conditional_mixture(
+        kernel: dict, state: pd.DataFrame
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Returns the (unnormalized) log-weights and means, both (n_chains, n_components), and the common
+        variance of the Gaussian mixture p(x | pa) for every chain in ``state``."""
+        pa = state[kernel["parents"]].to_numpy(dtype=float)
+        if kernel["type"] == "lg":
+            means = kernel["beta0"] + pa @ kernel["betas"]
+            return np.zeros((len(state), 1)), means[:, None], kernel["var"]
+
+        means = kernel["offset"][None, :] + (pa @ kernel["reg"])[:, None]
+        if kernel["whiten"] is None:
+            log_w = np.zeros_like(means)
+        else:
+            z = pa @ kernel["whiten"]
+            sq_dist = (
+                np.sum(z**2, axis=1)[:, None]
+                + kernel["z_train_sq"][None, :]
+                - 2.0 * z @ kernel["z_train"].T
+            )
+            log_w = -0.5 * np.maximum(sq_dist, 0.0)
+        return log_w, means, kernel["var"]
+
+    def _lg_children_gaussian(
+        self, node: str, state: pd.DataFrame, lg_children: list[str]
+    ) -> tuple[np.ndarray, float] | None:
+        """Product of the LinearGaussian children likelihoods as a function of ``node``.
+        Each child c ~ N(beta0 + beta_x x + beta_o·o, var) is Gaussian in x, so the product is N(x; mu, tau2) up to a constant.
+        Returns None if no child depends on ``node``."""
+        precision = 0.0
+        weighted_sum = np.zeros(len(state))
+        for child in lg_children:
+            cpd = self.cpd(child)
+            parents = cpd.evidence()
+            beta = np.asarray(cpd.beta, dtype=float)
+            node_index = parents.index(node)
+            beta_x = beta[node_index + 1]
+            if beta_x == 0.0:
+                continue
+            others = [p for p in parents if p != node]
+            other_betas = np.delete(beta[1:], node_index)
+            rest = beta[0] + state[others].to_numpy(dtype=float) @ other_betas
+            residual = state[child].to_numpy(dtype=float) - rest
+            precision += beta_x**2 / cpd.variance
+            weighted_sum += beta_x * residual / cpd.variance
+        if precision == 0.0:
+            return None
+        tau2 = 1.0 / precision
+        return tau2 * weighted_sum, tau2
+
+    @staticmethod
+    def _sample_mixture(
+        log_w: np.ndarray, means: np.ndarray, var: float, rng: np.random.Generator
+    ) -> np.ndarray:
+        """Draws one value per row from a Gaussian mixture (component chosen with the Gumbel-max trick)"""
+        component = np.argmax(log_w + rng.gumbel(size=log_w.shape), axis=1)
+        mean = means[np.arange(len(means)), component]
+        return mean + np.sqrt(var) * rng.standard_normal(len(means))
+
+    def _gibbs_update(
+        self,
+        node: str,
+        state: pd.DataFrame,
+        kernels: dict[str, dict],
+        lg_children: list[str],
+        ckde_children: list[str],
+        rng: np.random.Generator,
+        max_rejection_tries: int,
+    ) -> tuple[np.ndarray, int, int]:
+        """Samples ``node`` from its full conditional p(x | Markov blanket) for every chain.
+
+        q(x) = p(x | pa) * prod_{LG children} p(c | .) is a Gaussian mixture sampled exactly. CKDE children
+        g(x) = prod_{CKDE children} p(c | .) are handled by rejection sampling with the bound g <= B, and the chains
+        still pending after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with proposal q.
+
+        Returns:
+            tuple[np.ndarray, int, int]: The new values, the number of exact draws and the number of changed values.
+        """
+        log_w, means, var = self._conditional_mixture(kernels[node], state)
+        lg_gaussian = self._lg_children_gaussian(node, state, lg_children)
+        if lg_gaussian is not None:
+            mu_lg, tau2 = lg_gaussian
+            # N(x; m_j, var) N(x; mu_lg, tau2) = N(m_j; mu_lg, var + tau2) N(x; m*_j, v*)
+            log_w = log_w + norm.logpdf(
+                means, loc=mu_lg[:, None], scale=np.sqrt(var + tau2)
+            )
+            post_var = 1.0 / (1.0 / var + 1.0 / tau2)
+            means = post_var * (means / var + mu_lg[:, None] / tau2)
+            var = post_var
+
+        n_chains = len(state)
+        if len(ckde_children) == 0:
+            return self._sample_mixture(log_w, means, var, rng), n_chains, n_chains
+
+        def _log_g(rows: np.ndarray, values: np.ndarray) -> np.ndarray:
+            proposed_state = state.loc[rows].copy()
+            proposed_state[node] = values
+            log_g = sum(self._node_logl(c, proposed_state) for c in ckde_children)
+            return np.nan_to_num(log_g, nan=-np.inf)
+
+        log_bound = sum(kernels[c]["log_bound"] for c in ckde_children)
+        new_values = state[node].to_numpy(dtype=float).copy()
+        pending = np.ones(n_chains, dtype=bool)
+        for _ in range(max_rejection_tries):
+            rows = np.flatnonzero(pending)
+            if len(rows) == 0:
+                break
+            proposal = self._sample_mixture(log_w[rows], means[rows], var, rng)
+            accept = np.log(rng.random(len(rows))) < _log_g(rows, proposal) - log_bound
+            new_values[rows[accept]] = proposal[accept]
+            pending[rows[accept]] = False
+        n_exact = n_chains - int(pending.sum())
+        n_changed = n_exact
+
+        # MH fallback with the same proposal q: alpha = min(1, g(x*) / g(x))
+        rows = np.flatnonzero(pending)
+        if len(rows) > 0:
+            proposal = self._sample_mixture(log_w[rows], means[rows], var, rng)
+            log_alpha = _log_g(rows, proposal) - _log_g(rows, new_values[rows])
+            accept = np.log(rng.random(len(rows))) < log_alpha
+            new_values[rows[accept]] = proposal[accept]
+            n_changed += int(accept.sum())
+        return new_values, n_exact, n_changed
+
     # RFE: Allow automatic convergence diagnostics (e.g., R-hat) as stop criterion
     def infer_GS(
         self,
@@ -368,12 +545,14 @@ class SemiParametricBayesianNetwork(
         burn_in: int = 100,
         thinning: int = 1,
         seed: int = 0,
+        max_rejection_tries: int = 10,
     ) -> dict[str, dict]:
         """
-        Performs Gibbs sampling inference (Metropolis-within-Gibbs) on the Bayesian network using the provided evidence.
-        CKDE full conditionals have no closed form, so each unobserved node X is updated with a Metropolis-Hastings step whose proposal is its own CPD p(X | Pa(X)).
-        The proposal cancels the p(X | Pa(X)) term, so the acceptance ratio only involves the children of X:
-            alpha = min(1, prod_c p(c | Pa(c), X=x*) / prod_c p(c | Pa(c), X=x))
+        Performs Gibbs sampling inference on the Bayesian network using the provided evidence.
+        Each unobserved node X is sampled from its full conditional p(x | MB(x)) ∝ p(x | Pa(x)) prod_c p(c | Pa(c)):
+            - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children (Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
+            - CKDE children have no closed form, so they are handled by rejection sampling using the bound p(c | .) <= 1 / sqrt(2 pi s2_c).
+            Chains not accepted after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with the same proposal, which still leaves the full conditional invariant.
         ``n_chains`` independent chains are run in batch. LinearGaussian nodes are finally Rao-Blackwellized with their exact CLG posterior, as in ``infer``.
         Args:
             evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary.
@@ -384,8 +563,9 @@ class SemiParametricBayesianNetwork(
             burn_in (int, optional): The number of initial sweeps discarded in each chain. Defaults to 100.
             thinning (int, optional): Keep one sweep every ``thinning`` sweeps after burn-in. Defaults to 1.
             seed (int, optional): The random seed for reproducibility. Defaults to 0.
+            max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Defaults to 10.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The parameters include the (uniform) weights, the assignments and the per-node acceptance rate of the Gibbs sampler.
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The parameters include the (uniform) weights, the assignments and, per node, the fraction of exact draws from the full conditional (``exact_rate``) and the fraction of updates that changed the value (``acceptance_rate``).
         """
         rng = np.random.default_rng(seed)
 
@@ -394,7 +574,15 @@ class SemiParametricBayesianNetwork(
 
         topo_order = list(self.graph().topological_sort())
         free_nodes = [node for node in topo_order if node not in evidence]
-        children = {node: list(self.children(node)) for node in free_nodes}
+        kernels = {node: self._kernel_cache(node) for node in topo_order}
+        lg_children = {
+            node: [c for c in self.children(node) if kernels[c]["type"] == "lg"]
+            for node in free_nodes
+        }
+        ckde_children = {
+            node: [c for c in self.children(node) if kernels[c]["type"] == "ckde"]
+            for node in free_nodes
+        }
         infer_dict = {"structure": self.arcs(), "parameters": {}}
 
         # Initialize the chains by forward sampling with the evidence clamped.
@@ -414,31 +602,24 @@ class SemiParametricBayesianNetwork(
 
         n_kept_sweeps = int(np.ceil(n_samples / n_chains))
         n_sweeps = burn_in + n_kept_sweeps * thinning
-        accepted = {node: 0 for node in free_nodes}
+        exact = {node: 0 for node in free_nodes}
+        changed = {node: 0 for node in free_nodes}
         kept_states = []
 
         for sweep in range(n_sweeps):
             for node in free_nodes:
-                cpd = self.cpd(node)
-                proposal = (
-                    cpd.sample(
-                        n_chains, self._parent_values(node, state), seed=_next_seed()
-                    )
-                    .to_pandas()
-                    .to_numpy(dtype=float)
+                new_values, n_exact, n_changed = self._gibbs_update(
+                    node,
+                    state,
+                    kernels,
+                    lg_children[node],
+                    ckde_children[node],
+                    rng,
+                    max_rejection_tries,
                 )
-                # Acceptance ratio only depends on the children (Markov blanket) of the node.
-                log_alpha = np.zeros(n_chains, dtype=float)
-                if len(children[node]) > 0:
-                    proposed_state = state.copy()
-                    proposed_state[node] = proposal
-                    for child in children[node]:
-                        log_alpha += self._node_logl(child, proposed_state)
-                        log_alpha -= self._node_logl(child, state)
-                log_alpha = np.nan_to_num(log_alpha, nan=-np.inf)
-                accept = np.log(rng.random(n_chains)) < log_alpha
-                state.loc[accept, node] = proposal[accept]
-                accepted[node] += int(accept.sum())
+                state[node] = new_values
+                exact[node] += n_exact
+                changed[node] += n_changed
 
             if sweep >= burn_in and (sweep - burn_in) % thinning == thinning - 1:
                 kept_states.append(state.copy())
@@ -452,8 +633,11 @@ class SemiParametricBayesianNetwork(
         infer_dict["parameters"] = {
             "weights": weights,
             "assignments": assignments,
+            "exact_rate": {
+                node: exact[node] / (n_sweeps * n_chains) for node in free_nodes
+            },
             "acceptance_rate": {
-                node: accepted[node] / (n_sweeps * n_chains) for node in free_nodes
+                node: changed[node] / (n_sweeps * n_chains) for node in free_nodes
             },
         }
         self._export_inference(infer_dict, json_file_path, pdf_file_path)
