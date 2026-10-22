@@ -122,19 +122,19 @@ class SemiParametricBayesianNetwork(
         point_df.insert(0, node, assignments[node].to_numpy(dtype=float))
         return np.asarray(self.cpd(node).logl(point_df), dtype=float)
 
-    def _rao_blackwellize_clg(
-        self, assignments: pd.DataFrame, evidence: dict[str, float]
-    ) -> pd.DataFrame:
-        """Replaces the non-evidence LinearGaussian columns with their exact CLG posterior
-        (pyagrum) conditioned on the CKDE and evidence values of each row.
+    def _sampled_nodes(self) -> set[str]:
+        """Returns the CKDE nodes and their (LinearGaussian) ancestors, i.e. the ancestor-closed set
+        that must be sampled to keep the topological order in likelihood weighting"""
+        sampled = {
+            node for node in self.nodes() if self.cpd(node).type() == pbn.CKDEType()
+        }
+        for node in reversed(list(self.graph().topological_sort())):
+            if node in sampled:
+                sampled.update(self.parents(node))
+        return sampled
 
-        Args:
-            assignments (pd.DataFrame): Sampled assignments (one row per sample).
-            evidence (dict[str, float]): Observed variables.
-
-        Returns:
-            pd.DataFrame: The assignments with CLG posterior objects in the non-evidence LinearGaussian columns.
-        """
+    def _clg_inference_engine(self) -> gclg.CLGVariableElimination:
+        """Builds the pyagrum CLG inference engine of the LinearGaussian part of the network"""
         # RFE: Remove true_label for BNCs
         # If the true label is in the graph, we need to remove it from the evidence and create an auxiliary graph without it for inference
         # evidence = {k: v for k, v in evidence.items() if k != self.true_label}
@@ -161,13 +161,76 @@ class SemiParametricBayesianNetwork(
                 parent_index = parents.index(source)
                 coef = cpd.beta[parent_index + 1]
                 clg_subgraphic.addArc(source, target, coef)
-        ie = gclg.CLGVariableElimination(clg_subgraphic)
+        return gclg.CLGVariableElimination(clg_subgraphic)
 
-        # Condition on CKDE and evidence columns only (non-evidence CLG nodes are the query)
+    def _clg_evidence_logl(
+        self,
+        assignments: pd.DataFrame,
+        evidence: dict[str, float],
+        sampled_nodes: set[str],
+    ) -> np.ndarray:
+        """Row-wise log p(e_R | S) of the evidence on the non-sampled LinearGaussian nodes R given the sampled values S,
+        marginalizing the non-evidence nodes of R. Since S is ancestor-closed, R given S is a linear Gaussian network,
+        so it is computed exactly with the chain rule sum_j log p(e_j | S, e_1..e_{j-1}).
+        """
+        log_lik = np.zeros(len(assignments), dtype=float)
+        rb_evidence = [
+            node
+            for node in self.graph().topological_sort()
+            if node in evidence and node not in sampled_nodes
+        ]
+        if len(rb_evidence) == 0:
+            return log_lik
+
+        ie = self._clg_inference_engine()
+
+        def _chain_logl(conditioning: dict[str, float]) -> float:
+            value = 0.0
+            for node in rb_evidence:
+                ie.updateEvidence(conditioning)  # This overwrites all evidence
+                post = ie.posterior(node)
+                value += norm.logpdf(
+                    float(evidence[node]), loc=post.mu(), scale=post.sigma()
+                )
+                conditioning[node] = float(evidence[node])
+            return value
+
+        sampled_columns = [node for node in assignments.columns if node in sampled_nodes]
+        if len(sampled_columns) == 0:
+            log_lik[:] = _chain_logl({})
+            return log_lik
+
+        unique_samples = assignments[sampled_columns].drop_duplicates()
+        for _, row in unique_samples.iterrows():
+            row_mask = assignments[sampled_columns].eq(row).all(axis=1).to_numpy()
+            log_lik[row_mask] = _chain_logl(row.to_dict())
+        return log_lik
+
+    def _rao_blackwellize_clg(
+        self,
+        assignments: pd.DataFrame,
+        evidence: dict[str, float],
+        sampled_nodes: set[str] = frozenset(),
+    ) -> pd.DataFrame:
+        """Replaces the non-evidence, non-sampled LinearGaussian columns with their exact CLG posterior
+        (pyagrum) conditioned on the sampled and evidence values of each row.
+
+        Args:
+            assignments (pd.DataFrame): Sampled assignments (one row per sample).
+            evidence (dict[str, float]): Observed variables.
+            sampled_nodes (set[str], optional): LinearGaussian nodes whose sampled values are kept and conditioned on. Defaults to none.
+
+        Returns:
+            pd.DataFrame: The assignments with CLG posterior objects in the non-evidence, non-sampled LinearGaussian columns.
+        """
+        ie = self._clg_inference_engine()
+
+        # Condition on sampled and evidence columns only (the remaining CLG nodes are the query)
         clg_query_nodes = [
             node
             for node in self.feature_names_in_
             if node not in evidence
+            and node not in sampled_nodes
             and self.cpd(node).type() == pbn.LinearGaussianCPDType()
         ]
         conditioning_columns = [
@@ -220,7 +283,7 @@ class SemiParametricBayesianNetwork(
         weights: np.ndarray,
     ) -> float:
         """Estimates the posterior density of ``query_node`` at ``point`` from weighted samples.
-        CKDE nodes use a weighted Gaussian KDE, CLG nodes a weighted mixture of their CLG posteriors.
+        Sampled (numeric) columns use a weighted Gaussian KDE, Rao-Blackwellized CLG columns a weighted mixture of their CLG posteriors.
         """
 
         def _kernel_values(samples: np.ndarray) -> np.ndarray:
@@ -237,9 +300,8 @@ class SemiParametricBayesianNetwork(
 
             return kernel_values
 
-        cpd = self.cpd(query_node)
-        if cpd.type() == pbn.LinearGaussianCPDType():
-            # Assign for CLG nodes depending on the matching evidence
+        if not pd.api.types.is_numeric_dtype(assignments[query_node]):
+            # Assign for Rao-Blackwellized CLG nodes depending on the matching evidence
             samples_post = assignments[query_node]
             # For each of the rows, we need to compute the posterior mean and std based on the evidence
             mu = samples_post.apply(lambda x: x.mu())
@@ -265,6 +327,8 @@ class SemiParametricBayesianNetwork(
     ) -> dict[str, dict]:
         """
         Performs likelihood weighting inference on the Bayesian network using the provided evidence and target nodes.
+        It is Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
+        The weights include the evidence likelihood of the sampled nodes and the marginal likelihood of the evidence on the remaining LinearGaussian nodes.
         Args:
             evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary. We can have hard evidence (e.g., {"Execution": True}) or soft evidence (e.g., {"Execution": [0.3, 0.9]}).
             n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 10,000.
@@ -280,28 +344,32 @@ class SemiParametricBayesianNetwork(
         log_weights = np.zeros(n_samples, dtype=float)
         infer_dict = {"structure": self.arcs(), "parameters": {}}
 
+        # CKDE nodes and their CLG ancestors are sampled, the rest of CLG nodes are Rao-Blackwellized.
+        sampled = self._sampled_nodes()
+
         # Sample variables in topological order and accumulate log weights.
         for node_index, node in enumerate(topo_order):
+            if node not in sampled:
+                continue
             cpd = self.cpd(node)
-            parent_values = self._parent_values(node, assignments)
             # Clamp evidence and add its log-likelihood under the current parents.
             if node in evidence:
-                observed_value = float(evidence[node])
-                assignments[node] = observed_value
-                if cpd.type() == pbn.CKDEType():
-                    log_weights += self._node_logl(node, assignments)
-                elif cpd.type() == pbn.LinearGaussianCPDType():
-                    pass
+                assignments[node] = float(evidence[node])
+                log_weights += self._node_logl(node, assignments)
             # Sample all rows at once from the conditional distribution of this node.
             else:
-                if cpd.type() == pbn.CKDEType():
-                    assignments[node] = cpd.sample(
-                        n_samples,
-                        parent_values,
-                        seed=seed + node_index,
-                    ).to_pandas()
+                assignments[node] = cpd.sample(
+                    n_samples,
+                    self._parent_values(node, assignments),
+                    seed=seed + node_index,
+                ).to_pandas()
 
-        assignments = self._rao_blackwellize_clg(assignments, evidence)
+        # Evidence on the Rao-Blackwellized CLG nodes, with their non-evidence nodes marginalized.
+        log_weights += self._clg_evidence_logl(assignments, evidence, sampled)
+        for node in evidence:
+            if node not in sampled:
+                assignments[node] = float(evidence[node])
+        assignments = self._rao_blackwellize_clg(assignments, evidence, sampled)
 
         # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
