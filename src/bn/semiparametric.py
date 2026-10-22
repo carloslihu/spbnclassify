@@ -186,8 +186,10 @@ class SemiParametricBayesianNetwork(
 
         def _chain_logl(conditioning: dict[str, float]) -> float:
             value = 0.0
+            # updateEvidence merges into the previous evidence, so the previous row's evidence must be erased
+            ie.eraseAllEvidence()
             for node in rb_evidence:
-                ie.updateEvidence(conditioning)  # This overwrites all evidence
+                ie.updateEvidence(conditioning)
                 post = ie.posterior(node)
                 value += norm.logpdf(
                     float(evidence[node]), loc=post.mu(), scale=post.sigma()
@@ -228,7 +230,7 @@ class SemiParametricBayesianNetwork(
         # Condition on sampled and evidence columns only (the remaining CLG nodes are the query)
         clg_query_nodes = [
             node
-            for node in self.feature_names_in_
+            for node in self.nodes()
             if node not in evidence
             and node not in sampled_nodes
             and self.cpd(node).type() == pbn.LinearGaussianCPDType()
@@ -246,8 +248,9 @@ class SemiParametricBayesianNetwork(
         # NOTE: Expensive inference for CLG nodes, we need to compute the posterior for each unique evidence and assign it to the corresponding rows in the assignments dataframe
         for _, row in unique_evidence.iterrows():
             aux_evidence = row.to_dict()
-            # We put the CKDE evidence in the CLG inference
-            ie.updateEvidence(aux_evidence)  # This overwrites all evidence
+            # We put the CKDE evidence in the CLG inference (updateEvidence merges, so the previous row's evidence is erased)
+            ie.eraseAllEvidence()
+            ie.updateEvidence(aux_evidence)
             row_mask = assignments[list(aux_evidence.keys())].eq(row).all(axis=1)
             for node in clg_query_nodes:
                 post = ie.posterior(node)
@@ -263,13 +266,22 @@ class SemiParametricBayesianNetwork(
     ) -> None:
         """Exports the inference results to JSON and/or the network graph to PDF"""
         if json_file_path:
-            export_dict = infer_dict.copy()
-            export_dict["parameters"]["weights"] = infer_dict["parameters"][
-                "weights"
-            ].tolist()
-            export_dict["parameters"]["assignments"] = infer_dict["parameters"][
-                "assignments"
-            ].to_dict(orient="list")
+            # Builds new dicts so the returned infer_dict is not modified
+            assignments = infer_dict["parameters"]["assignments"].copy()
+            # Rao-Blackwellized CLG columns hold pyagrum posteriors, exported as their mean and std
+            for node in assignments.columns:
+                if not pd.api.types.is_numeric_dtype(assignments[node]):
+                    assignments[node] = assignments[node].apply(
+                        lambda post: {"mu": post.mu(), "sigma": post.sigma()}
+                    )
+            export_dict = {
+                **infer_dict,
+                "parameters": {
+                    **infer_dict["parameters"],
+                    "weights": infer_dict["parameters"]["weights"].tolist(),
+                    "assignments": assignments.to_dict(orient="list"),
+                },
+            }
             with open(json_file_path, "w") as f:
                 json.dump(export_dict, f, indent=4)
         if pdf_file_path:
@@ -287,10 +299,13 @@ class SemiParametricBayesianNetwork(
         """
 
         def _kernel_values(samples: np.ndarray) -> np.ndarray:
-            # Silverman’s rule of thumb: 1.06 * std * n**(-1/5)
-            bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+            # Weighted Silverman’s rule of thumb: 1.06 * std_w * n_eff**(-1/5), with the effective sample size n_eff = 1 / sum(w**2)
+            weighted_mean = np.sum(weights * samples)
+            weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
+            n_eff = 1.0 / np.sum(weights**2)
+            bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
             if not np.isfinite(bandwidth) or bandwidth <= 0:
-                bandwidth = max(np.std(samples), 1.0)
+                bandwidth = max(weighted_std, 1.0)
 
             # Computes Gaussian kernel values at the target point[query_node]
             normalized_deltas = (float(point[query_node]) - samples) / bandwidth
@@ -342,7 +357,11 @@ class SemiParametricBayesianNetwork(
         topo_order = list(self.graph().topological_sort())
         assignments = pd.DataFrame(index=np.arange(n_samples), columns=topo_order)
         log_weights = np.zeros(n_samples, dtype=float)
-        infer_dict = {"structure": self.arcs(), "parameters": {}}
+        infer_dict = {
+            "structure": self.arcs(),
+            "evidence": dict(evidence),
+            "parameters": {},
+        }
 
         # CKDE nodes and their CLG ancestors are sampled, the rest of CLG nodes are Rao-Blackwellized.
         sampled = self._sampled_nodes()
@@ -411,7 +430,21 @@ class SemiParametricBayesianNetwork(
         -------
         float
             The estimated posterior density of the query node at the specified point.
+
+        Raises
+        ------
+        ValueError
+            If the query node is in the evidence, or if ``likelihood_weighting_dict`` was computed with a different evidence.
         """
+        if query_node in evidence:
+            raise ValueError("Query node and evidence nodes must be disjoint.")
+        if (
+            likelihood_weighting_dict != {}
+            and likelihood_weighting_dict.get("evidence") != evidence
+        ):
+            raise ValueError(
+                "likelihood_weighting_dict was computed with a different evidence."
+            )
         if likelihood_weighting_dict == {}:
             # Use provided likelihood weighting results if available
             likelihood_weighting_dict = self.infer(
