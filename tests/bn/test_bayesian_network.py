@@ -1,3 +1,4 @@
+import json
 from abc import abstractmethod
 from collections import Counter
 from pathlib import Path
@@ -16,6 +17,7 @@ from helpers.data import (
     generate_normal_data,
 )
 from scipy.special import logsumexp
+from scipy.stats import norm
 from src.bn import (
     BayesianNetwork,
     DiscreteBayesianNetwork,
@@ -23,6 +25,25 @@ from src.bn import (
     KDEBayesianNetwork,
     SemiParametricBayesianNetwork,
 )
+
+
+def _conditional_gaussian(joint_mean, joint_cov, query_nodes, evidence):
+    """
+    Compute the conditional mean and covariance for a set of query nodes given evidence.
+    """
+    evidence_nodes = list(evidence)
+    mu_q = joint_mean[query_nodes].to_numpy(dtype=float).ravel()
+    mu_e = joint_mean[evidence_nodes].to_numpy(dtype=float).ravel()
+    cov_qq = joint_cov.loc[query_nodes, query_nodes].to_numpy(dtype=float)
+    cov_qe = joint_cov.loc[query_nodes, evidence_nodes].to_numpy(dtype=float)
+    cov_eq = joint_cov.loc[evidence_nodes, query_nodes].to_numpy(dtype=float)
+    cov_ee = joint_cov.loc[evidence_nodes, evidence_nodes].to_numpy(dtype=float)
+
+    e = np.array([evidence[node] for node in evidence_nodes], dtype=float)
+    gain = cov_qe @ np.linalg.inv(cov_ee)
+    cond_mean = mu_q + gain @ (e - mu_e)
+    cond_cov = cov_qq - gain @ cov_eq
+    return cond_mean, cond_cov
 
 
 class BaseTestBayesianNetwork:
@@ -505,31 +526,13 @@ class TestGaussianBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def _conditional_gaussian(self, joint_mean, joint_cov, query_nodes, evidence):
-        """
-        Compute the conditional mean and covariance for a set of query nodes given evidence.
-        """
-        evidence_nodes = list(evidence)
-        mu_q = joint_mean[query_nodes].to_numpy(dtype=float).ravel()
-        mu_e = joint_mean[evidence_nodes].to_numpy(dtype=float).ravel()
-        cov_qq = joint_cov.loc[query_nodes, query_nodes].to_numpy(dtype=float)
-        cov_qe = joint_cov.loc[query_nodes, evidence_nodes].to_numpy(dtype=float)
-        cov_eq = joint_cov.loc[evidence_nodes, query_nodes].to_numpy(dtype=float)
-        cov_ee = joint_cov.loc[evidence_nodes, evidence_nodes].to_numpy(dtype=float)
-
-        e = np.array([evidence[node] for node in evidence_nodes], dtype=float)
-        gain = cov_qe @ np.linalg.inv(cov_ee)
-        cond_mean = mu_q + gain @ (e - mu_e)
-        cond_cov = cov_qq - gain @ cov_eq
-        return cond_mean, cond_cov
-
     def test_infer(self, bn: GaussianBayesianNetwork, data: pd.DataFrame) -> None:
         query_nodes = bn.nodes()
         evidence = {"b": data.iloc[0]["b"]}
         infer_dict = self._infer_result(bn, evidence)
 
         # Compute expected conditional mean and covariance using the joint Gaussian parameters
-        expected_mean, expected_cov = self._conditional_gaussian(
+        expected_mean, expected_cov = _conditional_gaussian(
             bn.joint_gaussian_["mean"],
             bn.joint_gaussian_["cov"],
             query_nodes,
@@ -712,13 +715,19 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         weights = np.array([0.1, 0.2, 0.6, 0.1])
 
         lw = {
+            "evidence": {},
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
-            }
+                "posterior_std": {},
+            },
         }
 
-        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        # Weighted Silverman's rule with the effective sample size
+        weighted_mean = np.sum(weights * samples)
+        weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
+        n_eff = 1.0 / np.sum(weights**2)
+        bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
         kernel_values = np.exp(-0.5 * ((point["a"] - samples) / bandwidth) ** 2) / (
             np.sqrt(2.0 * np.pi) * bandwidth
         )
@@ -773,8 +782,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             if not any(bn.cpd(c).type() == pbn.CKDEType() for c in bn.children(node)):
                 assert rate == 1.0
 
-        # Non-evidence CLG nodes are Rao-Blackwellized into CLG posteriors
-        assert all(np.isfinite(x.mu()) and x.sigma() > 0 for x in assignments["d"])
+        # Non-evidence CLG nodes are Rao-Blackwellized: posterior mean per row, posterior std shared by all rows
+        assert np.all(np.isfinite(assignments["d"].to_numpy(dtype=float)))
+        assert infer_dict["parameters"]["posterior_std"]["d"] > 0
 
     def test_infer_GS_matches_LW(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
@@ -801,6 +811,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
+                "posterior_std": {},
             }
         }
 
@@ -898,3 +909,238 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             expected_mean, expected_var = self._grid_posterior_moments(bn, y_obs)
             np.testing.assert_allclose(samples.mean(), expected_mean, atol=0.1)
             np.testing.assert_allclose(samples.var(), expected_var, rtol=0.15)
+
+    # NOTE: Convergence tests of the Rao-Blackwellized inference on a small network with known structure.
+    # Tolerances were calibrated to about 4-5 times the seed-to-seed standard deviation of the estimates.
+    TOY_ARCS = [
+        ("A", "B"),
+        ("B", "C"),
+        ("C", "D"),
+        ("A", "D"),
+        ("C", "E"),
+        ("D", "E"),
+        ("A", "F"),
+        ("B", "F"),
+    ]
+
+    @classmethod
+    def _toy_bn(
+        cls, node_types: dict[str, pbn.FactorType]
+    ) -> SemiParametricBayesianNetwork:
+        """A (LG) -> B -> C -> D -> E with A -> D and C -> E, and F a child of A and B.
+        Nodes missing from ``node_types`` are LinearGaussian."""
+        rng = np.random.default_rng(SEED)
+        n = 500
+        a = rng.normal(0, 1, n)
+        b = np.tanh(a) + 0.3 * rng.standard_t(3, n)
+        c = 1 + 2 * b + rng.normal(0, 0.5, n)
+        d = -1 + 0.5 * c + 0.3 * a + rng.normal(0, 0.5, n)
+        e = d - c + rng.normal(0, 0.5, n)
+        f = np.sin(2 * b) + 0.2 * a + 0.3 * rng.normal(size=n)
+        df = pd.DataFrame({"A": a, "B": b, "C": c, "D": d, "E": e, "F": f})
+        bn = SemiParametricBayesianNetwork()
+        for node in df.columns:
+            bn.add_node(node)
+        for source, target in cls.TOY_ARCS:
+            bn.add_arc(source, target)
+        for node in df.columns:
+            bn.set_node_type(node, node_types.get(node, pbn.LinearGaussianCPDType()))
+        pbn.SemiparametricBN.fit(bn, df)
+        bn.feature_names_in_ = list(df.columns)
+        return bn
+
+    @staticmethod
+    def _reference_means(
+        bn: SemiParametricBayesianNetwork,
+        evidence: dict[str, float],
+        n_samples: int = 200_000,
+    ) -> dict[str, float]:
+        """Brute-force posterior means with plain likelihood weighting (every node forward sampled, no Rao-Blackwellization)"""
+        samples = pd.DataFrame(index=np.arange(n_samples))
+        log_weights = np.zeros(n_samples)
+        for node_index, node in enumerate(bn.graph().topological_sort()):
+            if node in evidence:
+                samples[node] = float(evidence[node])
+                log_weights += bn._node_logl(node, samples)
+            else:
+                samples[node] = (
+                    bn.cpd(node)
+                    .sample(
+                        n_samples,
+                        bn._parent_values(node, samples),
+                        seed=SEED + node_index,
+                    )
+                    .to_pandas()
+                    .to_numpy(dtype=float)
+                )
+        weights = np.exp(log_weights - logsumexp(log_weights))
+        return {
+            node: float(np.sum(weights * samples[node]))
+            for node in samples.columns
+            if node not in evidence
+        }
+
+    def test_infer_all_lg_matches_exact(self) -> None:
+        # Without CKDE nodes nothing is sampled, so the Rao-Blackwellized posterior is exact
+        bn = self._toy_bn({})
+        nodes = list(bn.graph().topological_sort())
+        index = {node: i for i, node in enumerate(nodes)}
+        intercepts = np.zeros(len(nodes))
+        variances = np.zeros(len(nodes))
+        coefficients = np.zeros((len(nodes), len(nodes)))
+        for node in nodes:
+            cpd = bn.cpd(node)
+            intercepts[index[node]] = cpd.beta[0]
+            variances[index[node]] = cpd.variance
+            for parent, coef in zip(cpd.evidence(), cpd.beta[1:]):
+                coefficients[index[node], index[parent]] = coef
+        A = np.linalg.inv(np.eye(len(nodes)) - coefficients)
+        joint_mean = pd.Series(A @ intercepts, index=nodes)
+        joint_cov = pd.DataFrame((A * variances) @ A.T, index=nodes, columns=nodes)
+
+        evidence = {"B": 0.5, "E": 0.5}
+        infer_dict = bn.infer(evidence=evidence, n_samples=10, seed=SEED)
+        for query_node in ["A", "C", "D", "F"]:
+            cond_mean, cond_cov = _conditional_gaussian(
+                joint_mean, joint_cov, [query_node], evidence
+            )
+            point = pd.Series({query_node: cond_mean[0] + 0.3})
+            expected = norm.pdf(
+                point[query_node], loc=cond_mean[0], scale=np.sqrt(cond_cov[0, 0])
+            )
+            actual = bn.posterior(
+                query_node, evidence, point, likelihood_weighting_dict=infer_dict
+            )
+            np.testing.assert_allclose(actual, expected, rtol=1e-8)
+
+    def test_rao_blackwellize_clg_evidence_logl(self) -> None:
+        # Several Rao-Blackwellized evidence nodes on rows with different sampled values (regression: NaN log-likelihoods)
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        sampled = bn._sampled_nodes()
+        assert sampled == {"A", "B", "F"}
+
+        evidence = {"C": 3.0, "D": 2.0}
+        assignments = pd.DataFrame(
+            {"A": [0.1, 0.5, -1.0], "B": [0.0, 0.7, -1.2], "F": [0.2, 0.9, -0.4]}
+        )
+        log_lik, _, posterior_std = bn._rao_blackwellize_clg(
+            assignments.copy(), evidence, sampled
+        )
+
+        # E is not observed, so log p(C, D | A, B) = log p(C | B) + log p(D | C, A)
+        cpd_c, cpd_d = bn.cpd("C"), bn.cpd("D")
+        beta_d = dict(zip(cpd_d.evidence(), cpd_d.beta[1:]))
+        expected = norm.logpdf(
+            evidence["C"],
+            loc=cpd_c.beta[0] + cpd_c.beta[1] * assignments["B"],
+            scale=np.sqrt(cpd_c.variance),
+        ) + norm.logpdf(
+            evidence["D"],
+            loc=cpd_d.beta[0]
+            + beta_d["C"] * evidence["C"]
+            + beta_d["A"] * assignments["A"],
+            scale=np.sqrt(cpd_d.variance),
+        )
+        assert np.all(np.isfinite(log_lik))
+        np.testing.assert_allclose(log_lik, expected, rtol=1e-10)
+        assert set(posterior_std) == {"E"}
+
+    @pytest.mark.parametrize(
+        "evidence",
+        [{"D": 2.0, "E": 0.5}, {"F": 0.9, "D": 1.0}],
+        ids=["lg_evidence", "ckde_and_lg_evidence"],
+    )
+    def test_infer_converges_to_reference(self, evidence: dict[str, float]) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        expected = self._reference_means(bn, evidence)
+        estimates = []
+        for run in range(4):
+            infer_dict = bn.infer(
+                evidence=evidence, n_samples=20000, seed=SEED + 100 * run
+            )
+            weights = infer_dict["parameters"]["weights"]
+            assignments = infer_dict["parameters"]["assignments"]
+            estimates.append([np.sum(weights * assignments[node]) for node in "ABC"])
+        np.testing.assert_allclose(
+            np.mean(estimates, axis=0),
+            [expected[node] for node in "ABC"],
+            atol=0.05,
+        )
+
+    def test_infer_GS_converges_to_reference(self) -> None:
+        # Evidence on the CKDE node F exercises the rejection sampling and Metropolis-Hastings fallback of A and B
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"F": 0.9, "D": 1.0}
+        expected = self._reference_means(bn, evidence)
+        estimates = []
+        for run in range(2):
+            gs = bn.infer_GS(
+                evidence=evidence,
+                n_samples=1000,
+                n_chains=100,
+                burn_in=30,
+                seed=SEED + run,
+            )
+            assert gs["parameters"]["exact_rate"]["A"] < 1.0
+            assignments = gs["parameters"]["assignments"]
+            estimates.append([assignments[node].mean() for node in "ABC"])
+        np.testing.assert_allclose(
+            np.mean(estimates, axis=0),
+            [expected[node] for node in "ABC"],
+            atol=0.1,
+        )
+
+    def test_infer_GS_uses_ckde_evidence_on_lg_parents(self) -> None:
+        # Regression: the Rao-Blackwellized LG parent A of the observed CKDE node B must not stay at its prior
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"B": 0.9}
+        lw = bn.infer(evidence=evidence, n_samples=20000, seed=SEED)
+        lw_mean = np.sum(
+            lw["parameters"]["weights"] * lw["parameters"]["assignments"]["A"]
+        )
+        gs = bn.infer_GS(
+            evidence=evidence, n_samples=1000, n_chains=100, burn_in=30, seed=SEED
+        )
+        gs_mean = gs["parameters"]["assignments"]["A"].mean()
+
+        prior_mean = bn.cpd("A").beta[0]
+        assert abs(lw_mean - prior_mean) > 0.5
+        np.testing.assert_allclose(gs_mean, lw_mean, atol=0.1)
+
+    def test_infer_effective_sample_size(self, tmp_path: Path) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        n_samples = 500
+
+        infer_dict = bn.infer(evidence={}, n_samples=n_samples, seed=SEED)
+        np.testing.assert_allclose(
+            infer_dict["parameters"]["effective_sample_size"], n_samples
+        )
+
+        json_file_path = tmp_path / "infer_result.json"
+        infer_dict = bn.infer(
+            evidence={"D": 2.0},
+            n_samples=n_samples,
+            seed=SEED,
+            json_file_path=json_file_path,
+        )
+        weights = infer_dict["parameters"]["weights"]
+        ess = infer_dict["parameters"]["effective_sample_size"]
+        np.testing.assert_allclose(ess, 1.0 / np.sum(weights**2))
+        assert 1.0 <= ess < n_samples
+
+        # The export must not modify the returned dictionary
+        assert isinstance(weights, np.ndarray)
+        assert isinstance(infer_dict["parameters"]["assignments"], pd.DataFrame)
+        with open(json_file_path) as f:
+            exported = json.load(f)
+        assert exported["parameters"]["effective_sample_size"] == ess
+
+    def test_posterior_validation(self) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        point = pd.Series({"A": 0.0, "D": 0.0})
+        infer_dict = bn.infer(evidence={"D": 2.0}, n_samples=50, seed=SEED)
+
+        with pytest.raises(ValueError, match="disjoint"):
+            bn.posterior("D", {"D": 2.0}, point, likelihood_weighting_dict=infer_dict)
+        with pytest.raises(ValueError, match="different evidence"):
+            bn.posterior("A", {"D": 1.0}, point, likelihood_weighting_dict=infer_dict)
