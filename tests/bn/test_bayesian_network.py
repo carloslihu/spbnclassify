@@ -630,13 +630,19 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
         weights = np.array([0.1, 0.2, 0.6, 0.1])
 
         lw = {
+            "evidence": {},
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples}),
                 "weights": weights,
-            }
+                "posterior_std": {},
+            },
         }
 
-        bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
+        # Weighted Silverman's rule with the effective sample size
+        weighted_mean = np.sum(weights * samples)
+        weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
+        n_eff = 1.0 / np.sum(weights**2)
+        bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
         kernel_values = np.exp(-0.5 * ((point["a"] - samples) / bandwidth) ** 2) / (
             np.sqrt(2.0 * np.pi) * bandwidth
         )
