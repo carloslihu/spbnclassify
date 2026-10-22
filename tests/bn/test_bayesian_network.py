@@ -808,11 +808,12 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         weights = np.full(len(samples), 1.0 / len(samples))
 
         gs = {
+            "evidence": {},
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
                 "posterior_std": {},
-            }
+            },
         }
 
         bandwidth = 1.06 * np.std(samples) * (len(samples) ** (-1.0 / 5.0))
@@ -1144,3 +1145,94 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.posterior("D", {"D": 2.0}, point, likelihood_weighting_dict=infer_dict)
         with pytest.raises(ValueError, match="different evidence"):
             bn.posterior("A", {"D": 1.0}, point, likelihood_weighting_dict=infer_dict)
+
+    def test_mcmc_diagnostics(self) -> None:
+        rng = np.random.default_rng(SEED)
+        n_draws, n_chains = 2000, 8
+
+        # Independent draws: R-hat ~ 1 and ESS ~ number of draws
+        iid = rng.normal(size=(n_draws, n_chains))
+        np.testing.assert_allclose(
+            SemiParametricBayesianNetwork._split_rhat(iid), 1.0, atol=0.01
+        )
+        np.testing.assert_allclose(
+            SemiParametricBayesianNetwork._mcmc_effective_sample_size(iid),
+            n_draws * n_chains,
+            rtol=0.15,
+        )
+
+        # AR(1) chains x_t = phi x_{t-1} + eps_t: ESS ~ N (1 - phi) / (1 + phi)
+        phi = 0.8
+        ar = np.zeros((n_draws, n_chains))
+        ar[0] = rng.normal(size=n_chains) / np.sqrt(1 - phi**2)
+        for t in range(1, n_draws):
+            ar[t] = phi * ar[t - 1] + rng.normal(size=n_chains)
+        np.testing.assert_allclose(
+            SemiParametricBayesianNetwork._mcmc_effective_sample_size(ar),
+            n_draws * n_chains * (1 - phi) / (1 + phi),
+            rtol=0.25,
+        )
+
+        # Chains stuck around different values have R-hat >> 1
+        stuck = iid + np.arange(n_chains)[None, :]
+        assert SemiParametricBayesianNetwork._split_rhat(stuck) > 1.5
+
+        # Too few draws per chain
+        assert np.isnan(SemiParametricBayesianNetwork._split_rhat(iid[:3]))
+        assert np.isnan(
+            SemiParametricBayesianNetwork._mcmc_effective_sample_size(iid[:3])
+        )
+
+    def test_infer_GS_diagnostics(self) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"F": 0.9, "D": 1.0}
+        n_samples, n_chains = 1000, 50
+        gs = bn.infer_GS(
+            evidence=evidence,
+            n_samples=n_samples,
+            n_chains=n_chains,
+            burn_in=30,
+            seed=SEED,
+        )
+        assert gs["evidence"] == evidence
+        rhat = gs["parameters"]["rhat"]
+        ess = gs["parameters"]["effective_sample_size"]
+        free_nodes = set(bn.nodes()) - set(evidence)
+        assert set(rhat) == free_nodes and set(ess) == free_nodes
+
+        # n_samples is a multiple of n_chains, so the diagnostics are those of the returned assignments (posterior
+        # means for the Rao-Blackwellized nodes C and E), whose rows are ordered sweep by sweep
+        assignments = gs["parameters"]["assignments"]
+        assert set(gs["parameters"]["posterior_std"]) == {"C", "E"}
+        for node in free_nodes:
+            draws = assignments[node].to_numpy(dtype=float).reshape(-1, n_chains)
+            assert rhat[node] == bn._split_rhat(draws)
+            assert ess[node] == bn._mcmc_effective_sample_size(draws)
+            # R-hat is close to 1 (the exact value depends on the chain length relative to the autocorrelation)
+            assert 0.95 < rhat[node] < 1.5
+            assert 0.0 < ess[node] <= 1.5 * n_samples
+
+        # posterior_GS uses the autocorrelation-aware ESS of the query node for the KDE bandwidth
+        point = pd.Series({"A": 1.0})
+        expected = bn._posterior_density(
+            "A",
+            point,
+            gs["parameters"]["assignments"],
+            gs["parameters"]["weights"],
+            gs["parameters"]["posterior_std"],
+            effective_sample_size=ess["A"],
+        )
+        actual = bn.posterior_GS("A", evidence, point, gibbs_sampling_dict=gs)
+        np.testing.assert_allclose(actual, expected, rtol=1e-12)
+
+    def test_posterior_GS_validation(self) -> None:
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        point = pd.Series({"A": 0.0, "D": 0.0})
+        gs = bn.infer_GS(
+            evidence={"D": 2.0}, n_samples=40, n_chains=10, burn_in=5, seed=SEED
+        )
+
+        with pytest.raises(ValueError, match="disjoint"):
+            bn.posterior_GS("D", {"D": 2.0}, point, gibbs_sampling_dict=gs)
+        with pytest.raises(ValueError, match="different evidence"):
+            bn.posterior_GS("A", {"D": 1.0}, point, gibbs_sampling_dict=gs)

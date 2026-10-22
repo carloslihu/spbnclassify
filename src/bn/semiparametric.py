@@ -218,7 +218,9 @@ class SemiParametricBayesianNetwork(
                 [float(evidence[rb_nodes[i]]) for i in evidence_index]
             )
             residuals = evidence_values[None, :] - means[:, evidence_index]
-            chol = cholesky(covariance[np.ix_(evidence_index, evidence_index)], lower=True)
+            chol = cholesky(
+                covariance[np.ix_(evidence_index, evidence_index)], lower=True
+            )
             whitened = solve_triangular(chol, residuals.T, lower=True)
             log_lik = (
                 -0.5 * np.sum(whitened**2, axis=0)
@@ -271,17 +273,24 @@ class SemiParametricBayesianNetwork(
         assignments: pd.DataFrame,
         weights: np.ndarray,
         posterior_std: dict[str, float],
+        effective_sample_size: float | None = None,
     ) -> float:
         """Estimates the posterior density of ``query_node`` at ``point`` from weighted samples.
         Sampled columns use a weighted Gaussian KDE, Rao-Blackwellized CLG columns (the keys of ``posterior_std``)
         a weighted mixture of their CLG posteriors N(posterior mean of the row, posterior std).
+        ``effective_sample_size`` overrides the importance-sampling n_eff = 1 / sum(w**2) of the bandwidth (e.g., the autocorrelation-aware ESS of MCMC samples).
         """
 
         def _kernel_values(samples: np.ndarray) -> np.ndarray:
-            # Weighted Silverman’s rule of thumb: 1.06 * std_w * n_eff**(-1/5), with the effective sample size n_eff = 1 / sum(w**2)
+            # Weighted Silverman’s rule of thumb: 1.06 * std_w * n_eff**(-1/5), with the effective sample size n_eff = 1 / sum(w**2) by default
             weighted_mean = np.sum(weights * samples)
             weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
-            n_eff = 1.0 / np.sum(weights**2)
+            n_eff = (
+                effective_sample_size
+                if effective_sample_size is not None
+                and np.isfinite(effective_sample_size)
+                else 1.0 / np.sum(weights**2)
+            )
             bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
             if not np.isfinite(bandwidth) or bandwidth <= 0:
                 bandwidth = max(weighted_std, 1.0)
@@ -620,7 +629,80 @@ class SemiParametricBayesianNetwork(
             n_changed += int(accept.sum())
         return new_values, n_exact, n_changed
 
-    # RFE: Allow automatic convergence diagnostics (e.g., R-hat) as stop criterion
+    @staticmethod
+    def _split_chains(draws: np.ndarray) -> np.ndarray:
+        """Splits each chain of ``draws`` (n_draws, n_chains) in two halves, dropping the first draw if n_draws is odd,
+        so that within-chain trends show up as between-chain differences. Returns (n_draws // 2, 2 * n_chains).
+        """
+        half = draws.shape[0] // 2
+        return np.concatenate([draws[-2 * half : -half], draws[-half:]], axis=1)
+
+    @classmethod
+    def _split_rhat(cls, draws: np.ndarray) -> float:
+        """Split-R-hat (Gelman et al., BDA3) of ``draws`` (n_draws, n_chains): sqrt(var+ / W), with W the mean within-chain
+        variance and var+ = (n - 1) / n W + B / n the pooled variance. Values close to 1 (e.g., < 1.01-1.05) indicate convergence.
+        Returns NaN with fewer than 4 draws per chain or constant draws."""
+        if draws.shape[0] < 4:
+            return np.nan
+        chains = cls._split_chains(draws)
+        n = chains.shape[0]
+        within = np.mean(np.var(chains, axis=0, ddof=1))
+        between_over_n = np.var(np.mean(chains, axis=0), ddof=1)
+        if within == 0.0:
+            return np.nan
+        var_plus = (n - 1) / n * within + between_over_n
+        return float(np.sqrt(var_plus / within))
+
+    @classmethod
+    def _mcmc_effective_sample_size(cls, draws: np.ndarray) -> float:
+        """Autocorrelation-aware effective sample size (Stan/BDA3) of ``draws`` (n_draws, n_chains) on split chains:
+        n_draws * n_chains / tau, with the integrated autocorrelation time tau = -1 + 2 sum_t rho_t truncated with
+        Geyer's initial monotone positive sequence. Returns NaN with fewer than 4 draws per chain or constant draws.
+        """
+        if draws.shape[0] < 4:
+            return np.nan
+        chains = cls._split_chains(draws)
+        n, m = chains.shape
+        # Biased autocovariance of each chain at every lag via FFT
+        centered = chains - np.mean(chains, axis=0)
+        n_fft = 2 ** int(np.ceil(np.log2(2 * n)))
+        spectrum = np.fft.rfft(centered, n=n_fft, axis=0)
+        acov = np.fft.irfft(spectrum * np.conjugate(spectrum), n=n_fft, axis=0)[:n] / n
+        mean_acov = np.mean(acov, axis=1)
+
+        within = mean_acov[0] * n / (n - 1)
+        var_plus = within * (n - 1) / n + np.var(np.mean(chains, axis=0), ddof=1)
+        if var_plus == 0.0:
+            return np.nan
+        rho = np.zeros(n)
+        rho[0] = 1.0
+        rho_even = 1.0
+        rho_odd = 1.0 - (within - mean_acov[1]) / var_plus
+        rho[1] = rho_odd
+        # Geyer's initial positive sequence: sum pairs of autocorrelations while they are positive
+        t = 1
+        while t < n - 3 and rho_even + rho_odd > 0.0:
+            rho_even = 1.0 - (within - mean_acov[t + 1]) / var_plus
+            rho_odd = 1.0 - (within - mean_acov[t + 2]) / var_plus
+            if rho_even + rho_odd >= 0.0:
+                rho[t + 1] = rho_even
+                rho[t + 2] = rho_odd
+            t += 2
+        max_t = t - 2
+        if rho_even > 0.0:
+            rho[max_t + 1] = rho_even
+        # Geyer's initial monotone sequence: the pair sums must be non-increasing
+        t = 1
+        while t <= max_t - 2:
+            if rho[t + 1] + rho[t + 2] > rho[t - 1] + rho[t]:
+                rho[t + 1] = rho[t + 2] = (rho[t - 1] + rho[t]) / 2.0
+            t += 2
+        n_total = n * m
+        tau = -1.0 + 2.0 * np.sum(rho[: max_t + 1]) + rho[max_t + 1]
+        tau = max(tau, 1.0 / np.log10(n_total))
+        return float(n_total / tau)
+
+    # RFE: Use the convergence diagnostics (R-hat) as automatic stop criterion
     def infer_GS(
         self,
         evidence: dict[str, float] = {},
@@ -651,7 +733,14 @@ class SemiParametricBayesianNetwork(
             seed (int, optional): The random seed for reproducibility. Defaults to 0.
             max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Defaults to 10.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network and the parameters of the inference results. The parameters include the (uniform) weights, the assignments and, per node, the fraction of exact draws from the full conditional (``exact_rate``) and the fraction of updates that changed the value (``acceptance_rate``).
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network, the evidence and the parameters of the inference results. The parameters include the (uniform) weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and, per free node:
+                - ``exact_rate``: the fraction of exact draws from the full conditional.
+                - ``acceptance_rate``: the fraction of updates that changed the value.
+                - ``rhat``: the split-R-hat over the chains of the returned values (posterior means for the Rao-Blackwellized nodes). Values above ~1.01-1.05 mean that
+                  the chains have not converged or are too short for their autocorrelation (increase ``burn_in`` or the draws per chain, i.e. ``n_samples / n_chains``).
+                - ``effective_sample_size``: the autocorrelation-aware effective sample size of the returned values. Much smaller than ``n_samples`` means highly
+                  autocorrelated chains, e.g. strongly dependent nodes that Gibbs sampling explores slowly (increase ``n_samples`` or ``thinning``).
+            Both diagnostics are NaN with fewer than 4 kept sweeps per chain.
         """
         rng = np.random.default_rng(seed)
 
@@ -669,7 +758,11 @@ class SemiParametricBayesianNetwork(
             node: [c for c in self.children(node) if kernels[c]["type"] == "ckde"]
             for node in free_nodes
         }
-        infer_dict = {"structure": self.arcs(), "parameters": {}}
+        infer_dict = {
+            "structure": self.arcs(),
+            "evidence": dict(evidence),
+            "parameters": {},
+        }
 
         # Initialize the chains by forward sampling with the evidence clamped.
         state = pd.DataFrame(index=np.arange(n_chains), columns=topo_order, dtype=float)
@@ -710,13 +803,28 @@ class SemiParametricBayesianNetwork(
             if sweep >= burn_in and (sweep - burn_in) % thinning == thinning - 1:
                 kept_states.append(state.copy())
 
-        assignments = pd.concat(kept_states, ignore_index=True).iloc[:n_samples]
-        assignments = assignments.reset_index(drop=True)
         # The chains sample p(S | e), so the Rao-Blackwellized nodes only need p(R | S, e) and the evidence likelihood is not a weight.
         # S must be ancestor-closed: conditioning on the CKDE nodes alone would ignore their likelihood on their LinearGaussian parents.
-        _, assignments, posterior_std = self._rao_blackwellize_clg(
-            assignments, evidence, self._sampled_nodes()
+        all_assignments = pd.concat(kept_states, ignore_index=True)
+        _, all_assignments, posterior_std = self._rao_blackwellize_clg(
+            all_assignments, evidence, self._sampled_nodes()
         )
+
+        # Convergence diagnostics of the returned values (posterior means for the Rao-Blackwellized nodes) on all the kept
+        # sweeps, whose rows are ordered sweep by sweep, i.e. (n_kept_sweeps, n_chains) per node
+        n_kept = len(kept_states)
+        draws = {
+            node: all_assignments[node].to_numpy(dtype=float).reshape(n_kept, n_chains)
+            for node in free_nodes
+        }
+        assignments = all_assignments.iloc[:n_samples].reset_index(drop=True)
+        # Only the first n_samples draws are returned, so the effective sample size is scaled accordingly
+        kept_fraction = len(assignments) / len(all_assignments)
+        rhat = {node: self._split_rhat(draws[node]) for node in free_nodes}
+        effective_sample_size = {
+            node: kept_fraction * self._mcmc_effective_sample_size(draws[node])
+            for node in free_nodes
+        }
 
         # MCMC samples are equally weighted.
         weights = np.full(len(assignments), 1.0 / len(assignments))
@@ -730,6 +838,8 @@ class SemiParametricBayesianNetwork(
             "acceptance_rate": {
                 node: changed[node] / (n_sweeps * n_chains) for node in free_nodes
             },
+            "rhat": rhat,
+            "effective_sample_size": effective_sample_size,
         }
         self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
@@ -773,7 +883,21 @@ class SemiParametricBayesianNetwork(
         -------
         float
             The estimated posterior density of the query node at the specified point.
+
+        Raises
+        ------
+        ValueError
+            If the query node is in the evidence, or if ``gibbs_sampling_dict`` was computed with a different evidence.
         """
+        if query_node in evidence:
+            raise ValueError("Query node and evidence nodes must be disjoint.")
+        if (
+            gibbs_sampling_dict != {}
+            and gibbs_sampling_dict.get("evidence") != evidence
+        ):
+            raise ValueError(
+                "gibbs_sampling_dict was computed with a different evidence."
+            )
         if gibbs_sampling_dict == {}:
             gibbs_sampling_dict = self.infer_GS(
                 evidence=evidence,
@@ -790,4 +914,8 @@ class SemiParametricBayesianNetwork(
             gibbs_sampling_dict["parameters"]["assignments"],
             gibbs_sampling_dict["parameters"]["weights"],
             gibbs_sampling_dict["parameters"]["posterior_std"],
+            # The KDE bandwidth uses the autocorrelation-aware effective sample size of the query node
+            gibbs_sampling_dict["parameters"]
+            .get("effective_sample_size", {})
+            .get(query_node),
         )
