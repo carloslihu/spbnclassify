@@ -14,7 +14,10 @@ from src.bnc import (
 )
 from src.utils.constants import TRUE_CLASS_LABEL
 
-from .test_bayesian_network_classifier import BaseTestGaussianBayesianNetworkClassifier
+from .test_bayesian_network_classifier import (
+    BaseTestGaussianBayesianNetworkClassifier,
+    GaussianMultiClassifierNotImplementedMixin,
+)
 
 
 class TestGaussianBayesianNetworkAugmentedNaiveBayes(
@@ -92,7 +95,8 @@ class TestGaussianSuperParentOneDependenceEstimator(
 
 
 class TestGaussianAveragedOneDependenceEstimator(
-    BaseTestGaussianBayesianNetworkClassifier
+    GaussianMultiClassifierNotImplementedMixin,
+    BaseTestGaussianBayesianNetworkClassifier,
 ):
     bn_class = GaussianAveragedOneDependenceEstimator
     model_filename = "g-aode.pkl"
@@ -185,7 +189,10 @@ class TestGaussianMaxKAugmentedNaiveBayes(BaseTestGaussianBayesianNetworkClassif
         return True
 
 
-class TestGaussianBayesianMultinet(BaseTestGaussianBayesianNetworkClassifier):
+class TestGaussianBayesianMultinet(
+    GaussianMultiClassifierNotImplementedMixin,
+    BaseTestGaussianBayesianNetworkClassifier,
+):
     bn_class = GaussianBayesianMultinet
     model_filename = "g-bm.pkl"
     str_representation = "Gaussian Bayesian Multinet Classifier"

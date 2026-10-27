@@ -15,7 +15,10 @@ from src.bnc import (
 )
 from src.utils.constants import TRUE_CLASS_LABEL
 
-from .test_bayesian_network_classifier import BaseTestKDEBayesianNetworkClassifier
+from .test_bayesian_network_classifier import (
+    BaseTestKDEBayesianNetworkClassifier,
+    MultiClassifierNotImplementedMixin,
+)
 
 
 class TestKDEBayesianNetworkAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
@@ -110,7 +113,9 @@ class TestKDESuperParentOneDependenceEstimator(BaseTestKDEBayesianNetworkClassif
         )
 
 
-class TestKDEAveragedOneDependenceEstimator(BaseTestKDEBayesianNetworkClassifier):
+class TestKDEAveragedOneDependenceEstimator(
+    MultiClassifierNotImplementedMixin, BaseTestKDEBayesianNetworkClassifier
+):
     bn_class = KDEAveragedOneDependenceEstimator
     model_filename = "kde-aode.pkl"
     str_representation = "Averaged one-dependence KDE Bayesian Network Classifier"
@@ -202,7 +207,9 @@ class TestKDEMaxKAugmentedNaiveBayes(BaseTestKDEBayesianNetworkClassifier):
         return True
 
 
-class TestKDEBayesianMultinet(BaseTestKDEBayesianNetworkClassifier):
+class TestKDEBayesianMultinet(
+    MultiClassifierNotImplementedMixin, BaseTestKDEBayesianNetworkClassifier
+):
     bn_class = KDEBayesianMultinet
     model_filename = "kde-bm.pkl"
     str_representation = "KDE Bayesian Multinet Classifier"

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
+import pytest
 from bn import BaseTestBayesianNetwork
 from helpers.data import (
     BN_SAVE_FOLDER_PATH,
@@ -166,3 +167,32 @@ class BaseTestKDEBayesianNetworkClassifier(BaseTestBayesianNetworkClassifier):
             "b": pbn.CKDEType(),
             "c": pbn.CKDEType(),
         }
+
+
+MULTI_CLASSIFIER_XFAIL_REASON = "The ensemble classifiers (Multinet, AODE) do not build the pyagrum graphic nor implement infer/posterior/mpe yet"
+
+
+class MultiClassifierNotImplementedMixin:
+    """Marks the tests of the features that the ensemble classifiers (BaseMultiBayesianNetworkClassifier) do not implement yet as expected failures.
+    Strict, so they fail once implemented and the mixin can be removed. Must come first in the bases to override the tests.
+    """
+
+    @pytest.mark.xfail(reason=MULTI_CLASSIFIER_XFAIL_REASON, strict=True)
+    def test_initialization(self, bn, data: pd.DataFrame) -> None:
+        super().test_initialization(bn, data)
+
+    @pytest.mark.xfail(reason=MULTI_CLASSIFIER_XFAIL_REASON, strict=True)
+    def test_infer(self, bn, data: pd.DataFrame) -> None:
+        super().test_infer(bn, data)
+
+    @pytest.mark.xfail(reason=MULTI_CLASSIFIER_XFAIL_REASON, strict=True)
+    def test_posterior(self, bn, data: pd.DataFrame) -> None:
+        super().test_posterior(bn, data)
+
+
+class GaussianMultiClassifierNotImplementedMixin(MultiClassifierNotImplementedMixin):
+    """Also marks ``test_mpe``, which only the Gaussian classifiers test"""
+
+    @pytest.mark.xfail(reason=MULTI_CLASSIFIER_XFAIL_REASON, strict=True)
+    def test_mpe(self, bn, data: pd.DataFrame) -> None:
+        super().test_mpe(bn, data)

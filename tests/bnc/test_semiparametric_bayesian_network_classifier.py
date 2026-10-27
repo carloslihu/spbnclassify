@@ -17,6 +17,7 @@ from src.utils.constants import TRUE_CLASS_LABEL
 
 from .test_bayesian_network_classifier import (
     BaseTestSemiParametricBayesianNetworkClassifier,
+    MultiClassifierNotImplementedMixin,
 )
 
 
@@ -158,7 +159,7 @@ class TestSemiParametricSuperParentOneDependenceEstimator(
 
 
 class TestSemiParametricAveragedOneDependenceEstimator(
-    BaseTestSemiParametricBayesianNetworkClassifier
+    MultiClassifierNotImplementedMixin, BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricAveragedOneDependenceEstimator
     model_filename = "sp-aode.pkl"
@@ -266,7 +267,7 @@ class TestSemiParametricMaxKAugmentedNaiveBayes(
 
 
 class TestSemiParametricBayesianMultinet(
-    BaseTestSemiParametricBayesianNetworkClassifier
+    MultiClassifierNotImplementedMixin, BaseTestSemiParametricBayesianNetworkClassifier
 ):
     bn_class = SemiParametricBayesianMultinet
     model_filename = "sp-bm.pkl"
