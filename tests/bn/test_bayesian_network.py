@@ -1348,6 +1348,59 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         with pytest.raises(ValueError, match="Unknown inference method"):
             bn.infer(evidence={"D": 2.0}, method="mcmc")
 
+    def test_infer_discrete_parent(self) -> None:
+        # Discrete C -> X <- K (CKDE): X is a CLinearGaussianCPD, Rao-Blackwellized with the parameters of the sampled class
+        rng = np.random.default_rng(SEED)
+        n = 4000
+        c = rng.choice(["u", "v"], size=n, p=[0.3, 0.7])
+        k = rng.normal(0, 1, n)
+        x = np.where(c == "u", 1.0, -2.0) + 0.5 * k + rng.normal(0, 1, n)
+        df = pd.DataFrame({"C": pd.Categorical(c), "K": k, "X": x})
+        bn = SemiParametricBayesianNetwork(true_label="C")
+        for node in df.columns:
+            bn.add_node(node)
+        bn.add_arc("C", "X")
+        bn.add_arc("K", "X")
+        bn.set_node_type("C", pbn.DiscreteFactorType())
+        bn.set_node_type("K", pbn.CKDEType())
+        bn.set_node_type("X", pbn.LinearGaussianCPDType())
+        pbn.SemiparametricBN.fit(bn, df)
+
+        # Exact p(x | k, C) and the class prior
+        k_value, x_value = 0.4, -0.5
+        prior = {value: np.mean(c == value) for value in "uv"}
+        density = {}
+        for value in "uv":
+            cpd = bn.cpd("X").conditional_factor(pbn.Assignment({"C": value}))
+            density[value] = norm.pdf(
+                x_value,
+                loc=cpd.beta[0] + cpd.beta[1] * k_value,
+                scale=np.sqrt(cpd.variance),
+            )
+        marginal = sum(prior[value] * density[value] for value in "uv")
+        point = pd.Series({"X": x_value})
+
+        # p(x | k) is the mixture over the sampled classes, and p(x | k, C) is exact
+        actual = bn.posterior("X", {"K": k_value}, point, n_samples=20000, seed=SEED)
+        np.testing.assert_allclose(actual, marginal, rtol=0.02)
+        actual = bn.posterior("X", {"K": k_value, "C": "u"}, point, n_samples=50)
+        np.testing.assert_allclose(actual, density["u"], rtol=1e-10)
+
+        # With evidence on X, the weights give P(C | x, k)
+        infer_dict = bn.infer(
+            evidence={"K": k_value, "X": x_value}, n_samples=20000, seed=SEED
+        )
+        weights = infer_dict["parameters"]["weights"]
+        is_u = (infer_dict["parameters"]["assignments"]["C"] == "u").to_numpy()
+        np.testing.assert_allclose(
+            weights[is_u].sum(), prior["u"] * density["u"] / marginal, rtol=0.05
+        )
+
+        with pytest.raises(ValueError, match="not a category"):
+            bn.infer(evidence={"C": "w"})
+        with pytest.raises(NotImplementedError, match="discrete nodes"):
+            bn.infer(evidence={"K": k_value}, method="gibbs")
+
     def test_infer_label_node(self) -> None:
         # The label Y is a node of the network but not one of the feature_names_in_
         bn = self._toy_bn({}, with_label=True)

@@ -125,36 +125,78 @@ class SemiParametricBayesianNetwork(
     def _node_logl(self, node: str, assignments: pd.DataFrame) -> np.ndarray:
         """Row-wise log-likelihood of ``node`` given its parents under its conditional distribution"""
         point_df = self._parent_values(node, assignments).copy()
-        point_df.insert(0, node, assignments[node].to_numpy(dtype=float))
+        column = assignments[node]
+        # Discrete columns stay categorical, as pybnesian requires
+        if not isinstance(column.dtype, pd.CategoricalDtype):
+            column = column.astype(float)
+        point_df.insert(0, node, column)
         return np.asarray(self.cpd(node).logl(point_df), dtype=float)
 
+    def _discrete_nodes(self) -> set[str]:
+        """Returns the discrete nodes (e.g., the class label of a classifier)"""
+        return {
+            node
+            for node in self.nodes()
+            if self.cpd(node).type() == pbn.DiscreteFactorType()
+        }
+
+    def _evidence_column(self, node: str, value, n_rows: int):
+        """Returns the evidence ``value`` of ``node`` to clamp a column of ``n_rows`` rows: a float, or a categorical with the categories of the discrete CPD"""
+        if node not in self._discrete_nodes():
+            return float(value)
+        # pybnesian requires all the categories of the variable, which are taken from a forward sample
+        categories = BayesianNetwork.sample(self, 1, seed=0)[
+            node
+        ].cat.categories.tolist()
+        if value not in categories:
+            raise ValueError(
+                f"Evidence {value!r} is not a category of {node}: {categories}."
+            )
+        return pd.Categorical([value] * n_rows, categories=categories)
+
     def _sampled_nodes(self) -> set[str]:
-        """Returns the CKDE nodes and their (LinearGaussian) ancestors, i.e. the ancestor-closed set
-        that must be sampled to keep the topological order in likelihood weighting"""
+        """Returns the CKDE and discrete nodes and their ancestors, i.e. the ancestor-closed set that must be sampled
+        to keep the topological order in likelihood weighting. The rest are LinearGaussian nodes, which are Rao-Blackwellized
+        """
         sampled = {
-            node for node in self.nodes() if self.cpd(node).type() == pbn.CKDEType()
+            node
+            for node in self.nodes()
+            if self.cpd(node).type() in (pbn.CKDEType(), pbn.DiscreteFactorType())
         }
         for node in reversed(list(self.graph().topological_sort())):
             if node in sampled:
                 sampled.update(self.parents(node))
         return sampled
 
-    def _clg_conditional(self, sampled_nodes: set[str]) -> dict:
-        """Computes the Gaussian distribution of the non-sampled LinearGaussian nodes R given the sampled nodes S.
-        Since S is ancestor-closed, R = c + B_S S + B_R R + eps with eps ~ N(0, diag(var)), so with A = (I - B_R)^-1
-        R | S ~ N(A c + A B_S S, A diag(var) A^T): the mean is affine in S and the covariance does not depend on S.
-
-        Returns:
-            dict: The R nodes, the S nodes, the intercept A c, the coefficients A B_S and the covariance of R | S.
-        """
-        topo_order = list(self.graph().topological_sort())
-        rb_nodes = [
+    def _rb_nodes(self, sampled_nodes: set[str]) -> list[str]:
+        """Returns the non-sampled LinearGaussian nodes R in topological order"""
+        return [
             node
-            for node in topo_order
+            for node in self.graph().topological_sort()
             if node not in sampled_nodes
             and self.cpd(node).type() == pbn.LinearGaussianCPDType()
         ]
-        conditioning_nodes = [node for node in topo_order if node in sampled_nodes]
+
+    def _clg_conditional(
+        self, sampled_nodes: set[str], discrete_values: dict[str, str] = {}
+    ) -> dict:
+        """Computes the Gaussian distribution of the non-sampled LinearGaussian nodes R given the sampled nodes S.
+        Since S is ancestor-closed, R = c + B_S S + B_R R + eps with eps ~ N(0, diag(var)), so with A = (I - B_R)^-1
+        R | S ~ N(A c + A B_S S, A diag(var) A^T): the mean is affine in S and the covariance does not depend on S.
+        The CPDs of R conditioned on discrete parents (CLinearGaussianCPD) use the parameters of ``discrete_values``,
+        so the discrete nodes of S are not part of the continuous conditioning nodes.
+
+        Returns:
+            dict: The R nodes, the continuous S nodes, the intercept A c, the coefficients A B_S and the covariance of R | S.
+        """
+        topo_order = list(self.graph().topological_sort())
+        rb_nodes = self._rb_nodes(sampled_nodes)
+        discrete_nodes = self._discrete_nodes()
+        conditioning_nodes = [
+            node
+            for node in topo_order
+            if node in sampled_nodes and node not in discrete_nodes
+        ]
         rb_index = {node: i for i, node in enumerate(rb_nodes)}
         conditioning_index = {node: i for i, node in enumerate(conditioning_nodes)}
 
@@ -164,6 +206,16 @@ class SemiParametricBayesianNetwork(
         B_R = np.zeros((len(rb_nodes), len(rb_nodes)))
         for i, node in enumerate(rb_nodes):
             cpd = self.cpd(node)
+            if isinstance(cpd, pbn.CLinearGaussianCPD):
+                cpd = cpd.conditional_factor(
+                    pbn.Assignment(
+                        {
+                            parent: discrete_values[parent]
+                            for parent in cpd.evidence()
+                            if parent in discrete_nodes
+                        }
+                    )
+                )
             beta = np.asarray(cpd.beta, dtype=float)
             intercept[i] = beta[0]
             variance[i] = cpd.variance
@@ -199,19 +251,69 @@ class SemiParametricBayesianNetwork(
             evidence (dict[str, float]): Observed variables.
             sampled_nodes (set[str]): Ancestor-closed set of nodes whose sampled values are conditioned on. It must contain all the CKDE nodes.
 
+        With discrete parents of R (e.g., the class label of a classifier), the rows are grouped by their discrete values, each with its own CLG.
+
         Returns:
-            tuple[np.ndarray, pd.DataFrame, dict[str, float]]: The row-wise log p(e_E | S), the assignments with the posterior means
-            in the Q columns (and the evidence in the E columns), and the posterior std of each Q node.
+            tuple[np.ndarray, pd.DataFrame, dict[str, float | np.ndarray]]: The row-wise log p(e_E | S), the assignments with the posterior means
+            in the Q columns (and the evidence in the E columns), and the posterior std of each Q node: a float if it is the same for all rows,
+            or the per-row std if it depends on the discrete parents.
         """
         log_lik = np.zeros(len(assignments), dtype=float)
-        clg = self._clg_conditional(sampled_nodes)
-        rb_nodes = clg["nodes"]
+        rb_nodes = self._rb_nodes(sampled_nodes)
         if len(rb_nodes) == 0:
             return log_lik, assignments, {}
 
-        conditioning_values = assignments[clg["conditioning_nodes"]].to_numpy(
-            dtype=float
+        discrete_nodes = self._discrete_nodes()
+        discrete_parents = sorted(
+            {
+                parent
+                for node in rb_nodes
+                for parent in self.parents(node)
+                if parent in discrete_nodes
+            }
         )
+        if len(discrete_parents) == 0:
+            groups = {(): np.arange(len(assignments))}
+        else:
+            groups = assignments.groupby(
+                discrete_parents, observed=True, sort=False
+            ).indices
+
+        query_nodes = [node for node in rb_nodes if node not in evidence]
+        query_means = np.zeros((len(assignments), len(query_nodes)))
+        query_std = np.zeros((len(assignments), len(query_nodes)))
+        for key, rows in groups.items():
+            key = key if isinstance(key, tuple) else (key,)
+            clg = self._clg_conditional(sampled_nodes, dict(zip(discrete_parents, key)))
+            conditioning_values = (
+                assignments[clg["conditioning_nodes"]].iloc[rows].to_numpy(dtype=float)
+            )
+            log_lik[rows], query_means[rows], query_std[rows] = self._condition_clg(
+                clg, conditioning_values, evidence
+            )
+
+        for node in rb_nodes:
+            if node in evidence:
+                assignments[node] = float(evidence[node])
+        posterior_std = {}
+        for k, node in enumerate(query_nodes):
+            assignments[node] = query_means[:, k]
+            std = query_std[:, k]
+            posterior_std[node] = float(std[0]) if np.all(std == std[0]) else std
+        return log_lik, assignments, posterior_std
+
+    @staticmethod
+    def _condition_clg(
+        clg: dict, conditioning_values: np.ndarray, evidence: dict[str, float]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Conditions the CLG of ``_clg_conditional`` on the sampled values of each row and on the evidence of R (see ``_rao_blackwellize_clg``).
+
+        Returns:
+            tuple[np.ndarray, np.ndarray, np.ndarray]: The row-wise log p(e_E | S), the posterior means of the Q nodes per row and their posterior std (broadcast to the rows).
+        """
+        rb_nodes = clg["nodes"]
+        n_rows = len(conditioning_values)
+        log_lik = np.zeros(n_rows, dtype=float)
         means = clg["intercept"][None, :] + conditioning_values @ clg["coefficients"].T
         covariance = clg["covariance"]
         evidence_index = [i for i, node in enumerate(rb_nodes) if node in evidence]
@@ -239,14 +341,10 @@ class SemiParametricBayesianNetwork(
             query_means = query_means + residuals @ gain
             query_covariance = query_covariance - cross_covariance.T @ gain
 
-        for node in rb_nodes:
-            if node in evidence:
-                assignments[node] = float(evidence[node])
-        posterior_std = {}
-        for k, i in enumerate(query_index):
-            assignments[rb_nodes[i]] = query_means[:, k]
-            posterior_std[rb_nodes[i]] = float(np.sqrt(query_covariance[k, k]))
-        return log_lik, assignments, posterior_std
+        query_std = np.broadcast_to(
+            np.sqrt(np.diag(query_covariance)), (n_rows, len(query_index))
+        )
+        return log_lik, query_means, query_std
 
     def _export_inference(
         self,
@@ -274,7 +372,10 @@ class SemiParametricBayesianNetwork(
 
     @classmethod
     def _json_safe(cls, value):
-        """Recursively replaces the non-finite floats (e.g., NaN diagnostics) by None, which strict JSON parsers accept as null"""
+        """Recursively replaces the non-finite floats (e.g., NaN diagnostics) by None, which strict JSON parsers accept as null,
+        and the arrays (e.g., the per-row posterior std) by lists"""
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
         if isinstance(value, dict):
             return {key: cls._json_safe(item) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
@@ -456,7 +557,9 @@ class SemiParametricBayesianNetwork(
             cpd = self.cpd(node)
             # Clamp evidence and add its log-likelihood under the current parents.
             if node in evidence:
-                assignments[node] = float(evidence[node])
+                assignments[node] = self._evidence_column(
+                    node, evidence[node], n_samples
+                )
                 log_weights += self._node_logl(node, assignments)
             # Sample all rows at once from the conditional distribution of this node.
             else:
@@ -987,7 +1090,14 @@ class SemiParametricBayesianNetwork(
                 - ``tail_effective_sample_size`` (per non-evidence node): the effective sample size of the 5% and 95% quantile estimates.
             The diagnostics are NaN with fewer than 4 kept sweeps per chain (and R-hat with fewer than 2 chains or constant values).
             A RuntimeWarning is emitted if any R-hat exceeds ``MAX_RHAT`` or any bulk effective sample size is below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
+
+        Raises:
+            NotImplementedError: If the network has discrete nodes (e.g., the class label of a classifier), whose full conditionals are not implemented.
         """
+        if len(self._discrete_nodes()) > 0:
+            raise NotImplementedError(
+                "Gibbs sampling does not support discrete nodes yet, use method='lw'."
+            )
         rng = np.random.default_rng(seed)
 
         def _next_seed() -> int:
