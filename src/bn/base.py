@@ -593,9 +593,7 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
             for arc in self.arcs():
                 if arc[0] in removable_nodes or arc[1] in removable_nodes:
                     self.remove_arc(arc[0], arc[1])
-                    source_id = self.graphic.idFromName(arc[0])
-                    target_id = self.graphic.idFromName(arc[1])
-                    self.graphic.eraseArc(source_id, target_id)
+                    self._erase_graphic_arc(arc[0], arc[1])
             # Remove nodes
             for node in removable_nodes.intersection(self.nodes()):
                 self.remove_node(node)
@@ -840,6 +838,13 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
                 )
         return bn
 
+    def _erase_graphic_arc(self, source: str, target: str) -> None:
+        """Erases the arc from the pyagrum graphic if present (it may only exist in the pybnesian graph, e.g. arcs added by the classifiers' structure learning)"""
+        source_id = self.graphic.idFromName(source)
+        target_id = self.graphic.idFromName(target)
+        if self.graphic.existsArc(source_id, target_id):
+            self.graphic.eraseArc(source_id, target_id)
+
     def _copy_bn_structure(
         self,
         arcs: list[tuple[str, str]] = [],
@@ -850,10 +855,10 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         Must be called in __setstate__ to update the structure of the Bayesian Network and after the structure learning process.
         """
         # Remove all existing arcs to avoid conflicts with the learned structure
+        # Both graphs are cleared independently, as the structure learning may have changed only the pybnesian arcs
         for source, target in self.arcs():
             self.remove_arc(source, target)
-            source_id = self.graphic.idFromName(source)
-            target_id = self.graphic.idFromName(target)
+        for source_id, target_id in list(self.graphic.arcs()):
             self.graphic.eraseArc(source_id, target_id)
         # We copy the nodes and node types
         for node, new_type in node_types:
