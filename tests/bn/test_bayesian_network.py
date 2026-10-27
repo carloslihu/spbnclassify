@@ -631,6 +631,7 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
 
         lw = {
             "evidence": {},
+            "method": "lw",
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples}),
                 "weights": weights,
@@ -652,7 +653,7 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
             query_node="a",
             evidence={},
             point=point,
-            likelihood_weighting_dict=lw,
+            infer_dict=lw,
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
@@ -722,6 +723,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         lw = {
             "evidence": {},
+            "method": "lw",
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
@@ -743,7 +745,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             query_node="a",
             evidence={},
             point=point,
-            likelihood_weighting_dict=lw,
+            infer_dict=lw,
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
@@ -752,17 +754,22 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             query_node="d",
             evidence={},
             point=point,
-            # likelihood_weighting_dict=lw,
+            # infer_dict=lw,
         )
         # np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
-    def test_infer_GS(
+    def test_infer_gibbs(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
         evidence = {"b": data.iloc[0]["b"]}
         n_samples = 250
-        infer_dict = bn.infer_GS(
-            evidence=evidence, n_samples=n_samples, n_chains=50, burn_in=20, seed=SEED
+        infer_dict = bn.infer(
+            method="gibbs",
+            evidence=evidence,
+            n_samples=n_samples,
+            n_chains=50,
+            burn_in=20,
+            seed=SEED,
         )
 
         assignments = infer_dict["parameters"]["assignments"]
@@ -793,13 +800,18 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         assert np.all(np.isfinite(assignments["d"].to_numpy(dtype=float)))
         assert infer_dict["parameters"]["posterior_std"]["d"] > 0
 
-    def test_infer_GS_matches_LW(
+    def test_infer_gibbs_matches_LW(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
         evidence = {"b": data.iloc[0]["b"]}
         lw = bn.infer(evidence=evidence, n_samples=2000, seed=SEED)
-        gs = bn.infer_GS(
-            evidence=evidence, n_samples=1000, n_chains=100, burn_in=30, seed=SEED
+        gs = bn.infer(
+            method="gibbs",
+            evidence=evidence,
+            n_samples=1000,
+            n_chains=100,
+            burn_in=30,
+            seed=SEED,
         )
 
         lw_samples = lw["parameters"]["assignments"]["a"].to_numpy(dtype=float)
@@ -808,7 +820,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         np.testing.assert_allclose(gs_mean, lw_mean, atol=0.25 * np.std(lw_samples))
 
-    def test_posterior_GS(
+    def test_posterior_gibbs(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
         # NOTE: KDE query node case
@@ -818,6 +830,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         gs = {
             "evidence": {},
+            "method": "gibbs",
             "parameters": {
                 "assignments": pd.DataFrame({"a": samples, "d": samples}),
                 "weights": weights,
@@ -831,16 +844,18 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
         expected = np.sum(weights * kernel_values)
 
-        actual = bn.posterior_GS(
+        actual = bn.posterior(
             query_node="a",
             evidence={},
             point=point,
-            gibbs_sampling_dict=gs,
+            infer_dict=gs,
+            method="gibbs",
         )
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
         # CLG query node case (smoke test)
-        actual = bn.posterior_GS(
+        actual = bn.posterior(
+            method="gibbs",
             query_node="d",
             evidence={},
             point=point,
@@ -909,10 +924,13 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     @pytest.mark.parametrize(
         "child_type", [pbn.LinearGaussianCPDType(), pbn.CKDEType()], ids=["lg", "ckde"]
     )
-    def test_infer_GS_matches_exact_posterior(self, child_type: pbn.FactorType) -> None:
+    def test_infer_gibbs_matches_exact_posterior(
+        self, child_type: pbn.FactorType
+    ) -> None:
         bn = self._two_node_bn(child_type)
         for y_obs in [0.5, 3.0]:
-            gs = bn.infer_GS(
+            gs = bn.infer(
+                method="gibbs",
                 evidence={"y": y_obs},
                 n_samples=4000,
                 n_chains=200,
@@ -1035,9 +1053,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             expected = norm.pdf(
                 point[query_node], loc=cond_mean[0], scale=np.sqrt(cond_cov[0, 0])
             )
-            actual = bn.posterior(
-                query_node, evidence, point, likelihood_weighting_dict=infer_dict
-            )
+            actual = bn.posterior(query_node, evidence, point, infer_dict=infer_dict)
             np.testing.assert_allclose(actual, expected, rtol=1e-8)
 
     def test_rao_blackwellize_clg_evidence_logl(self) -> None:
@@ -1094,14 +1110,15 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             atol=0.05,
         )
 
-    def test_infer_GS_converges_to_reference(self) -> None:
+    def test_infer_gibbs_converges_to_reference(self) -> None:
         # Evidence on the CKDE node F exercises the rejection sampling and Metropolis-Hastings fallback of A and B
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"F": 0.9, "D": 1.0}
         expected = self._reference_means(bn, evidence)
         estimates = []
         for run in range(2):
-            gs = bn.infer_GS(
+            gs = bn.infer(
+                method="gibbs",
                 evidence=evidence,
                 n_samples=1000,
                 n_chains=100,
@@ -1117,7 +1134,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             atol=0.05,
         )
 
-    def test_infer_GS_uses_ckde_evidence_on_lg_parents(self) -> None:
+    def test_infer_gibbs_uses_ckde_evidence_on_lg_parents(self) -> None:
         # Regression: the Rao-Blackwellized LG parent A of the observed CKDE node B must not stay at its prior
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"B": 0.9}
@@ -1125,8 +1142,13 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         lw_mean = np.sum(
             lw["parameters"]["weights"] * lw["parameters"]["assignments"]["A"]
         )
-        gs = bn.infer_GS(
-            evidence=evidence, n_samples=1000, n_chains=100, burn_in=30, seed=SEED
+        gs = bn.infer(
+            method="gibbs",
+            evidence=evidence,
+            n_samples=1000,
+            n_chains=100,
+            burn_in=30,
+            seed=SEED,
         )
         gs_mean = gs["parameters"]["assignments"]["A"].mean()
 
@@ -1168,9 +1190,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         infer_dict = bn.infer(evidence={"D": 2.0}, n_samples=50, seed=SEED)
 
         with pytest.raises(ValueError, match="disjoint"):
-            bn.posterior("D", {"D": 2.0}, point, likelihood_weighting_dict=infer_dict)
+            bn.posterior("D", {"D": 2.0}, point, infer_dict=infer_dict)
         with pytest.raises(ValueError, match="different evidence"):
-            bn.posterior("A", {"D": 1.0}, point, likelihood_weighting_dict=infer_dict)
+            bn.posterior("A", {"D": 1.0}, point, infer_dict=infer_dict)
 
     def test_mcmc_diagnostics(self) -> None:
         rng = np.random.default_rng(SEED)
@@ -1251,11 +1273,12 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
                 err_msg=name,
             )
 
-    def test_infer_GS_diagnostics(self) -> None:
+    def test_infer_gibbs_diagnostics(self) -> None:
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"F": 0.9, "D": 1.0}
         n_samples, n_chains = 1000, 50
-        gs = bn.infer_GS(
+        gs = bn.infer(
+            method="gibbs",
             evidence=evidence,
             n_samples=n_samples,
             n_chains=n_chains,
@@ -1288,7 +1311,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         # integrated out of the chains (R-hat ~1.1-1.2 with 20 draws per chain)
         assert rhat["B"] < 1.05 and rhat["C"] < 1.05
 
-        # posterior_GS uses the autocorrelation-aware ESS of the query node for the KDE bandwidth
+        # posterior with method="gibbs" uses the autocorrelation-aware ESS of the query node for the KDE bandwidth
         point = pd.Series({"A": 1.0})
         expected = bn._posterior_density(
             "A",
@@ -1298,20 +1321,29 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             gs["parameters"]["posterior_std"],
             effective_sample_size=ess["A"],
         )
-        actual = bn.posterior_GS("A", evidence, point, gibbs_sampling_dict=gs)
+        actual = bn.posterior("A", evidence, point, infer_dict=gs, method="gibbs")
         np.testing.assert_allclose(actual, expected, rtol=1e-12)
 
-    def test_posterior_GS_validation(self) -> None:
+    def test_posterior_gibbs_validation(self) -> None:
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         point = pd.Series({"A": 0.0, "D": 0.0})
-        gs = bn.infer_GS(
-            evidence={"D": 2.0}, n_samples=40, n_chains=10, burn_in=5, seed=SEED
+        gs = bn.infer(
+            method="gibbs",
+            evidence={"D": 2.0},
+            n_samples=40,
+            n_chains=10,
+            burn_in=5,
+            seed=SEED,
         )
 
         with pytest.raises(ValueError, match="disjoint"):
-            bn.posterior_GS("D", {"D": 2.0}, point, gibbs_sampling_dict=gs)
+            bn.posterior("D", {"D": 2.0}, point, infer_dict=gs, method="gibbs")
         with pytest.raises(ValueError, match="different evidence"):
-            bn.posterior_GS("A", {"D": 1.0}, point, gibbs_sampling_dict=gs)
+            bn.posterior("A", {"D": 1.0}, point, infer_dict=gs, method="gibbs")
+        with pytest.raises(ValueError, match="different method"):
+            bn.posterior("A", {"D": 2.0}, point, infer_dict=gs, method="lw")
+        with pytest.raises(ValueError, match="Unknown inference method"):
+            bn.infer(evidence={"D": 2.0}, method="mcmc")
 
     def test_infer_label_node(self) -> None:
         # The label Y is a node of the network but not one of the feature_names_in_
@@ -1343,7 +1375,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.posterior("Y", evidence, point, n_samples=10), expected, rtol=1e-8
         )
         np.testing.assert_allclose(
-            bn.posterior_GS("Y", evidence, point, n_samples=40, n_chains=10),
+            bn.posterior(
+                "Y", evidence, point, n_samples=40, n_chains=10, method="gibbs"
+            ),
             expected,
             rtol=1e-8,
         )
@@ -1352,8 +1386,13 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()}, with_label=True)
         evidence = {"F": 0.9, "D": 1.0}
         lw = bn.infer(evidence=evidence, n_samples=5000, seed=SEED)
-        gs = bn.infer_GS(
-            evidence=evidence, n_samples=500, n_chains=50, burn_in=30, seed=SEED
+        gs = bn.infer(
+            method="gibbs",
+            evidence=evidence,
+            n_samples=500,
+            n_chains=50,
+            burn_in=30,
+            seed=SEED,
         )
         for result in (lw, gs):
             assert result["parameters"]["posterior_std"]["Y"] > 0
@@ -1375,7 +1414,8 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         # Too few Gibbs samples
         with pytest.warns(RuntimeWarning, match="Effective sample size below"):
-            bn.infer_GS(
+            bn.infer(
+                method="gibbs",
                 evidence={"F": 0.9, "D": 1.0},
                 n_samples=40,
                 n_chains=5,
@@ -1388,7 +1428,8 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
         # Fewer than 4 draws per chain: NaN diagnostics, exported as JSON null
         json_file_path = tmp_path / "gs_result.json"
-        gs = bn.infer_GS(
+        gs = bn.infer(
+            method="gibbs",
             evidence={"D": 1.0},
             n_samples=20,
             n_chains=10,

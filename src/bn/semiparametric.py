@@ -1,6 +1,7 @@
 import json
 import warnings
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -293,7 +294,7 @@ class SemiParametricBayesianNetwork(
                 f"R-hat above {MAX_RHAT} for {high_rhat}: the chains have not converged or are too short for their "
                 "autocorrelation, increase burn_in or the draws per chain (n_samples / n_chains).",
                 RuntimeWarning,
-                stacklevel=3,
+                stacklevel=4,
             )
         low_ess = {
             node: value
@@ -305,7 +306,7 @@ class SemiParametricBayesianNetwork(
                 f"Effective sample size below {MIN_EFFECTIVE_SAMPLE_SIZE} for {low_ess}: the estimates are unreliable, "
                 "increase n_samples.",
                 RuntimeWarning,
-                stacklevel=3,
+                stacklevel=4,
             )
 
     def _posterior_density(
@@ -361,7 +362,6 @@ class SemiParametricBayesianNetwork(
         posterior_value = np.sum(weights * kernel_values)
         return posterior_value
 
-    # RFE: Allow automatic sampling stop criterion
     def infer(
         self,
         evidence: dict[str, float] = {},
@@ -369,24 +369,71 @@ class SemiParametricBayesianNetwork(
         pdf_file_path: Path | None = None,
         n_samples: int = 1000,
         seed: int = 0,
+        method: Literal["lw", "gibbs"] = "lw",
+        n_chains: int = 100,
+        burn_in: int = 100,
+        thinning: int = 1,
+        max_rejection_tries: int = 10,
+    ) -> dict[str, dict]:
+        """
+        Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
+        Both are Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
+        The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows).
+        See ``_infer_lw`` and ``_infer_gibbs`` for the details of each method.
+        Args:
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4}. Defaults to an empty dictionary.
+            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
+            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+            n_samples (int, optional): The number of samples to return (over all chains for Gibbs sampling). Defaults to 1,000.
+            seed (int, optional): The random seed for reproducibility. Defaults to 0.
+            method (Literal["lw", "gibbs"], optional): The inference method, likelihood weighting ("lw") or Gibbs sampling ("gibbs"). Defaults to "lw".
+            n_chains (int, optional): The number of independent chains run in parallel. Only used when method="gibbs". Defaults to 100.
+            burn_in (int, optional): The number of initial sweeps discarded in each chain. Only used when method="gibbs". Defaults to 100.
+            thinning (int, optional): Keep one sweep every ``thinning`` sweeps after burn-in. Only used when method="gibbs". Defaults to 1.
+            max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Only used when method="gibbs". Defaults to 10.
+        Returns:
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence, the method and the parameters of the inference results.
+            The parameters include the normalized weights (uniform for Gibbs sampling), the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and the diagnostics of the method:
+                - "lw": the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``).
+                - "gibbs": per node ``exact_rate``, ``acceptance_rate``, ``rhat``, ``effective_sample_size`` and ``tail_effective_sample_size``.
+
+        Raises:
+            ValueError: If ``method`` is not "lw" or "gibbs".
+        """
+        if method == "lw":
+            infer_dict = self._infer_lw(evidence, n_samples, seed)
+        elif method == "gibbs":
+            infer_dict = self._infer_gibbs(
+                evidence,
+                n_samples,
+                n_chains,
+                burn_in,
+                thinning,
+                seed,
+                max_rejection_tries,
+            )
+        else:
+            raise ValueError(
+                f"Unknown inference method {method!r}, expected 'lw' or 'gibbs'."
+            )
+        self._export_inference(infer_dict, json_file_path, pdf_file_path)
+        return infer_dict
+
+    def _infer_lw(
+        self, evidence: dict[str, float], n_samples: int, seed: int
     ) -> dict[str, dict]:
         """
         Performs likelihood weighting inference on the Bayesian network using the provided evidence.
         It is Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
         The weights include the evidence likelihood of the sampled nodes and the marginal likelihood of the evidence on the remaining LinearGaussian nodes.
-        The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows).
         Args:
-            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4}. Defaults to an empty dictionary.
-            n_samples (int, optional): The number of samples to draw for the likelihood weighting inference. Defaults to 1,000.
-            seed (int, optional): The random seed for reproducibility. Defaults to 0.
-            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
-            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
+            evidence (dict[str, float]): A dictionary mapping node names to their observed values (hard evidence only).
+            n_samples (int): The number of samples to draw.
+            seed (int): The random seed for reproducibility.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence and the parameters of the inference results.
-            The parameters include the normalized weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and
-            the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``). A small n_eff compared to ``n_samples`` means the weights are
-            degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable and more samples are needed:
-            a RuntimeWarning is emitted below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
+            dict[str, dict]: The inference results (see ``infer``). The parameters include the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``).
+            A small n_eff compared to ``n_samples`` means the weights are degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable
+            and more samples are needed: a RuntimeWarning is emitted below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
         """
         # Initialize batched assignments and per-sample log weights.
         topo_order = list(self.graph().topological_sort())
@@ -395,6 +442,7 @@ class SemiParametricBayesianNetwork(
         infer_dict = {
             "structure": self.arcs(),
             "evidence": dict(evidence),
+            "method": "lw",
             "parameters": {},
         }
 
@@ -433,7 +481,7 @@ class SemiParametricBayesianNetwork(
                 f"Effective sample size {effective_sample_size:.1f} below {MIN_EFFECTIVE_SAMPLE_SIZE}: the weights are "
                 "degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable, increase n_samples.",
                 RuntimeWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         infer_dict["parameters"] = {
             "weights": weights,
@@ -441,7 +489,6 @@ class SemiParametricBayesianNetwork(
             "posterior_std": posterior_std,
             "effective_sample_size": effective_sample_size,
         }
-        self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
 
     def posterior(
@@ -451,12 +498,16 @@ class SemiParametricBayesianNetwork(
         point: pd.Series,
         n_samples: int = 1000,
         seed: int = 0,
-        likelihood_weighting_dict: dict[str, dict] = {},
+        infer_dict: dict[str, dict] = {},
+        method: Literal["lw", "gibbs"] = "lw",
+        n_chains: int = 100,
+        burn_in: int = 100,
+        thinning: int = 1,
     ) -> float:
         """
-        Approximate the posterior density of query nodes at ``point`` using likelihood weighting.
-        Uses a weighted Gaussian kernel density estimation (KDE) to estimate the posterior density of the query nodes given the evidence and the point at which to evaluate the density.
-        The likelihood weighting inference is performed to obtain samples and weights, which are then used to compute the KDE.
+        Approximate the posterior density of query nodes at ``point`` using likelihood weighting (``method="lw"``) or Gibbs sampling (``method="gibbs"``).
+        Uses a weighted Gaussian kernel density estimation (KDE) over the samples for the sampled nodes, and a mixture of the exact CLG posteriors for the Rao-Blackwellized LinearGaussian nodes.
+        For Gibbs sampling, the KDE bandwidth uses the autocorrelation-aware effective sample size of the query node.
         Parameters
         ----------
         query_node : str
@@ -466,11 +517,19 @@ class SemiParametricBayesianNetwork(
         point : pd.Series
             The point at which to evaluate the posterior density, e.g. pd.Series({"A": 1.0, "D": -0.5})
         n_samples : int
-            The number of samples to draw for the likelihood weighting inference. Defaults to 1,000.
+            The number of samples to return (over all chains for Gibbs sampling). Defaults to 1,000.
         seed : int
             The random seed for reproducibility. Defaults to 0.
-        likelihood_weighting_dict : dict[str, dict]
-            Optional dictionary containing the results of a previous likelihood weighting inference. If provided, it will be used to avoid redundant computations. Defaults to an empty dictionary.
+        infer_dict : dict[str, dict]
+            Optional dictionary containing the results of a previous ``infer`` call with the same evidence and method. If provided, it will be used to avoid redundant computations. Defaults to an empty dictionary.
+        method : Literal["lw", "gibbs"]
+            The inference method, likelihood weighting ("lw") or Gibbs sampling ("gibbs"). Defaults to "lw".
+        n_chains : int
+            The number of independent chains run in parallel. Only used when method="gibbs". Defaults to 100.
+        burn_in : int
+            The number of initial sweeps discarded in each chain. Only used when method="gibbs". Defaults to 100.
+        thinning : int
+            Keep one sweep every ``thinning`` sweeps after burn-in. Only used when method="gibbs". Defaults to 1.
         Returns
         -------
         float
@@ -479,29 +538,38 @@ class SemiParametricBayesianNetwork(
         Raises
         ------
         ValueError
-            If the query node is in the evidence, or if ``likelihood_weighting_dict`` was computed with a different evidence.
+            If the query node is in the evidence, or if ``infer_dict`` was computed with a different evidence or method.
         """
         if query_node in evidence:
             raise ValueError("Query node and evidence nodes must be disjoint.")
-        if (
-            likelihood_weighting_dict != {}
-            and likelihood_weighting_dict.get("evidence") != evidence
-        ):
-            raise ValueError(
-                "likelihood_weighting_dict was computed with a different evidence."
-            )
-        if likelihood_weighting_dict == {}:
-            # Use provided likelihood weighting results if available
-            likelihood_weighting_dict = self.infer(
-                evidence=evidence, n_samples=n_samples, seed=seed
+        if infer_dict != {} and infer_dict.get("evidence") != evidence:
+            raise ValueError("infer_dict was computed with a different evidence.")
+        if infer_dict != {} and infer_dict.get("method") != method:
+            raise ValueError("infer_dict was computed with a different method.")
+        if infer_dict == {}:
+            infer_dict = self.infer(
+                evidence=evidence,
+                n_samples=n_samples,
+                seed=seed,
+                method=method,
+                n_chains=n_chains,
+                burn_in=burn_in,
+                thinning=thinning,
             )
 
+        # The Gibbs KDE bandwidth uses the autocorrelation-aware effective sample size of the query node
+        effective_sample_size = (
+            infer_dict["parameters"].get("effective_sample_size", {}).get(query_node)
+            if method == "gibbs"
+            else None
+        )
         return self._posterior_density(
             query_node,
             point,
-            likelihood_weighting_dict["parameters"]["assignments"],
-            likelihood_weighting_dict["parameters"]["weights"],
-            likelihood_weighting_dict["parameters"]["posterior_std"],
+            infer_dict["parameters"]["assignments"],
+            infer_dict["parameters"]["weights"],
+            infer_dict["parameters"]["posterior_std"],
+            effective_sample_size,
         )
 
     def _kernel_cache(self, node: str) -> dict:
@@ -880,22 +948,19 @@ class SemiParametricBayesianNetwork(
             for prob in (0.05, 0.95)
         )
 
-    # RFE: Use the convergence diagnostics (R-hat) as automatic stop criterion
-    def infer_GS(
+    def _infer_gibbs(
         self,
-        evidence: dict[str, float] = {},
-        json_file_path: Path | None = None,
-        pdf_file_path: Path | None = None,
-        n_samples: int = 1000,
-        n_chains: int = 100,
-        burn_in: int = 100,
-        thinning: int = 1,
-        seed: int = 0,
-        max_rejection_tries: int = 10,
+        evidence: dict[str, float],
+        n_samples: int,
+        n_chains: int,
+        burn_in: int,
+        thinning: int,
+        seed: int,
+        max_rejection_tries: int,
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
-        As in ``infer``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R
+        As in ``_infer_lw``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R
         are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
         Each unobserved node X of S is sampled from its full conditional p(x | .) ∝ p(x | Pa(x)) prod_{c in S} p(c | Pa(c)) p(e_R | S):
             - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children in S and by p(e_R | S) (both Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
@@ -903,17 +968,15 @@ class SemiParametricBayesianNetwork(
             Chains not accepted after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with the same proposal, which still leaves the full conditional invariant.
         ``n_chains`` independent chains are run in batch. Integrating R out avoids the slow mixing of Gibbs sampling between strongly dependent nodes of S and R.
         Args:
-            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values. Defaults to an empty dictionary.
-            json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
-            pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
-            n_samples (int, optional): The total number of samples (over all chains) to keep after burn-in and thinning. Defaults to 1000.
-            n_chains (int, optional): The number of independent chains run in parallel. Defaults to 100.
-            burn_in (int, optional): The number of initial sweeps discarded in each chain. Defaults to 100.
-            thinning (int, optional): Keep one sweep every ``thinning`` sweeps after burn-in. Defaults to 1.
-            seed (int, optional): The random seed for reproducibility. Defaults to 0.
-            max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Defaults to 10.
+            evidence (dict[str, float]): A dictionary mapping node names to their observed values.
+            n_samples (int): The total number of samples (over all chains) to keep after burn-in and thinning.
+            n_chains (int): The number of independent chains run in parallel.
+            burn_in (int): The number of initial sweeps discarded in each chain.
+            thinning (int): Keep one sweep every ``thinning`` sweeps after burn-in.
+            seed (int): The random seed for reproducibility.
+            max_rejection_tries (int): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network, the evidence and the parameters of the inference results. The parameters include the (uniform) weights, the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and:
+            dict[str, dict]: The inference results (see ``infer``). The parameters include the (uniform) weights and:
                 - ``exact_rate`` (per sampled node): the fraction of exact draws from the full conditional.
                 - ``acceptance_rate`` (per sampled node): the fraction of updates that changed the value.
                 - ``rhat`` (per non-evidence node): the rank-normalized split-R-hat over the chains of the returned values (posterior means for the Rao-Blackwellized
@@ -957,6 +1020,7 @@ class SemiParametricBayesianNetwork(
         infer_dict = {
             "structure": self.arcs(),
             "evidence": dict(evidence),
+            "method": "gibbs",
             "parameters": {},
         }
 
@@ -1052,81 +1116,4 @@ class SemiParametricBayesianNetwork(
             "effective_sample_size": effective_sample_size,
             "tail_effective_sample_size": tail_effective_sample_size,
         }
-        self._export_inference(infer_dict, json_file_path, pdf_file_path)
         return infer_dict
-
-    def posterior_GS(
-        self,
-        query_node: str,
-        evidence: dict[str, float],
-        point: pd.Series,
-        n_samples: int = 1000,
-        n_chains: int = 100,
-        burn_in: int = 100,
-        thinning: int = 1,
-        seed: int = 0,
-        gibbs_sampling_dict: dict[str, dict] = {},
-    ) -> float:
-        """
-        Approximate the posterior density of query nodes at ``point`` using Gibbs sampling.
-        Uses a Gaussian kernel density estimation (KDE) over the Gibbs samples for CKDE nodes, and a mixture of the exact CLG posteriors for LinearGaussian nodes.
-        Parameters
-        ----------
-        query_node : str
-            Variable to return posterior samples for.
-        evidence : dict[str, float]
-            Observed variables, e.g. {"A": 1.2, "D": -0.4}
-        point : pd.Series
-            The point at which to evaluate the posterior density, e.g. pd.Series({"A": 1.0, "D": -0.5})
-        n_samples : int
-            The total number of Gibbs samples to keep. Defaults to 1000.
-        n_chains : int
-            The number of independent chains run in parallel. Defaults to 100.
-        burn_in : int
-            The number of initial sweeps discarded in each chain. Defaults to 100.
-        thinning : int
-            Keep one sweep every ``thinning`` sweeps after burn-in. Defaults to 1.
-        seed : int
-            The random seed for reproducibility. Defaults to 0.
-        gibbs_sampling_dict : dict[str, dict]
-            Optional dictionary containing the results of a previous Gibbs sampling inference. If provided, it will be used to avoid redundant computations. Defaults to an empty dictionary.
-        Returns
-        -------
-        float
-            The estimated posterior density of the query node at the specified point.
-
-        Raises
-        ------
-        ValueError
-            If the query node is in the evidence, or if ``gibbs_sampling_dict`` was computed with a different evidence.
-        """
-        if query_node in evidence:
-            raise ValueError("Query node and evidence nodes must be disjoint.")
-        if (
-            gibbs_sampling_dict != {}
-            and gibbs_sampling_dict.get("evidence") != evidence
-        ):
-            raise ValueError(
-                "gibbs_sampling_dict was computed with a different evidence."
-            )
-        if gibbs_sampling_dict == {}:
-            gibbs_sampling_dict = self.infer_GS(
-                evidence=evidence,
-                n_samples=n_samples,
-                n_chains=n_chains,
-                burn_in=burn_in,
-                thinning=thinning,
-                seed=seed,
-            )
-
-        return self._posterior_density(
-            query_node,
-            point,
-            gibbs_sampling_dict["parameters"]["assignments"],
-            gibbs_sampling_dict["parameters"]["weights"],
-            gibbs_sampling_dict["parameters"]["posterior_std"],
-            # The KDE bandwidth uses the autocorrelation-aware effective sample size of the query node
-            gibbs_sampling_dict["parameters"]
-            .get("effective_sample_size", {})
-            .get(query_node),
-        )
