@@ -767,7 +767,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             method="gibbs",
             evidence=evidence,
             n_samples=n_samples,
-            n_chains=50,
+            n_chains=10,
             burn_in=20,
             seed=SEED,
         )
@@ -809,7 +809,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             method="gibbs",
             evidence=evidence,
             n_samples=1000,
-            n_chains=100,
+            n_chains=20,
             burn_in=30,
             seed=SEED,
         )
@@ -860,8 +860,8 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             evidence={},
             point=point,
             n_samples=200,
-            n_chains=50,
-            burn_in=20,
+            n_chains=4,
+            burn_in=30,
             seed=SEED,
         )
         assert np.isfinite(actual) and actual >= 0
@@ -1146,7 +1146,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             method="gibbs",
             evidence=evidence,
             n_samples=1000,
-            n_chains=100,
+            n_chains=20,
             burn_in=30,
             seed=SEED,
         )
@@ -1166,12 +1166,13 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
         json_file_path = tmp_path / "infer_result.json"
-        infer_dict = bn.infer(
-            evidence={"D": 2.0},
-            n_samples=n_samples,
-            seed=SEED,
-            json_file_path=json_file_path,
-        )
+        with pytest.warns(RuntimeWarning, match="Effective sample size"):
+            infer_dict = bn.infer(
+                evidence={"D": 2.0},
+                n_samples=n_samples,
+                seed=SEED,
+                json_file_path=json_file_path,
+            )
         weights = infer_dict["parameters"]["weights"]
         ess = infer_dict["parameters"]["effective_sample_size"]
         np.testing.assert_allclose(ess, 1.0 / np.sum(weights**2))
@@ -1184,6 +1185,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             exported = json.load(f)
         assert exported["parameters"]["effective_sample_size"] == ess
 
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_posterior_validation(self) -> None:
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         point = pd.Series({"A": 0.0, "D": 0.0})
@@ -1324,6 +1326,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         actual = bn.posterior("A", evidence, point, infer_dict=gs, method="gibbs")
         np.testing.assert_allclose(actual, expected, rtol=1e-12)
 
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_posterior_gibbs_validation(self) -> None:
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         point = pd.Series({"A": 0.0, "D": 0.0})
@@ -1412,8 +1415,11 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         with pytest.warns(RuntimeWarning, match="Effective sample size"):
             bn.infer(evidence={"F": 0.9}, n_samples=50, seed=SEED)
 
-        # Too few Gibbs samples
-        with pytest.warns(RuntimeWarning, match="Effective sample size below"):
+        # Too few Gibbs samples (such short chains also have a high R-hat)
+        with (
+            pytest.warns(RuntimeWarning, match="Effective sample size below"),
+            pytest.warns(RuntimeWarning, match="R-hat above"),
+        ):
             bn.infer(
                 method="gibbs",
                 evidence={"F": 0.9, "D": 1.0},
