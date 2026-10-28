@@ -5,7 +5,6 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
-import pdfkit
 import pyagrum as gum
 import pyagrum.lib.bn_vs_bn as gcm
 import pyagrum.lib.notebook as gnb
@@ -422,13 +421,14 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         # STRUCTURAL COMPARISON
         nd, sd, ntd, html_content = self._compare_bn_structure(bn1, bn2, graph1, graph2)
         # Generate PDF from HTML string
-        if output_path:
-            output_path = Path(output_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            pdfkit.from_string(
-                html_content,
-                output_path,
-            )
+        # TODO: Install pdfkit and wkhtmltopdf in the environment to enable PDF generation
+        # if output_path:
+        #     output_path = Path(output_path)
+        #     output_path.parent.mkdir(parents=True, exist_ok=True)
+        #     pdfkit.from_string(
+        #         html_content,
+        #         output_path,
+        #     )
         # PARAMETRIC COMPARISON
         bn_distance = self._compare_bn_distribution(
             source_class_name, target_class_name, shared_nodes_list, n_samples, seed

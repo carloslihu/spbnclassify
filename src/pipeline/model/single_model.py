@@ -6,12 +6,18 @@ from typing import final
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import KBinsDiscretizer, MinMaxScaler, StandardScaler
-from torch.cuda import OutOfMemoryError
 
 from ...data_handler import TRUE_ANOMALY_LABEL, TRUE_CLASS_LABEL
 from ...utils.distance import parametric_node_type_ratio
 from ..evaluator.metric_set import ScoreMetricSet
 from .model import Model
+
+try:
+    from torch.cuda import OutOfMemoryError
+except ImportError:
+    # torch is optional; without it no CUDA OutOfMemoryError can be raised
+    class OutOfMemoryError(Exception):
+        pass
 
 
 # RFE: Allow saving dynamic score_columns, classes, and other attributes
