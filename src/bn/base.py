@@ -8,7 +8,6 @@ import pandas as pd
 import pyagrum as gum
 import pyagrum.clg as gclg
 import pyagrum.lib.image as gumimage
-import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 
 from ..utils.constants import NAN_LOGL_VALUE, NODE_TYPE_COLOR_MAP, TRUE_ANOMALY_LABEL
@@ -485,6 +484,9 @@ class BayesianNetwork(pbn.BayesianNetwork, BayesianNetworkInterface):
         """
         print(f"No. of Nodes: {len(self.nodes())}")
         print(f"No. of Arcs: {self.num_arcs()}")
+
+        # Imported lazily: pyagrum's notebook modules warn when imported outside IPython
+        import pyagrum.lib.notebook as gnb
 
         # RFE: Print pyagrum plot
         # BN structure plot

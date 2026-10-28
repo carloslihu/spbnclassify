@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
-import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
 from scipy.stats import norm
 
@@ -184,6 +183,9 @@ class GaussianBayesianNetwork(
             with open(json_file_path, "w") as f:
                 json.dump(infer_dict, f, indent=4)
         if pdf_file_path:
+            # Imported lazily: pyagrum's notebook modules warn when imported outside IPython
+            import pyagrum.clg.notebook as gclgnb
+
             gclgnb.exportInference(
                 clg=parentless_graphic,
                 filename=str(pdf_file_path),

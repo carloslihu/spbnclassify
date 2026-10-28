@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pyagrum.clg as gclg
-import pyagrum.clg.notebook as gclgnb
 import pybnesian as pbn
 from scipy.stats import norm
 

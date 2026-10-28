@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import pyagrum as gum
 import pyagrum.explain as expl
-import pyagrum.explain.notebook as explnb
 import pyagrum.lib.image as gumimage
 import pybnesian as pbn
 import pydot
@@ -249,6 +248,9 @@ class DiscreteBayesianNetwork(
         - The least important variable to explain the prediction of the target is a blue node.
         """
 
+        # Imported lazily: pyagrum's notebook modules warn when imported outside IPython
+        import pyagrum.explain.notebook as explnb
+
         # RFE: Calculate it only for the Markov Blanket of the target
         conditionalExplainer = expl.ConditionalShapValues(
             self.graphic, target, logit=True
@@ -294,6 +296,9 @@ class DiscreteBayesianNetwork(
         data: pd.DataFrame,
         file_path: Path | None = None,
     ) -> dict[str, float]:
+        # Imported lazily: pyagrum's notebook modules warn when imported outside IPython
+        import pyagrum.explain.notebook as explnb
+
         conditionalExplainer = expl.ConditionalShallValues(
             bn=self.graphic, background=(data, False), log=True
         )

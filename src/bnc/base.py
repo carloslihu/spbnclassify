@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pyagrum as gum
 import pyagrum.lib.bn_vs_bn as gcm
-import pyagrum.lib.notebook as gnb
 import pybnesian as pbn
 
 from ..bn import BayesianNetwork
@@ -468,6 +467,9 @@ class BaseMultiBayesianNetworkClassifier(BaseBayesianNetworkClassifier):
         # We compare the graphical BNs with the shared nodes and arcs
         sd = hamming_distance(bn1, bn2)
         ntd = node_type_distance(bn1, bn2, shared_nodes_list)
+
+        # Imported lazily: pyagrum's notebook modules warn when imported outside IPython
+        import pyagrum.lib.notebook as gnb
 
         cmp = gcm.GraphicalBNComparator(graph1, graph2)
         bn_diff_html = gnb.getBNDiff(graph1, graph2, size=10)
