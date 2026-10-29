@@ -12,12 +12,10 @@ from ...utils.distance import parametric_node_type_ratio
 from ..evaluator.metric_set import ScoreMetricSet
 from .model import Model
 
-try:
-    from torch.cuda import OutOfMemoryError
-except ImportError:
-    # torch is optional; without it no CUDA OutOfMemoryError can be raised
-    class OutOfMemoryError(Exception):
-        pass
+
+# torch is optional.  Detect its CUDA exception by name so this module does not depend on the incompatible type exposed by some torch stubs.
+def _is_out_of_memory_error(error: Exception) -> bool:
+    return error.__class__.__name__ == "OutOfMemoryError"
 
 
 # RFE: Allow saving dynamic score_columns, classes, and other attributes
@@ -226,7 +224,7 @@ class SingleModel(Model):
                 break
             except Exception as e:
                 # If an OutOfMemoryError is raised, halve the batch size and try again
-                if type(e) == OutOfMemoryError:
+                if _is_out_of_memory_error(e):
                     # If batch_size was 0 (auto), start with a reasonable size and halve it
                     if attempted_batch_size == 0:
                         attempted_batch_size = 512  # Start with a moderate size

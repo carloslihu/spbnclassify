@@ -42,7 +42,7 @@ def build_bn(child_labels: list[str] | None = None) -> gum.BayesNet:
 def inferred_prior(bn: gum.BayesNet, label: str) -> float:
     ie = gum.LazyPropagation(bn)
     ie.makeInference()
-    return ie.posterior("y")[{"y": label}]
+    return float(np.asarray(ie.posterior("y")[{"y": label}]).item())
 
 
 @pytest.mark.parametrize("model_class", [NoisyOR, NoisyAND])
@@ -157,6 +157,4 @@ class TestNoisyProduct:
 
     def test_shared_parents_raise(self) -> None:
         with pytest.raises(ValueError, match="disjoint"):
-            NoisyProduct(
-                [NoisyOR({"a": 0.5}, 0.4), NoisyAND({"a": 0.5}, 0.6)]
-            )
+            NoisyProduct([NoisyOR({"a": 0.5}, 0.4), NoisyAND({"a": 0.5}, 0.6)])

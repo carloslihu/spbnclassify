@@ -414,76 +414,77 @@ class DiscreteBayesianNetwork(
             plt.savefig(file_path, bbox_inches="tight", dpi=300)
         return ci_pvalue_dict
 
-    def counterfactual(
-        self,
-        profile: dict[str, str | int | float],
-        on: str | set[str],
-        whatif: str | set[str],
-        values: dict[str, str | int | float] | None = None,
-    ) -> gum.Tensor:
-        # NOTE: For meaningful counterfactual inference about specific individuals, unobserved variables are essential to capture individual heterogeneity.
-        def distribution_mean(pot: gum.Tensor) -> float | np.ndarray:
-            """
-            Calculates the mean (expected value) of a discrete probability distribution represented by a pyAgrum Tensor.
-            Args:
-                pot (gum.Tensor): A pyAgrum Tensor representing the probability distribution. The first variable of the tensor is assumed to be the random variable of interest.
-            Returns:
-                float | np.ndarray: The mean (expected value) of the distribution. Returns a float if the result is scalar, or a numpy ndarray if the result is multidimensional.
-            Notes:
-                - Assumes that `pot.variable(0).numerical(i)` returns the numerical value associated with the i-th state of the variable.
-                - The mean is computed as the sum over all possible states: sum(value_i * probability_i).
-            """
+    # TODO: Readd after pyagrum update
+    # def counterfactual(
+    #     self,
+    #     profile: dict[str, str | int | float],
+    #     on: str | set[str],
+    #     whatif: str | set[str],
+    #     values: dict[str, str | int | float] | None = None,
+    # ) -> gum.Tensor:
+    #     # NOTE: For meaningful counterfactual inference about specific individuals, unobserved variables are essential to capture individual heterogeneity.
+    #     def distribution_mean(pot: gum.Tensor) -> float | np.ndarray:
+    #         """
+    #         Calculates the mean (expected value) of a discrete probability distribution represented by a pyAgrum Tensor.
+    #         Args:
+    #             pot (gum.Tensor): A pyAgrum Tensor representing the probability distribution. The first variable of the tensor is assumed to be the random variable of interest.
+    #         Returns:
+    #             float | np.ndarray: The mean (expected value) of the distribution. Returns a float if the result is scalar, or a numpy ndarray if the result is multidimensional.
+    #         Notes:
+    #             - Assumes that `pot.variable(0).numerical(i)` returns the numerical value associated with the i-th state of the variable.
+    #             - The mean is computed as the sum over all possible states: sum(value_i * probability_i).
+    #         """
 
-            return sum(
-                [
-                    pot.variable(0).numerical(i) * pot[i]
-                    for i in range(pot.variable(0).domainSize())
-                ]
-            )
+    #         return sum(
+    #             [
+    #                 pot.variable(0).numerical(i) * pot[i]
+    #                 for i in range(pot.variable(0).domainSize())
+    #             ]
+    #         )
 
-        """
-        Computes the counterfactual outcome for a given profile under specified interventions.
-        Args:
-            profile (dict[str, str | int | float]): The observed values for the variables in the model.
-            on (str | set[str]): The variable(s) to observe or condition on.
-            whatif (str | set[str]): The variable(s) to intervene on (i.e., set to new values).
-            values (dict[str, str | int | float]): The new values for the variables specified in `whatif`. If None, all possible values are considered.
-        Returns:
-            gum.Tensor: The resulting tensor representing the counterfactual distribution or outcome.
-        Raises:
-            Any exception raised by the underlying causal model or counterfactual computation.
-        Example:
-            >>> bn.counterfactual(
-            ...    profile={"education": 0, "experience": 8, "salary": "86"},
-            ...    on={"salary"},
-            ...    whatif={"education"},
-            ...    values={"education": 1},
-            ... )
-        """
-        if values is not None:
-            if isinstance(whatif, str):
-                whatif = {whatif}
-            missing_keys = set(values.keys()) - whatif
-            if missing_keys:
-                raise ValueError(
-                    f"Keys {missing_keys} in 'values' are not present in 'whatif' variables."
-                )
-        cm = gum.CausalModel(self.graphic, latentVarsDescriptor=[], keepArcs=False)
+    #     """
+    #     Computes the counterfactual outcome for a given profile under specified interventions.
+    #     Args:
+    #         profile (dict[str, str | int | float]): The observed values for the variables in the model.
+    #         on (str | set[str]): The variable(s) to observe or condition on.
+    #         whatif (str | set[str]): The variable(s) to intervene on (i.e., set to new values).
+    #         values (dict[str, str | int | float]): The new values for the variables specified in `whatif`. If None, all possible values are considered.
+    #     Returns:
+    #         gum.Tensor: The resulting tensor representing the counterfactual distribution or outcome.
+    #     Raises:
+    #         Any exception raised by the underlying causal model or counterfactual computation.
+    #     Example:
+    #         >>> bn.counterfactual(
+    #         ...    profile={"education": 0, "experience": 8, "salary": "86"},
+    #         ...    on={"salary"},
+    #         ...    whatif={"education"},
+    #         ...    values={"education": 1},
+    #         ... )
+    #     """
+    #     if values is not None:
+    #         if isinstance(whatif, str):
+    #             whatif = {whatif}
+    #         missing_keys = set(values.keys()) - whatif
+    #         if missing_keys:
+    #             raise ValueError(
+    #                 f"Keys {missing_keys} in 'values' are not present in 'whatif' variables."
+    #             )
+    #     cm = gum.CausalModel(self.graphic, latentVarsDescriptor=[], keepArcs=False)
 
-        pot = gum.counterfactual(
-            cm=cm,
-            profile=profile,
-            on=on,
-            whatif=whatif,
-            values=values,
-        )
-        # TODO: Save plots
-        # gnb.showProba(pot)
-        # gnb.showInference(
-        #     pot.observationalBN(), size="10", evs={"education": 0, "salary": "86"}
-        # )
-        # distribution_mean(pot)
-        return pot
+    #     pot = gum.counterfactual(
+    #         cm=cm,
+    #         profile=profile,
+    #         on=on,
+    #         whatif=whatif,
+    #         values=values,
+    #     )
+    #     # TODO: Save plots
+    #     # gnb.showProba(pot)
+    #     # gnb.showInference(
+    #     #     pot.observationalBN(), size="10", evs={"education": 0, "salary": "86"}
+    #     # )
+    #     # distribution_mean(pot)
+    #     return pot
 
     def save(self, model_file: Path) -> None:
         """Saves the model to a file
