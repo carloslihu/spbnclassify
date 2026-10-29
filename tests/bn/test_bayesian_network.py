@@ -660,6 +660,10 @@ class TestKDEBayesianNetwork(BaseTestBayesianNetwork):
 
 
 class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
+    """Tests for the semiparametric Bayesian network (CKDE and linear Gaussian nodes): likelihood weighting and
+    Gibbs inference with Rao-Blackwellized CLG nodes, posterior densities and MCMC diagnostics.
+    """
+
     bn_class = SemiParametricBayesianNetwork
     model_filename = "sp-bn.pkl"
     data_type = "non_gaussian"
@@ -681,6 +685,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         return expected_node_types
 
     def test_infer(self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame) -> None:
+        """Test that the likelihood weights are normalized and proportional to the evidence likelihood of each sample."""
         evidence = {"b": data.iloc[0]["b"]}
         infer_dict = bn.infer(evidence=evidence, n_samples=250, seed=SEED)
 
@@ -716,6 +721,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_posterior(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
+        """Test the posterior density of a CKDE query node against a weighted KDE with Silverman's bandwidth.
+        The CLG query node case only checks that the call runs.
+        """
         # NOTE: KDE query node case
         point = pd.Series({"a": 1.5, "d": 2.0})
         samples = np.array([0.0, 1.0, 2.0, 4.0])
@@ -761,6 +769,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_infer_gibbs(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
+        """Test the Gibbs output: equally weighted samples, fixed evidence, acceptance and exact rates of the
+        sampled nodes, and Rao-Blackwellized CLG nodes.
+        """
         evidence = {"b": data.iloc[0]["b"]}
         n_samples = 250
         infer_dict = bn.infer(
@@ -803,6 +814,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_infer_gibbs_matches_LW(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
+        """Test that the Gibbs posterior mean of ``a`` agrees with the likelihood weighting estimate."""
         evidence = {"b": data.iloc[0]["b"]}
         lw = bn.infer(evidence=evidence, n_samples=2000, seed=SEED)
         gs = bn.infer(
@@ -823,6 +835,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_posterior_gibbs(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
+        """Test the Gibbs posterior density of a CKDE query node against an equally weighted KDE, and smoke
+        test a CLG query node.
+        """
         # NOTE: KDE query node case
         point = pd.Series({"a": 1.5, "d": 2.0})
         samples = np.array([0.0, 1.0, 2.0, 4.0])
@@ -869,6 +884,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_conditional_mixture_matches_logl(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
+        """Test that the cached kernel mixture log-likelihood of every node matches pybnesian."""
         points = data.iloc[:20].reset_index(drop=True)
         for node in bn.nodes():
             mixture_logl = bn._mixture_logl(bn._kernel_cache(node), node, points)
@@ -877,6 +893,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             )
 
     def test_mixture_logl_extreme_points(self) -> None:
+        """Test that the kernel mixture log-likelihood stays finite and matches pybnesian far from the data."""
         # Far from the training data (|A|, |B| = 40) the mixture stays finite and still matches pybnesian
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         rng = np.random.default_rng(SEED)
@@ -927,6 +944,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
     def test_infer_gibbs_matches_exact_posterior(
         self, child_type: pbn.FactorType
     ) -> None:
+        """Test the Gibbs posterior mean and variance of a bimodal CKDE parent against the exact posterior
+        computed on a grid, with an observed LG or CKDE child.
+        """
         bn = self._two_node_bn(child_type)
         for y_obs in [0.5, 3.0]:
             gs = bn.infer(
@@ -1026,6 +1046,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         }
 
     def test_infer_all_lg_matches_exact(self) -> None:
+        """Test that a linear Gaussian network gives the exact conditional Gaussian posterior density."""
         # Without CKDE nodes nothing is sampled, so the Rao-Blackwellized posterior is exact
         bn = self._toy_bn({})
         nodes = list(bn.graph().topological_sort())
@@ -1057,6 +1078,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             np.testing.assert_allclose(actual, expected, rtol=1e-8)
 
     def test_rao_blackwellize_clg_evidence_logl(self) -> None:
+        """Test the evidence log-likelihood of Rao-Blackwellized CLG nodes against closed-form Gaussian densities."""
         # Several Rao-Blackwellized evidence nodes on rows with different sampled values (regression: NaN log-likelihoods)
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         sampled = bn._sampled_nodes()
@@ -1094,6 +1116,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         ids=["lg_evidence", "ckde_and_lg_evidence"],
     )
     def test_infer_converges_to_reference(self, evidence: dict[str, float]) -> None:
+        """Test that the likelihood weighting posterior means converge to the brute-force reference."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         expected = self._reference_means(bn, evidence)
         estimates = []
@@ -1111,6 +1134,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
     def test_infer_gibbs_converges_to_reference(self) -> None:
+        """Test that the Gibbs posterior means converge to the brute-force reference."""
         # Evidence on the CKDE node F exercises the rejection sampling and Metropolis-Hastings fallback of A and B
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"F": 0.9, "D": 1.0}
@@ -1135,6 +1159,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
     def test_infer_gibbs_uses_ckde_evidence_on_lg_parents(self) -> None:
+        """Test that Gibbs sampling propagates CKDE evidence to its LG parent, as likelihood weighting does."""
         # Regression: the Rao-Blackwellized LG parent A of the observed CKDE node B must not stay at its prior
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"B": 0.9}
@@ -1157,6 +1182,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         np.testing.assert_allclose(gs_mean, lw_mean, atol=0.1)
 
     def test_infer_effective_sample_size(self, tmp_path: Path) -> None:
+        """Test the likelihood weighting effective sample size, its warning and its JSON export."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         n_samples = 500
 
@@ -1187,6 +1213,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
     @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_posterior_validation(self) -> None:
+        """Test that posterior rejects a query node in the evidence and an infer_dict with different evidence."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         point = pd.Series({"A": 0.0, "D": 0.0})
         infer_dict = bn.infer(evidence={"D": 2.0}, n_samples=50, seed=SEED)
@@ -1197,6 +1224,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.posterior("A", {"D": 1.0}, point, infer_dict=infer_dict)
 
     def test_mcmc_diagnostics(self) -> None:
+        """Test the split R-hat, bulk ESS and tail ESS on synthetic chains with known values."""
         rng = np.random.default_rng(SEED)
         n_draws, n_chains = 2000, 8
 
@@ -1242,6 +1270,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
     def test_mcmc_diagnostics_match_arviz(self) -> None:
+        """Test that the split R-hat, bulk ESS and tail ESS match ArviZ (skipped without ArviZ)."""
         az = pytest.importorskip("arviz")
         rng = np.random.default_rng(SEED)
         ar = np.zeros((501, 4))
@@ -1276,6 +1305,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             )
 
     def test_infer_gibbs_diagnostics(self) -> None:
+        """Test the per-node R-hat and ESS of Gibbs inference, and their use for the posterior KDE bandwidth."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"F": 0.9, "D": 1.0}
         n_samples, n_chains = 1000, 50
@@ -1328,6 +1358,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
     @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_posterior_gibbs_validation(self) -> None:
+        """Test the argument validation of posterior and infer with Gibbs sampling."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         point = pd.Series({"A": 0.0, "D": 0.0})
         gs = bn.infer(
@@ -1349,6 +1380,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.infer(evidence={"D": 2.0}, method="mcmc")
 
     def test_infer_discrete_parent(self) -> None:
+        """Test inference with a discrete parent of a CLG node: the marginal mixture density, the exact
+        conditional density and the class posterior given by the weights.
+        """
         # Discrete C -> X <- K (CKDE): X is a CLinearGaussianCPD, Rao-Blackwellized with the parameters of the sampled class
         rng = np.random.default_rng(SEED)
         n = 4000
@@ -1402,6 +1436,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             bn.infer(evidence={"K": k_value}, method="gibbs")
 
     def test_infer_label_node(self) -> None:
+        """Test inference on the label node, which is a node of the network but not a feature, with both methods."""
         # The label Y is a node of the network but not one of the feature_names_in_
         bn = self._toy_bn({}, with_label=True)
         assert "Y" in bn.nodes() and "Y" not in bn.feature_names_in_
@@ -1462,6 +1497,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         np.testing.assert_allclose(gs_mean, lw_mean, atol=0.05)
 
     def test_inference_warnings_and_json(self, tmp_path: Path) -> None:
+        """Test the ESS and R-hat warnings, and that NaN diagnostics are exported to JSON as null."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
 
         # Degenerate likelihood weights
