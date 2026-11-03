@@ -16,8 +16,6 @@ Noisy-OR on the negated variables:
     P(Y=1)     = (1 - l) * prod_i (1 - q_i * P(X_i=0))
 """
 
-import itertools
-
 import numpy as np
 import pandas as pd
 import pyagrum as gum
@@ -55,9 +53,7 @@ class _NoisyGate:
         Returns:
             pd.DataFrame: Parent columns followed by the P(Y=0 | x) and P(Y=1 | x) columns.
         """
-        configs = np.array(
-            list(itertools.product([0, 1], repeat=len(self.parents))), dtype=int
-        ).reshape(-1, len(self.parents))
+        configs = _configs(len(self.parents))
         p_true = self.prob_true(configs)
         df = pd.DataFrame(configs, columns=self.parents)
         df[PROB_FALSE_COLUMN] = 1 - p_true
@@ -100,17 +96,25 @@ class _NoisyGate:
             return 1
 
         child_active = active_index(child)
-        parents_active = {p: active_index(p) for p in self.parents}
+        parents_active = [active_index(p) for p in self.parents]
+        n = len(self.parents)
+        # Axis i is parent i in self.parents order, index 1 = active
+        p_true = self.prob_true(_configs(n)).reshape([2] * n)
+        # Reindex each parent axis by label: flip it if its active label is index 0
+        flipped = [i for i, active in enumerate(parents_active) if active == 0]
+        if flipped:
+            p_true = np.flip(p_true, axis=tuple(flipped))
+        # Child axis last, indexed by label
+        table = np.stack(
+            [1 - p_true, p_true] if child_active == 1 else [p_true, 1 - p_true],
+            axis=-1,
+        )
         cpt = bn.cpt(child)
-        for row in self.cpt().to_dict("records"):
-            instantiation = {
-                p: parents_active[p] if row[p] == 1 else 1 - parents_active[p]
-                for p in self.parents
-            }
-            probs = [0.0, 0.0]
-            probs[child_active] = row[PROB_TRUE_COLUMN]
-            probs[1 - child_active] = row[PROB_FALSE_COLUMN]
-            cpt[instantiation] = probs
+        # pyagrum fills with the first variable of the potential varying fastest
+        axis_names = [*self.parents, child]
+        order = list(cpt.names)[::-1]
+        table = np.transpose(table, [axis_names.index(name) for name in order])
+        cpt.fillWith(table.ravel().tolist())
 
 
 class NoisyOR(_NoisyGate):
@@ -313,6 +317,11 @@ class NoisyProduct(_NoisyGate):
             result *= gate.prob_true(x[:, start:end])
             start = end
         return result
+
+
+def _configs(n: int) -> np.ndarray:
+    """All binary configurations of n variables, shape (2^n, n), in itertools.product order."""
+    return (np.arange(2**n)[:, None] >> np.arange(n - 1, -1, -1)) & 1
 
 
 def _check_probabilities(values: np.ndarray, name: str) -> None:
