@@ -1554,6 +1554,63 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             assert np.isfinite(gs["parameters"][diagnostic]["C"])
         assert gs["parameters"]["exact_rate"]["D"] == 1.0
 
+    def test_infer_gibbs_block_move_separated_classes(self) -> None:
+        """Test that the block move of a discrete node with its continuous children mixes when the classes separate the children.
+        Single-site updates alone keep every chain at its initial class, so its frequencies would follow the prior instead of the posterior.
+        """
+        # Naive Bayes C -> {A, B} (CKDE) with the class means 6 standard deviations apart
+        rng = np.random.default_rng(SEED)
+        n = 2000
+        c = rng.choice(["u", "v"], size=n, p=[0.5, 0.5])
+        shift = np.where(c == "u", -3.0, 3.0)
+        df = pd.DataFrame(
+            {
+                "C": pd.Categorical(c),
+                "A": shift + rng.normal(size=n),
+                "B": shift + rng.normal(size=n),
+            }
+        )
+        bn = SemiParametricBayesianNetwork(true_label="C")
+        for node in df.columns:
+            bn.add_node(node)
+        bn.add_arc("C", "A")
+        bn.add_arc("C", "B")
+        bn.set_node_type("C", pbn.DiscreteFactorType())
+        for node in ["A", "B"]:
+            bn.set_node_type(node, pbn.CKDEType())
+        pbn.SemiparametricBN.fit(bn, df)
+
+        # Exact P(C | b) ∝ P(C) p(b | C), with b between the classes and closer to "v"
+        evidence = {"B": 0.4}
+        points = pd.DataFrame(
+            {
+                "C": pd.Categorical(["u", "v"], categories=["u", "v"]),
+                "B": evidence["B"],
+            }
+        )
+        log_joint = bn._node_logl("C", points) + bn._node_logl("B", points)
+        expected = np.exp(log_joint - logsumexp(log_joint))[0]
+
+        gs = bn.infer(
+            evidence=evidence,
+            method="gibbs",
+            n_samples=4000,
+            n_chains=100,
+            burn_in=50,
+            seed=SEED,
+        )
+        parameters = gs["parameters"]
+        assert parameters["block_acceptance_rate"]["C"] > 0.05
+        assert parameters["rhat"]["C"] < 1.05
+        assert parameters["effective_sample_size"]["C"] > 1000
+        np.testing.assert_allclose(
+            np.mean(parameters["assignments"]["C"] == "u"), expected, atol=0.03
+        )
+
+        # Chains stuck at different values have an infinite R-hat, so they are warned about
+        stuck = np.tile([0.0, 1.0], (20, 5))
+        assert SemiParametricBayesianNetwork._split_rhat(stuck) == np.inf
+
     def test_infer_label_node(self) -> None:
         """Test inference on the label node, which is a node of the network but not a feature, with both methods."""
         # The label Y is a node of the network but not one of the feature_names_in_

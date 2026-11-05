@@ -1027,7 +1027,32 @@ class SemiParametricBayesianNetwork(
             if has_rb_evidence
             else []
         )
+        # Block of each free discrete node: its free continuous children in S (in topological order), which are proposed
+        # again with the node by ``_gibbs_block_update``, and the nodes outside the block whose CPD depends on the block
+        topo_order = list(self.graph().topological_sort())
+        blocks, block_scores = {}, {}
+        for node in sampled:
+            if node not in discrete or node in evidence:
+                continue
+            block = [
+                c
+                for c in topo_order
+                if c in children[node] and c not in discrete and c not in evidence
+            ]
+            if len(block) == 0:
+                continue
+            moved = {node, *block}
+            blocks[node] = block
+            block_scores[node] = [node] + [
+                m
+                for m in topo_order
+                if m in sampled
+                and m not in moved
+                and any(p in moved for p in self.parents(m))
+            ]
         return {
+            "blocks": blocks,
+            "block_scores": block_scores,
             "sampled": sampled,
             "evidence": evidence,
             "discrete": discrete,
@@ -1074,6 +1099,83 @@ class SemiParametricBayesianNetwork(
             kernel = self._gibbs_kernel(context, node, values)
             logl[rows] = self._mixture_logl(kernel, node, state.iloc[rows])
         return logl
+
+    def _gibbs_rb_logl(self, context: dict, state: pd.DataFrame) -> np.ndarray:
+        """Row-wise log p(e_R | S), grouping the rows by the values of the discrete parents of R (zero without evidence on R)"""
+        logl = np.zeros(len(state))
+        if not context["has_rb_evidence"]:
+            return logl
+        for values, rows in self._discrete_groups(
+            state, context["rb_discrete_parents"]
+        ):
+            logl[rows] = self._rb_evidence_logl(
+                self._gibbs_rb_evidence(context, values), state.iloc[rows]
+            )
+        return logl
+
+    def _gibbs_sample_node(
+        self, context: dict, node: str, state: pd.DataFrame, rng: np.random.Generator
+    ) -> np.ndarray:
+        """Draws the continuous ``node`` from p(x | pa) for every row, with the cached mixture of each discrete configuration"""
+        values = np.empty(len(state))
+        for parent_values, rows in self._discrete_groups(
+            state, context["discrete_parents"][node]
+        ):
+            kernel = self._gibbs_kernel(context, node, parent_values)
+            log_w, means, var = self._conditional_mixture(kernel, state.iloc[rows])
+            values[rows] = self._sample_mixture(log_w, means, var, rng)
+        return values
+
+    def _gibbs_block_update(
+        self, node: str, state: pd.DataFrame, context: dict, rng: np.random.Generator
+    ) -> int:
+        """Metropolis-Hastings move of the discrete ``node`` jointly with its block B of free continuous children in S, in place.
+
+        Single-site updates mix slowly when the categories of ``node`` separate its children (e.g., the class label of a classifier):
+        changing the category requires children values that fit the new one. The move proposes a uniformly chosen different
+        category k' and redraws B in topological order from their CPDs given k', so their own terms cancel in the acceptance ratio:
+        log alpha = sum_{m in M} [log p(m | pa'_m) - log p(m | pa_m)] + log p(e_R | S') - log p(e_R | S), where M is ``node`` and the
+        nodes outside B whose parents are in {node} ∪ B (e.g., the observed children). The proposal is symmetric in the category.
+
+        Returns:
+            int: The number of accepted moves.
+        """
+        categories = context["categories"][node]
+        if len(categories) < 2:
+            return 0
+        block = context["blocks"][node]
+        score_nodes = context["block_scores"][node]
+        n_chains = len(state)
+
+        codes = state[node].cat.codes.to_numpy()
+        new_codes = (codes + rng.integers(1, len(categories), size=n_chains)) % len(
+            categories
+        )
+        proposed = state.copy()
+        proposed[node] = pd.Categorical.from_codes(new_codes, categories=categories)
+        for child in block:
+            proposed[child] = self._gibbs_sample_node(context, child, proposed, rng)
+
+        log_alpha = sum(
+            self._gibbs_node_logl(context, m, proposed)
+            - self._gibbs_node_logl(context, m, state)
+            for m in score_nodes
+        ) + (
+            self._gibbs_rb_logl(context, proposed) - self._gibbs_rb_logl(context, state)
+        )
+        log_alpha = np.nan_to_num(log_alpha, nan=-np.inf)
+        accept = np.log(rng.random(n_chains)) < log_alpha
+
+        state[node] = pd.Categorical.from_codes(
+            np.where(accept, new_codes, codes), categories=categories
+        )
+        for child in block:
+            state[child] = np.where(
+                accept,
+                proposed[child].to_numpy(dtype=float),
+                state[child].to_numpy(dtype=float),
+            )
+        return int(accept.sum())
 
     def _gibbs_update_continuous(
         self,
@@ -1136,12 +1238,7 @@ class SemiParametricBayesianNetwork(
             trial[node] = pd.Categorical([category] * len(state), categories=categories)
             log_p[:, k] = sum(self._gibbs_node_logl(context, c, trial) for c in terms)
             if uses_rb_evidence:
-                for values, rows in self._discrete_groups(
-                    trial, context["rb_discrete_parents"]
-                ):
-                    log_p[rows, k] += self._rb_evidence_logl(
-                        self._gibbs_rb_evidence(context, values), trial.iloc[rows]
-                    )
+                log_p[:, k] += self._gibbs_rb_logl(context, trial)
         log_p = np.nan_to_num(log_p, nan=-np.inf)
         codes = np.argmax(log_p + rng.gumbel(size=log_p.shape), axis=1)
         new_values = pd.Categorical.from_codes(codes, categories=categories)
@@ -1165,13 +1262,16 @@ class SemiParametricBayesianNetwork(
     @staticmethod
     def _rhat_raw(chains: np.ndarray) -> float:
         """R-hat of already split ``chains`` (n, m): sqrt(var+ / W), with W the mean within-chain variance and
-        var+ = (n - 1) / n W + B / n the pooled variance. Returns NaN for constant draws.
+        var+ = (n - 1) / n W + B / n the pooled variance. Returns NaN for constant draws, and infinity if every chain is
+        constant but they differ (e.g., stuck chains).
         """
         n = chains.shape[0]
         within = np.mean(np.var(chains, axis=0, ddof=1))
-        if within == 0.0:
-            return np.nan
         between_over_n = np.var(np.mean(chains, axis=0), ddof=1)
+        # Relative tolerance for the rounding errors of the variance of constant chains
+        tolerance = 1e-12 * max(np.var(chains), np.finfo(float).tiny)
+        if within <= tolerance:
+            return np.inf if between_over_n > tolerance else np.nan
         return float(np.sqrt(((n - 1) / n * within + between_over_n) / within))
 
     @classmethod
@@ -1364,6 +1464,7 @@ class SemiParametricBayesianNetwork(
         n_sweeps = burn_in + n_kept_sweeps * thinning
         exact = {node: 0 for node in free_nodes}
         changed = {node: 0 for node in free_nodes}
+        block_accepted = {node: 0 for node in context["blocks"]}
         kept_states = []
 
         for sweep in range(n_sweeps):
@@ -1379,6 +1480,10 @@ class SemiParametricBayesianNetwork(
                 state[node] = new_values
                 exact[node] += n_exact
                 changed[node] += n_changed
+                if node in context["blocks"]:
+                    block_accepted[node] += self._gibbs_block_update(
+                        node, state, context, rng
+                    )
 
             if sweep >= burn_in and (sweep - burn_in) % thinning == thinning - 1:
                 kept_states.append(state.copy())
@@ -1430,6 +1535,10 @@ class SemiParametricBayesianNetwork(
             },
             "acceptance_rate": {
                 node: changed[node] / (n_sweeps * n_chains) for node in free_nodes
+            },
+            "block_acceptance_rate": {
+                node: block_accepted[node] / (n_sweeps * n_chains)
+                for node in block_accepted
             },
             "rhat": rhat,
             "effective_sample_size": effective_sample_size,
