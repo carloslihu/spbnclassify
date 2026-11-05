@@ -1063,8 +1063,7 @@ class SemiParametricBayesianNetwork(
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
-        As in ``_infer_lw``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R
-        are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
+        As in ``_infer_lw``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
         Each unobserved node X of S is sampled from its full conditional p(x | .) ∝ p(x | Pa(x)) prod_{c in S} p(c | Pa(c)) p(e_R | S):
             - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children in S and by p(e_R | S) (both Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
             - CKDE children have no closed form, so they are handled by rejection sampling using the bound p(c | .) <= 1 / sqrt(2 pi s2_c).

@@ -684,7 +684,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         }
         return expected_node_types
 
-    def test_infer(self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame) -> None:
+    def test_infer_LW(
+        self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
+    ) -> None:
         """Test that the likelihood weights are normalized and proportional to the evidence likelihood of each sample."""
         evidence = {"b": data.iloc[0]["b"]}
         infer_dict = bn.infer(evidence=evidence, n_samples=250, seed=SEED)
@@ -718,12 +720,10 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         expected_weights = np.exp(log_weights - logsumexp(log_weights))
         np.testing.assert_allclose(weights, expected_weights, rtol=1e-10, atol=1e-12)
 
-    def test_posterior(
+    def test_posterior_LW(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
     ) -> None:
-        """Test the posterior density of a CKDE query node against a weighted KDE with Silverman's bandwidth.
-        The CLG query node case only checks that the call runs.
-        """
+        """Test the posterior density of a CKDE query node against a weighted KDE with Silverman's bandwidth."""
         # NOTE: KDE query node case
         point = pd.Series({"a": 1.5, "d": 2.0})
         samples = np.array([0.0, 1.0, 2.0, 4.0])
@@ -757,14 +757,6 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
-        # TODO: CLG query node case
-        actual = bn.posterior(
-            query_node="d",
-            evidence={},
-            point=point,
-            # infer_dict=lw,
-        )
-        # np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
 
     def test_infer_gibbs(
         self, bn: SemiParametricBayesianNetwork, data: pd.DataFrame
@@ -968,27 +960,27 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             np.testing.assert_allclose(samples.mean(), expected_mean, atol=0.1)
             np.testing.assert_allclose(samples.var(), expected_var, rtol=0.15)
 
-    # NOTE: Convergence tests of the Rao-Blackwellized inference on a small network with known structure.
-    # Tolerances were calibrated to about 4-5 times the seed-to-seed standard deviation of the estimates.
-    TOY_ARCS = [
-        ("A", "B"),
-        ("B", "C"),
-        ("C", "D"),
-        ("A", "D"),
-        ("C", "E"),
-        ("D", "E"),
-        ("A", "F"),
-        ("B", "F"),
-    ]
-
     @classmethod
     def _toy_bn(
         cls, node_types: dict[str, pbn.FactorType], with_label: bool = False
     ) -> SemiParametricBayesianNetwork:
         """A (LG) -> B -> C -> D -> E with A -> D and C -> E, and F a child of A and B.
+
         Nodes missing from ``node_types`` are LinearGaussian. With ``with_label``, a 0/1 label Y (child of C and E)
         is added as the network's ``true_label``, so it is a node but not one of the ``feature_names_in_``.
         """
+        # NOTE: Convergence tests of the Rao-Blackwellized inference on a small network with known structure.
+        # Tolerances were calibrated to about 4-5 times the seed-to-seed standard deviation of the estimates.
+        TOY_ARCS = [
+            ("A", "B"),
+            ("B", "C"),
+            ("C", "D"),
+            ("A", "D"),
+            ("C", "E"),
+            ("D", "E"),
+            ("A", "F"),
+            ("B", "F"),
+        ]
         rng = np.random.default_rng(SEED)
         n = 500
         a = rng.normal(0, 1, n)
@@ -999,7 +991,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         f = np.sin(2 * b) + 0.2 * a + 0.3 * rng.normal(size=n)
         df = pd.DataFrame({"A": a, "B": b, "C": c, "D": d, "E": e, "F": f})
         features = list(df.columns)
-        arcs = list(cls.TOY_ARCS)
+        arcs = list(TOY_ARCS)
         if with_label:
             df["Y"] = (c + e > 1.5).astype(float)
             arcs += [("C", "Y"), ("E", "Y")]
