@@ -1422,10 +1422,137 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             weights[is_u].sum(), prior["u"] * density["u"] / marginal, rtol=0.05
         )
 
+        # Gibbs sampling gives the same class posterior P(C | x, k), and the probability mass with posterior
+        gs = bn.infer(
+            evidence={"K": k_value, "X": x_value},
+            method="gibbs",
+            n_samples=5000,
+            n_chains=100,
+            seed=SEED,
+        )
+        assignments = gs["parameters"]["assignments"]
+        assert isinstance(assignments["C"].dtype, pd.CategoricalDtype)
+        assert gs["parameters"]["exact_rate"]["C"] == 1.0
+        assert gs["parameters"]["rhat"]["C"] < 1.05
+        actual = bn.posterior(
+            "C",
+            {"K": k_value, "X": x_value},
+            pd.Series({"C": "u"}),
+            infer_dict=gs,
+            method="gibbs",
+        )
+        np.testing.assert_allclose(actual, (assignments["C"] == "u").mean())
+        np.testing.assert_allclose(
+            actual, prior["u"] * density["u"] / marginal, atol=0.03
+        )
+        # p(x | k) is the mixture over the sampled classes, and p(x | k, C) is exact
+        actual = bn.posterior(
+            "X", {"K": k_value}, point, n_samples=5000, seed=SEED, method="gibbs"
+        )
+        np.testing.assert_allclose(actual, marginal, rtol=0.03)
+        actual = bn.posterior(
+            "X",
+            {"K": k_value, "C": "u"},
+            point,
+            n_samples=40,
+            n_chains=10,
+            method="gibbs",
+        )
+        np.testing.assert_allclose(actual, density["u"], rtol=1e-10)
+
         with pytest.raises(ValueError, match="not a category"):
             bn.infer(evidence={"C": "w"})
-        with pytest.raises(NotImplementedError, match="discrete nodes"):
-            bn.infer(evidence={"K": k_value}, method="gibbs")
+        with pytest.raises(ValueError, match="not a category"):
+            bn.infer(evidence={"C": "w"}, method="gibbs")
+
+    def test_infer_gibbs_hybrid_matches_LW(self) -> None:
+        """Test Gibbs sampling against likelihood weighting on a hybrid network: a discrete chain C -> D, an HCKDE K with
+        both as parents and a CKDE child Z, and CLinearGaussian nodes X <- {K, C} and Y <- {X, D} that are Rao-Blackwellized.
+        """
+        rng = np.random.default_rng(SEED)
+        n = 1500
+        c = rng.choice(["u", "v"], size=n, p=[0.4, 0.6])
+        d = np.where(
+            c == "u",
+            rng.choice(["p", "q", "r"], size=n, p=[0.6, 0.3, 0.1]),
+            rng.choice(["p", "q", "r"], size=n, p=[0.2, 0.3, 0.5]),
+        )
+        k = (
+            np.where(c == "u", 1.0, -0.5)
+            + np.where(d == "r", 0.5, 0.0)
+            + rng.normal(size=n)
+        )
+        z = np.sin(k) + 0.5 * rng.normal(size=n)
+        x = k + np.where(c == "u", 1.0, -1.0) + 0.5 * rng.normal(size=n)
+        y = 0.7 * x + np.where(d == "q", 2.0, 0.0) + 0.5 * rng.normal(size=n)
+        df = pd.DataFrame(
+            {
+                "C": pd.Categorical(c),
+                "D": pd.Categorical(d),
+                "K": k,
+                "Z": z,
+                "X": x,
+                "Y": y,
+            }
+        )
+        bn = SemiParametricBayesianNetwork(true_label="C")
+        for node in df.columns:
+            bn.add_node(node)
+        for arc in [
+            ("C", "D"),
+            ("C", "K"),
+            ("D", "K"),
+            ("K", "Z"),
+            ("K", "X"),
+            ("C", "X"),
+            ("X", "Y"),
+            ("D", "Y"),
+        ]:
+            bn.add_arc(*arc)
+        for node in ["C", "D"]:
+            bn.set_node_type(node, pbn.DiscreteFactorType())
+        for node in ["K", "Z"]:
+            bn.set_node_type(node, pbn.CKDEType())
+        pbn.SemiparametricBN.fit(bn, df)
+        assert isinstance(bn.cpd("K"), pbn.HCKDE)
+        assert isinstance(bn.cpd("Y"), pbn.CLinearGaussianCPD)
+
+        # Evidence on a Rao-Blackwellized node with discrete parents, and on a CKDE child of the HCKDE node
+        evidence = {"Y": 1.5, "Z": 0.3}
+        lw = bn.infer(evidence=evidence, n_samples=50000, seed=SEED)
+        gs = bn.infer(
+            evidence=evidence,
+            method="gibbs",
+            n_samples=4000,
+            n_chains=100,
+            burn_in=100,
+            seed=SEED,
+        )
+        lw_weights = lw["parameters"]["weights"]
+        lw_assignments = lw["parameters"]["assignments"]
+        gs_assignments = gs["parameters"]["assignments"]
+        for node in ["C", "D"]:
+            assert isinstance(gs_assignments[node].dtype, pd.CategoricalDtype)
+            for category in df[node].cat.categories:
+                np.testing.assert_allclose(
+                    np.mean(gs_assignments[node] == category),
+                    lw_weights[(lw_assignments[node] == category).to_numpy()].sum(),
+                    atol=0.05,
+                )
+        for node in ["K", "X"]:
+            np.testing.assert_allclose(
+                gs_assignments[node].mean(),
+                np.sum(lw_weights * lw_assignments[node]),
+                atol=0.15,
+            )
+        for diagnostic in [
+            "rhat",
+            "effective_sample_size",
+            "tail_effective_sample_size",
+        ]:
+            assert set(gs["parameters"][diagnostic]) == {"C", "D", "K", "X"}
+            assert np.isfinite(gs["parameters"][diagnostic]["C"])
+        assert gs["parameters"]["exact_rate"]["D"] == 1.0
 
     def test_infer_label_node(self) -> None:
         """Test inference on the label node, which is a node of the network but not a feature, with both methods."""

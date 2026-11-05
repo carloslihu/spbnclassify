@@ -140,14 +140,20 @@ class SemiParametricBayesianNetwork(
             if self.cpd(node).type() == pbn.DiscreteFactorType()
         }
 
+    def _categories(self) -> dict[str, list[str]]:
+        """Returns the categories of every discrete node, in the order of its CPD. pybnesian requires all the categories
+        of the variable (in this order), which are taken from a forward sample"""
+        discrete_nodes = self._discrete_nodes()
+        if len(discrete_nodes) == 0:
+            return {}
+        sample = BayesianNetwork.sample(self, 1, seed=0)
+        return {node: sample[node].cat.categories.tolist() for node in discrete_nodes}
+
     def _evidence_column(self, node: str, value, n_rows: int):
         """Returns the evidence ``value`` of ``node`` to clamp a column of ``n_rows`` rows: a float, or a categorical with the categories of the discrete CPD"""
         if node not in self._discrete_nodes():
             return float(value)
-        # pybnesian requires all the categories of the variable, which are taken from a forward sample
-        categories = BayesianNetwork.sample(self, 1, seed=0)[
-            node
-        ].cat.categories.tolist()
+        categories = self._categories()[node]
         if value not in categories:
             raise ValueError(
                 f"Evidence {value!r} is not a category of {node}: {categories}."
@@ -419,7 +425,7 @@ class SemiParametricBayesianNetwork(
         posterior_std: dict[str, float],
         effective_sample_size: float | None = None,
     ) -> float:
-        """Estimates the posterior density of ``query_node`` at ``point`` from weighted samples.
+        """Estimates the posterior density of ``query_node`` at ``point`` from weighted samples (the posterior probability of the category ``point[query_node]`` for discrete nodes).
         Sampled columns use a weighted Gaussian KDE, Rao-Blackwellized CLG columns (the keys of ``posterior_std``)
         a weighted mixture of their CLG posteriors N(posterior mean of the row, posterior std).
         ``effective_sample_size`` overrides the importance-sampling n_eff = 1 / sum(w**2) of the bandwidth (e.g., the autocorrelation-aware ESS of MCMC samples).
@@ -447,7 +453,12 @@ class SemiParametricBayesianNetwork(
 
             return kernel_values
 
-        if query_node in posterior_std:
+        if isinstance(assignments[query_node].dtype, pd.CategoricalDtype):
+            # Discrete nodes: the weighted frequency of the category, i.e. the posterior probability mass
+            kernel_values = (assignments[query_node] == point[query_node]).to_numpy(
+                dtype=float
+            )
+        elif query_node in posterior_std:
             # Rao-Blackwellized CLG nodes: the rows hold the posterior means, and the posterior std is shared by all rows
             kernel_values = norm.pdf(
                 float(point[query_node]),
@@ -478,11 +489,11 @@ class SemiParametricBayesianNetwork(
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
-        Both are Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
+        Both support discrete nodes (e.g., the class label of a classifier) and are Rao-Blackwellized: only the CKDE and discrete nodes and their ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
         The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows).
         See ``_infer_lw`` and ``_infer_gibbs`` for the details of each method.
         Args:
-            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4}. Defaults to an empty dictionary.
+            evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4} (categories for the discrete nodes, e.g. {"C": "u"}). Defaults to an empty dictionary.
             json_file_path (Path | None, optional): If provided, exports the inference results to this file in JSON format.
             pdf_file_path (Path | None, optional): If provided, exports the graphical representation of the inference to this file in PDF format.
             n_samples (int, optional): The number of samples to return (over all chains for Gibbs sampling). Defaults to 1,000.
@@ -636,7 +647,7 @@ class SemiParametricBayesianNetwork(
         Returns
         -------
         float
-            The estimated posterior density of the query node at the specified point.
+            The estimated posterior density of the query node at the specified point (its posterior probability for discrete nodes).
 
         Raises
         ------
@@ -675,14 +686,27 @@ class SemiParametricBayesianNetwork(
             effective_sample_size,
         )
 
-    def _kernel_cache(self, node: str) -> dict:
-        """Precomputes the Gaussian-mixture representation of the CPD of ``node``.
+    def _kernel_cache(self, node: str, discrete_values: dict[str, str] = {}) -> dict:
+        """Precomputes the Gaussian-mixture representation of the CPD of the continuous ``node``.
 
         A CKDE conditional p(x | pa) = f(x, pa) / f(pa) with Gaussian kernels of bandwidth H is the mixture
         sum_j w_j(pa) N(x; m_j(pa), s2), with w_j ∝ N(pa; pa_j, H_pp), m_j = x_j + H_xp H_pp^-1 (pa - pa_j)
         and s2 = H_xx - H_xp H_pp^-1 H_px. A LinearGaussian CPD is the single component N(x; beta0 + beta·pa, variance).
+        CPDs with discrete parents (HCKDE, CLinearGaussianCPD) use the conditional factor of ``discrete_values``,
+        so the parents of the returned kernel are only the continuous ones.
         """
         cpd = self.cpd(node)
+        if isinstance(cpd, (pbn.HCKDE, pbn.CLinearGaussianCPD)):
+            discrete_nodes = self._discrete_nodes()
+            cpd = cpd.conditional_factor(
+                pbn.Assignment(
+                    {
+                        parent: discrete_values[parent]
+                        for parent in self.parents(node)
+                        if parent in discrete_nodes
+                    }
+                )
+            )
         if cpd.type() == pbn.LinearGaussianCPDType():
             beta = np.asarray(cpd.beta, dtype=float)
             return {
@@ -764,43 +788,49 @@ class SemiParametricBayesianNetwork(
             - 0.5 * np.log(2.0 * np.pi * var)
         )
 
+    @staticmethod
     def _lg_children_gaussian(
-        self, node: str, state: pd.DataFrame, lg_children: list[str]
+        node: str, state: pd.DataFrame, lg_children: list[str], kernels: dict[str, dict]
     ) -> tuple[np.ndarray, float] | None:
-        """Product of the LinearGaussian children likelihoods as a function of ``node``.
+        """Product of the LinearGaussian children likelihoods as a function of ``node``, from their cached kernels (see ``_kernel_cache``).
         Each child c ~ N(beta0 + beta_x x + beta_o·o, var) is Gaussian in x, so the product is N(x; mu, tau2) up to a constant.
         Returns None if no child depends on ``node``."""
         precision = 0.0
         weighted_sum = np.zeros(len(state))
         for child in lg_children:
-            cpd = self.cpd(child)
-            parents = cpd.evidence()
-            beta = np.asarray(cpd.beta, dtype=float)
+            kernel = kernels[child]
+            parents = kernel["parents"]
             node_index = parents.index(node)
-            beta_x = beta[node_index + 1]
+            beta_x = kernel["betas"][node_index]
             if beta_x == 0.0:
                 continue
             others = [p for p in parents if p != node]
-            other_betas = np.delete(beta[1:], node_index)
-            rest = beta[0] + state[others].to_numpy(dtype=float) @ other_betas
+            other_betas = np.delete(kernel["betas"], node_index)
+            rest = kernel["beta0"] + state[others].to_numpy(dtype=float) @ other_betas
             residual = state[child].to_numpy(dtype=float) - rest
-            precision += beta_x**2 / cpd.variance
-            weighted_sum += beta_x * residual / cpd.variance
+            precision += beta_x**2 / kernel["var"]
+            weighted_sum += beta_x * residual / kernel["var"]
         if precision == 0.0:
             return None
         tau2 = 1.0 / precision
         return tau2 * weighted_sum, tau2
 
     def _rb_evidence_model(
-        self, sampled_nodes: set[str], evidence: dict[str, float]
+        self,
+        sampled_nodes: set[str],
+        evidence: dict[str, float],
+        discrete_values: dict[str, str] = {},
     ) -> dict | None:
         """Precomputes p(e_E | S) = N(e_E; c_E + C_E s, Sigma_EE) of the evidence E on the non-sampled LinearGaussian nodes
-        given the sampled values s (see ``_clg_conditional``). Returns None if there is no such evidence.
+        given the continuous sampled values s and the ``discrete_values`` of their discrete parents (see ``_clg_conditional``).
+        Returns None if there is no such evidence.
         """
-        clg = self._clg_conditional(sampled_nodes)
+        clg = self._clg_conditional(sampled_nodes, discrete_values)
         evidence_index = [i for i, node in enumerate(clg["nodes"]) if node in evidence]
         if len(evidence_index) == 0:
             return None
+        covariance = clg["covariance"][np.ix_(evidence_index, evidence_index)]
+        _, log_det = np.linalg.slogdet(covariance)
         return {
             "conditioning_nodes": clg["conditioning_nodes"],
             "evidence_values": np.array(
@@ -808,10 +838,25 @@ class SemiParametricBayesianNetwork(
             ),
             "intercept": clg["intercept"][evidence_index],
             "coefficients": clg["coefficients"][evidence_index],
-            "precision": np.linalg.inv(
-                clg["covariance"][np.ix_(evidence_index, evidence_index)]
-            ),
+            "precision": np.linalg.inv(covariance),
+            # Normalizing constant of the Gaussian, which depends on the discrete values
+            "log_norm": -0.5 * (log_det + len(evidence_index) * np.log(2.0 * np.pi)),
         }
+
+    @staticmethod
+    def _rb_evidence_logl(rb_evidence: dict, state: pd.DataFrame) -> np.ndarray:
+        """Row-wise log p(e_E | S) of the model of ``_rb_evidence_model``"""
+        conditioning_values = state[rb_evidence["conditioning_nodes"]].to_numpy(
+            dtype=float
+        )
+        residuals = (
+            rb_evidence["evidence_values"][None, :]
+            - rb_evidence["intercept"][None, :]
+            - conditioning_values @ rb_evidence["coefficients"].T
+        )
+        return rb_evidence["log_norm"] - 0.5 * np.sum(
+            (residuals @ rb_evidence["precision"]) * residuals, axis=1
+        )
 
     @staticmethod
     def _rb_evidence_gaussian(
@@ -886,7 +931,7 @@ class SemiParametricBayesianNetwork(
         """
         log_w, means, var = self._conditional_mixture(kernels[node], state)
         lg_gaussian = self._gaussian_product(
-            self._lg_children_gaussian(node, state, lg_children),
+            self._lg_children_gaussian(node, state, lg_children, kernels),
             (
                 self._rb_evidence_gaussian(node, state, rb_evidence)
                 if rb_evidence is not None
@@ -939,6 +984,169 @@ class SemiParametricBayesianNetwork(
             new_values[rows[accept]] = proposal[accept]
             n_changed += int(accept.sum())
         return new_values, n_exact, n_changed
+
+    @staticmethod
+    def _discrete_groups(
+        state: pd.DataFrame, discrete_nodes: list[str]
+    ) -> list[tuple[dict[str, str], np.ndarray]]:
+        """Groups the rows of ``state`` by the values of ``discrete_nodes``. Returns (values, positional rows) per group."""
+        if len(discrete_nodes) == 0:
+            return [({}, np.arange(len(state)))]
+        groups = state.groupby(discrete_nodes, observed=True, sort=False).indices
+        return [
+            (
+                {
+                    node: str(value)
+                    for node, value in zip(
+                        discrete_nodes, key if isinstance(key, tuple) else (key,)
+                    )
+                },
+                np.asarray(rows, dtype=int),
+            )
+            for key, rows in groups.items()
+        ]
+
+    def _gibbs_context(self, sampled: set[str], evidence: dict[str, float]) -> dict:
+        """Precomputes the structure used by the Gibbs updates with discrete nodes: the discrete parents of every node, the
+        children in S of every sampled node, the discrete parents of the integrated-out nodes R and the lazy
+        caches of the kernels and of p(e_R | S) per discrete configuration."""
+        discrete = self._discrete_nodes()
+        discrete_parents = {
+            node: [p for p in self.parents(node) if p in discrete]
+            for node in self.nodes()
+        }
+        children = {
+            node: [c for c in self.children(node) if c in sampled] for node in sampled
+        }
+        has_rb_evidence = any(node in evidence for node in self._rb_nodes(sampled))
+        # p(e_R | S) depends on the discrete parents of R (through their CLinearGaussianCPDs)
+        rb_discrete_parents = (
+            sorted(
+                {p for node in self._rb_nodes(sampled) for p in discrete_parents[node]}
+            )
+            if has_rb_evidence
+            else []
+        )
+        return {
+            "sampled": sampled,
+            "evidence": evidence,
+            "discrete": discrete,
+            "categories": self._categories(),
+            "discrete_parents": discrete_parents,
+            "children": children,
+            "has_rb_evidence": has_rb_evidence,
+            "rb_discrete_parents": rb_discrete_parents,
+            "kernels": {},
+            "rb_evidence": {},
+        }
+
+    def _gibbs_kernel(self, context: dict, node: str, values: dict[str, str]) -> dict:
+        """Cached ``_kernel_cache`` of the continuous ``node`` for the discrete parent ``values``"""
+        key = (node, tuple(values[p] for p in context["discrete_parents"][node]))
+        if key not in context["kernels"]:
+            context["kernels"][key] = self._kernel_cache(node, values)
+        return context["kernels"][key]
+
+    def _gibbs_rb_evidence(self, context: dict, values: dict[str, str]) -> dict | None:
+        """Cached ``_rb_evidence_model`` for the ``values`` of the discrete parents of R"""
+        if not context["has_rb_evidence"]:
+            return None
+        key = tuple(values[p] for p in context["rb_discrete_parents"])
+        if key not in context["rb_evidence"]:
+            context["rb_evidence"][key] = self._rb_evidence_model(
+                context["sampled"],
+                context["evidence"],
+                {p: values[p] for p in context["rb_discrete_parents"]},
+            )
+        return context["rb_evidence"][key]
+
+    def _gibbs_node_logl(
+        self, context: dict, node: str, state: pd.DataFrame
+    ) -> np.ndarray:
+        """Row-wise log p(x | pa) of the sampled ``node``: the cached mixture of each discrete configuration for continuous nodes
+        (see ``_mixture_logl``), and the pybnesian DiscreteFactor for discrete nodes"""
+        if node in context["discrete"]:
+            return self._node_logl(node, state)
+        logl = np.empty(len(state))
+        for values, rows in self._discrete_groups(
+            state, context["discrete_parents"][node]
+        ):
+            kernel = self._gibbs_kernel(context, node, values)
+            logl[rows] = self._mixture_logl(kernel, node, state.iloc[rows])
+        return logl
+
+    def _gibbs_update_continuous(
+        self,
+        node: str,
+        state: pd.DataFrame,
+        context: dict,
+        rng: np.random.Generator,
+        max_rejection_tries: int,
+    ) -> tuple[np.ndarray, int, int]:
+        """``_gibbs_update`` of the continuous ``node`` with discrete nodes in the network: the chains are grouped by the values of the
+        discrete parents of ``node``, of its children in S and of R, so that every CPD of the full conditional is non-hybrid within a group.
+        """
+        children = context["children"][node]
+        group_nodes = sorted(
+            set(context["discrete_parents"][node])
+            .union(*(context["discrete_parents"][c] for c in children))
+            .union(context["rb_discrete_parents"])
+        )
+        new_values = np.empty(len(state))
+        n_exact = n_changed = 0
+        for values, rows in self._discrete_groups(state, group_nodes):
+            group_state = (
+                state
+                if len(rows) == len(state)
+                else state.iloc[rows].reset_index(drop=True)
+            )
+            kernels = {
+                n: self._gibbs_kernel(context, n, values) for n in [node, *children]
+            }
+            new_values[rows], group_exact, group_changed = self._gibbs_update(
+                node,
+                group_state,
+                kernels,
+                [c for c in children if kernels[c]["type"] == "lg"],
+                [c for c in children if kernels[c]["type"] == "ckde"],
+                rng,
+                max_rejection_tries,
+                self._gibbs_rb_evidence(context, values),
+            )
+            n_exact += group_exact
+            n_changed += group_changed
+        return new_values, n_exact, n_changed
+
+    def _gibbs_update_discrete(
+        self, node: str, state: pd.DataFrame, context: dict, rng: np.random.Generator
+    ) -> tuple[pd.Categorical, int, int]:
+        """Samples the discrete ``node`` exactly from its full conditional for every chain, enumerating its categories k:
+        log p(k | .) = log p(k | pa) + sum_{c in S children} log p(c | pa_c) + log p(e_R | S) + const, where p(e_R | S) only
+        depends on k if ``node`` is a discrete parent of R (through the CLinearGaussianCPDs of R).
+
+        Returns:
+            tuple[pd.Categorical, int, int]: The new values, the number of exact draws (all) and the number of changed values.
+        """
+        categories = context["categories"][node]
+        terms = [node, *context["children"][node]]
+        uses_rb_evidence = node in context["rb_discrete_parents"]
+        log_p = np.empty((len(state), len(categories)))
+        trial = state.copy()
+        for k, category in enumerate(categories):
+            trial[node] = pd.Categorical([category] * len(state), categories=categories)
+            log_p[:, k] = sum(self._gibbs_node_logl(context, c, trial) for c in terms)
+            if uses_rb_evidence:
+                for values, rows in self._discrete_groups(
+                    trial, context["rb_discrete_parents"]
+                ):
+                    log_p[rows, k] += self._rb_evidence_logl(
+                        self._gibbs_rb_evidence(context, values), trial.iloc[rows]
+                    )
+        log_p = np.nan_to_num(log_p, nan=-np.inf)
+        codes = np.argmax(log_p + rng.gumbel(size=log_p.shape), axis=1)
+        new_values = pd.Categorical.from_codes(codes, categories=categories)
+        n_changed = int(np.sum(codes != state[node].cat.codes.to_numpy()))
+        return new_values, len(state), n_changed
 
     @staticmethod
     def _split_chains(draws: np.ndarray) -> np.ndarray:
@@ -1051,6 +1259,26 @@ class SemiParametricBayesianNetwork(
             for prob in (0.05, 0.95)
         )
 
+    @classmethod
+    def _discrete_diagnostics(
+        cls, draws: pd.Series, categories: list[str], n_kept: int, n_chains: int
+    ) -> tuple[float, float, float]:
+        """R-hat, bulk and tail effective sample sizes of the discrete ``draws`` (rows ordered sweep by sweep), computed on the
+        indicator I(x = k) of every category k (whose mean estimates P(k | e)): the maximum R-hat and the minimum effective sample sizes.
+        Returns NaN as ``_split_rhat`` and ``_mcmc_effective_sample_size``, or if no indicator varies (R-hat).
+        """
+        indicators = [
+            (draws.to_numpy() == category).astype(float).reshape(n_kept, n_chains)
+            for category in categories
+        ]
+        rhats = [cls._split_rhat(indicator) for indicator in indicators]
+        rhat = np.nan if np.all(np.isnan(rhats)) else float(np.nanmax(rhats))
+        # The rank normalization of a binary indicator is affine, so its bulk ESS is also the ESS of the probability estimate
+        ess = min(
+            cls._mcmc_effective_sample_size(indicator) for indicator in indicators
+        )
+        return rhat, ess, ess
+
     def _infer_gibbs(
         self,
         evidence: dict[str, float],
@@ -1063,14 +1291,16 @@ class SemiParametricBayesianNetwork(
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
-        As in ``_infer_lw``, only the CKDE nodes and their LinearGaussian ancestors S are sampled: the remaining LinearGaussian nodes R are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
+        As in ``_infer_lw``, only the CKDE and discrete nodes and their ancestors S are sampled: the remaining LinearGaussian nodes R are integrated out, so the chains target p(S | e) ∝ p(S, e_S) p(e_R | S), and R is finally replaced by its exact CLG posterior p(R | S, e).
         Each unobserved node X of S is sampled from its full conditional p(x | .) ∝ p(x | Pa(x)) prod_{c in S} p(c | Pa(c)) p(e_R | S):
-            - p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children in S and by p(e_R | S) (both Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
-            - CKDE children have no closed form, so they are handled by rejection sampling using the bound p(c | .) <= 1 / sqrt(2 pi s2_c).
-            Chains not accepted after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with the same proposal, which still leaves the full conditional invariant.
+            - For a continuous X, p(x | Pa(x)) is a Gaussian mixture (CKDE kernels, or one component for LinearGaussian CPDs), and multiplying it by the LinearGaussian children in S and by p(e_R | S) (both Gaussian in x) keeps it a Gaussian mixture, which is sampled exactly.
+              CKDE children have no closed form, so they are handled by rejection sampling using the bound p(c | .) <= 1 / sqrt(2 pi s2_c).
+              Chains not accepted after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with the same proposal, which still leaves the full conditional invariant.
+              The CPDs with discrete parents (HCKDE, CLinearGaussianCPD) are non-hybrid given the current discrete values, so the chains are grouped by them.
+            - For a discrete X (e.g., the class label of a classifier), the full conditional is evaluated on every category and sampled exactly (see ``_gibbs_update_discrete``).
         ``n_chains`` independent chains are run in batch. Integrating R out avoids the slow mixing of Gibbs sampling between strongly dependent nodes of S and R.
         Args:
-            evidence (dict[str, float]): A dictionary mapping node names to their observed values.
+            evidence (dict[str, float]): A dictionary mapping node names to their observed values (categories for the discrete nodes).
             n_samples (int): The total number of samples (over all chains) to keep after burn-in and thinning.
             n_chains (int): The number of independent chains run in parallel.
             burn_in (int): The number of initial sweeps discarded in each chain.
@@ -1087,45 +1317,23 @@ class SemiParametricBayesianNetwork(
                 - ``effective_sample_size`` (per non-evidence node): the bulk effective sample size of the returned values. Much smaller than ``n_samples`` means
                   highly autocorrelated chains (increase ``n_samples`` or ``thinning``).
                 - ``tail_effective_sample_size`` (per non-evidence node): the effective sample size of the 5% and 95% quantile estimates.
+              For discrete nodes, the diagnostics are computed on the indicators of their categories (see ``_discrete_diagnostics``).
             The diagnostics are NaN with fewer than 4 kept sweeps per chain (and R-hat with fewer than 2 chains or constant values).
             A RuntimeWarning is emitted if any R-hat exceeds ``MAX_RHAT`` or any bulk effective sample size is below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
-
-        Raises:
-            NotImplementedError: If the network has discrete nodes (e.g., the class label of a classifier), whose full conditionals are not implemented.
         """
-        if len(self._discrete_nodes()) > 0:
-            raise NotImplementedError(
-                "Gibbs sampling does not support discrete nodes yet, use method='lw'."
-            )
         rng = np.random.default_rng(seed)
 
         def _next_seed() -> int:
             return int(rng.integers(2**31 - 1))
 
         topo_order = list(self.graph().topological_sort())
-        # Only the ancestor-closed set S of CKDE nodes and their LinearGaussian ancestors is sampled, the rest is integrated out.
+        # Only the ancestor-closed set S of CKDE and discrete nodes and their ancestors is sampled, the rest is integrated out.
         sampled = self._sampled_nodes()
         sampled_order = [node for node in topo_order if node in sampled]
         free_nodes = [node for node in sampled_order if node not in evidence]
-        kernels = {node: self._kernel_cache(node) for node in sampled_order}
         # Children outside S are integrated out, and their evidence enters through p(e_R | S)
-        lg_children = {
-            node: [
-                c
-                for c in self.children(node)
-                if c in sampled and kernels[c]["type"] == "lg"
-            ]
-            for node in free_nodes
-        }
-        ckde_children = {
-            node: [
-                c
-                for c in self.children(node)
-                if c in sampled and kernels[c]["type"] == "ckde"
-            ]
-            for node in free_nodes
-        }
-        rb_evidence = self._rb_evidence_model(sampled, evidence)
+        context = self._gibbs_context(sampled, evidence)
+        discrete_nodes = context["discrete"]
         infer_dict = {
             "structure": self.arcs(),
             "evidence": dict(evidence),
@@ -1134,21 +1342,23 @@ class SemiParametricBayesianNetwork(
         }
 
         # Initialize the chains by forward sampling S (ancestor-closed) with the evidence clamped.
-        state = pd.DataFrame(
-            index=np.arange(n_chains), columns=sampled_order, dtype=float
-        )
+        state = pd.DataFrame(index=np.arange(n_chains))
         for node in sampled_order:
             if node in evidence:
-                state[node] = float(evidence[node])
-            else:
-                state[node] = (
-                    self.cpd(node)
-                    .sample(
-                        n_chains, self._parent_values(node, state), seed=_next_seed()
-                    )
-                    .to_pandas()
-                    .to_numpy(dtype=float)
+                state[node] = self._evidence_column(node, evidence[node], n_chains)
+                continue
+            values = (
+                self.cpd(node)
+                .sample(n_chains, self._parent_values(node, state), seed=_next_seed())
+                .to_pandas()
+            )
+            state[node] = (
+                pd.Categorical(
+                    values.astype(str), categories=context["categories"][node]
                 )
+                if node in discrete_nodes
+                else values.to_numpy(dtype=float)
+            )
 
         n_kept_sweeps = int(np.ceil(n_samples / n_chains))
         n_sweeps = burn_in + n_kept_sweeps * thinning
@@ -1158,16 +1368,14 @@ class SemiParametricBayesianNetwork(
 
         for sweep in range(n_sweeps):
             for node in free_nodes:
-                new_values, n_exact, n_changed = self._gibbs_update(
-                    node,
-                    state,
-                    kernels,
-                    lg_children[node],
-                    ckde_children[node],
-                    rng,
-                    max_rejection_tries,
-                    rb_evidence,
-                )
+                if node in discrete_nodes:
+                    new_values, n_exact, n_changed = self._gibbs_update_discrete(
+                        node, state, context, rng
+                    )
+                else:
+                    new_values, n_exact, n_changed = self._gibbs_update_continuous(
+                        node, state, context, rng, max_rejection_tries
+                    )
                 state[node] = new_values
                 exact[node] += n_exact
                 changed[node] += n_changed
@@ -1176,10 +1384,7 @@ class SemiParametricBayesianNetwork(
                 kept_states.append(state.copy())
 
         # The chains sample p(S | e), so the Rao-Blackwellized nodes only need p(R | S, e) and the evidence likelihood is not a weight.
-        all_assignments = pd.DataFrame(
-            np.concatenate([kept.to_numpy(dtype=float) for kept in kept_states]),
-            columns=sampled_order,
-        )
+        all_assignments = pd.concat(kept_states, ignore_index=True)[sampled_order]
         _, all_assignments, posterior_std = self._rao_blackwellize_clg(
             all_assignments, evidence, sampled
         )
@@ -1189,22 +1394,27 @@ class SemiParametricBayesianNetwork(
         # sweeps, whose rows are ordered sweep by sweep, i.e. (n_kept_sweeps, n_chains) per node
         n_kept = len(kept_states)
         query_nodes = [node for node in topo_order if node not in evidence]
-        draws = {
-            node: all_assignments[node].to_numpy(dtype=float).reshape(n_kept, n_chains)
-            for node in query_nodes
-        }
         assignments = all_assignments.iloc[:n_samples].reset_index(drop=True)
         # Only the first n_samples draws are returned, so the effective sample sizes are scaled accordingly
         kept_fraction = len(assignments) / len(all_assignments)
-        rhat = {node: self._split_rhat(draws[node]) for node in query_nodes}
-        effective_sample_size = {
-            node: kept_fraction * self._mcmc_effective_sample_size(draws[node])
-            for node in query_nodes
-        }
-        tail_effective_sample_size = {
-            node: kept_fraction * self._tail_effective_sample_size(draws[node])
-            for node in query_nodes
-        }
+        rhat, effective_sample_size, tail_effective_sample_size = {}, {}, {}
+        for node in query_nodes:
+            if node in discrete_nodes:
+                node_rhat, node_ess, node_tail_ess = self._discrete_diagnostics(
+                    all_assignments[node], context["categories"][node], n_kept, n_chains
+                )
+            else:
+                draws = (
+                    all_assignments[node]
+                    .to_numpy(dtype=float)
+                    .reshape(n_kept, n_chains)
+                )
+                node_rhat = self._split_rhat(draws)
+                node_ess = self._mcmc_effective_sample_size(draws)
+                node_tail_ess = self._tail_effective_sample_size(draws)
+            rhat[node] = node_rhat
+            effective_sample_size[node] = kept_fraction * node_ess
+            tail_effective_sample_size[node] = kept_fraction * node_tail_ess
         # Without free sampled nodes every row is the exact posterior, so there is nothing to diagnose
         if len(free_nodes) > 0:
             self._warn_diagnostics(rhat, effective_sample_size)
