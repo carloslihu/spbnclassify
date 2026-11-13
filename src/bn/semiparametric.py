@@ -246,11 +246,11 @@ class SemiParametricBayesianNetwork(
         assignments: pd.DataFrame,
         evidence: dict[str, float],
         sampled_nodes: set[str],
-    ) -> tuple[np.ndarray, pd.DataFrame, dict[str, float]]:
+    ) -> tuple[np.ndarray, pd.DataFrame, dict[str, float | np.ndarray]]:
         """Rao-Blackwellizes the non-sampled LinearGaussian nodes R given the sampled values S of each row (see ``_clg_conditional``).
         With E the evidence nodes of R and Q the rest, the Gaussian conditioning gives in closed form:
             - log p(e_E | S), the evidence log-likelihood marginalizing Q.
-            - Q | S, e_E ~ N(m_Q + K (e_E - m_E), Sigma_QQ - K Sigma_EQ) with K = Sigma_QE Sigma_EE^-1, whose covariance does not depend on S.
+            - Q | S, e_E ~ N(m_Q + K (e_E - m_E), Sigma_QQ - K Sigma_EQ) with K = Sigma_QE Sigma_EE^-1, whose covariance does not depend on the continuous values of S (only on the discrete parents of R).
 
         Args:
             assignments (pd.DataFrame): Sampled assignments (one row per sample).
@@ -422,12 +422,12 @@ class SemiParametricBayesianNetwork(
         point: pd.Series,
         assignments: pd.DataFrame,
         weights: np.ndarray,
-        posterior_std: dict[str, float],
+        posterior_std: dict[str, float | np.ndarray],
         effective_sample_size: float | None = None,
     ) -> float:
         """Estimates the posterior density of ``query_node`` at ``point`` from weighted samples (the posterior probability of the category ``point[query_node]`` for discrete nodes).
         Sampled columns use a weighted Gaussian KDE, Rao-Blackwellized CLG columns (the keys of ``posterior_std``)
-        a weighted mixture of their CLG posteriors N(posterior mean of the row, posterior std).
+        a weighted mixture of their CLG posteriors N(posterior mean of the row, posterior std of the row).
         ``effective_sample_size`` overrides the importance-sampling n_eff = 1 / sum(w**2) of the bandwidth (e.g., the autocorrelation-aware ESS of MCMC samples).
         """
 
@@ -459,7 +459,8 @@ class SemiParametricBayesianNetwork(
                 dtype=float
             )
         elif query_node in posterior_std:
-            # Rao-Blackwellized CLG nodes: the rows hold the posterior means, and the posterior std is shared by all rows
+            # Rao-Blackwellized CLG nodes: the rows hold the posterior means, and the posterior std is a float shared by all rows
+            # or a per-row array if it depends on the discrete parents of R
             kernel_values = norm.pdf(
                 float(point[query_node]),
                 loc=assignments[query_node].to_numpy(dtype=float),
@@ -490,7 +491,7 @@ class SemiParametricBayesianNetwork(
         """
         Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
         Both support discrete nodes (e.g., the class label of a classifier) and are Rao-Blackwellized: only the CKDE and discrete nodes and their ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
-        The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows).
+        The assignments of the Rao-Blackwellized nodes hold their posterior mean per row, and ``posterior_std`` their posterior std (the same for all rows, or per row if it depends on the discrete parents of the Rao-Blackwellized nodes).
         See ``_infer_lw`` and ``_infer_gibbs`` for the details of each method.
         Args:
             evidence (dict[str, float], optional): A dictionary mapping node names to their observed values (hard evidence only), e.g. {"A": 1.2, "D": -0.4} (categories for the discrete nodes, e.g. {"C": "u"}). Defaults to an empty dictionary.
@@ -536,7 +537,7 @@ class SemiParametricBayesianNetwork(
     ) -> dict[str, dict]:
         """
         Performs likelihood weighting inference on the Bayesian network using the provided evidence.
-        It is Rao-Blackwellized: only the CKDE nodes and their LinearGaussian ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
+        It is Rao-Blackwellized: only the CKDE and discrete nodes and their ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
         The weights include the evidence likelihood of the sampled nodes and the marginal likelihood of the evidence on the remaining LinearGaussian nodes.
         Args:
             evidence (dict[str, float]): A dictionary mapping node names to their observed values (hard evidence only).
@@ -558,7 +559,7 @@ class SemiParametricBayesianNetwork(
             "parameters": {},
         }
 
-        # CKDE nodes and their CLG ancestors are sampled, the rest of CLG nodes are Rao-Blackwellized.
+        # CKDE and discrete nodes and their ancestors are sampled, the rest of CLG nodes are Rao-Blackwellized.
         sampled = self._sampled_nodes()
 
         # Sample variables in topological order and accumulate log weights.
@@ -923,7 +924,7 @@ class SemiParametricBayesianNetwork(
         q(x) = p(x | pa) * prod_{LG children} p(c | .) * p(e_E | S) is a Gaussian mixture sampled exactly, where p(e_E | S)
         is the evidence likelihood of the integrated-out LinearGaussian nodes (see ``_rb_evidence_gaussian``). CKDE children
         g(x) = prod_{CKDE children} p(c | .), evaluated with their cached mixtures (``_mixture_logl``), are handled by
-        rejection sampling with the bound g <= B, and the chains
+        rejection sampling with the bound g <= G, and the chains
         still pending after ``max_rejection_tries`` rounds take one Metropolis-Hastings step with proposal q.
 
         Returns:
