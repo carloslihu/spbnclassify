@@ -1,4 +1,5 @@
 import json
+import warnings
 from abc import abstractmethod
 from collections import Counter
 from pathlib import Path
@@ -1672,6 +1673,24 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         with pytest.raises(ValueError, match="not a category"):
             bn.infer(evidence={"C": "w"}, method="gibbs")
 
+        # n_samples not a multiple of n_chains: the per-row posterior std of X (which depends on the class) is truncated
+        # to the returned rows, as the assignments
+        gs = bn.infer(
+            evidence={"K": k_value},
+            method="gibbs",
+            n_samples=1050,
+            n_chains=100,
+            burn_in=10,
+            seed=SEED,
+        )
+        posterior_std = gs["parameters"]["posterior_std"]["X"]
+        assert len(gs["parameters"]["assignments"]) == 1050
+        assert isinstance(posterior_std, np.ndarray) and len(posterior_std) == 1050
+        actual = bn.posterior(
+            "X", {"K": k_value}, point, infer_dict=gs, method="gibbs"
+        )
+        assert np.isfinite(actual) and actual > 0
+
     def test_infer_gibbs_hybrid_matches_LW(self) -> None:
         """Test Gibbs sampling against likelihood weighting on a hybrid network: a discrete chain C -> D, an HCKDE K with
         both as parents and a CKDE child Z, and CLinearGaussian nodes X <- {K, C} and Y <- {X, D} that are Rao-Blackwellized.
@@ -1886,6 +1905,11 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         # Degenerate likelihood weights
         with pytest.warns(RuntimeWarning, match="Effective sample size"):
             bn.infer(evidence={"F": 0.9}, n_samples=50, seed=SEED)
+
+        # Every sampled node observed: the weights are equal and the estimate exact, so no warning even with few samples
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            bn.infer(evidence={"A": 0.0, "B": 0.0, "F": 0.0}, n_samples=50, seed=SEED)
 
         # Too few Gibbs samples (such short chains also have a high R-hat)
         with (

@@ -617,8 +617,10 @@ class SemiParametricBayesianNetwork(
         # Normalize log weights to get importance weights.
         weights = np.exp(log_weights - logsumexp(log_weights))
         effective_sample_size = float(1.0 / np.sum(weights**2))
-        # Without sampled nodes every row is the exact posterior, so the sample size does not matter
-        if len(sampled) > 0 and effective_sample_size < MIN_EFFECTIVE_SAMPLE_SIZE:
+        # If every sampled node is observed (e.g., none is sampled), all weights are equal and every row is the exact
+        # posterior, so the sample size does not matter
+        has_free_sampled = any(node not in evidence for node in sampled)
+        if has_free_sampled and effective_sample_size < MIN_EFFECTIVE_SAMPLE_SIZE:
             warnings.warn(
                 f"Effective sample size {effective_sample_size:.1f} below {MIN_EFFECTIVE_SAMPLE_SIZE}: the weights are "
                 "degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable, increase n_samples.",
@@ -1070,9 +1072,11 @@ class SemiParametricBayesianNetwork(
         # Block of each free discrete node: its free continuous children in S (in topological order), which are proposed
         # again with the node by ``_gibbs_block_update``, and the nodes outside the block whose CPD depends on the block
         topo_order = list(self.graph().topological_sort())
+        categories = self._categories()
         blocks, block_scores = {}, {}
         for node in sampled:
-            if node not in discrete or node in evidence:
+            # Block moves need another category to propose
+            if node not in discrete or node in evidence or len(categories[node]) < 2:
                 continue
             block = [
                 c
@@ -1096,7 +1100,7 @@ class SemiParametricBayesianNetwork(
             "sampled": sampled,
             "evidence": evidence,
             "discrete": discrete,
-            "categories": self._categories(),
+            "categories": categories,
             "discrete_parents": discrete_parents,
             "children": children,
             "has_rb_evidence": has_rb_evidence,
@@ -1547,6 +1551,11 @@ class SemiParametricBayesianNetwork(
         n_kept = len(kept_states)
         query_nodes = [node for node in topo_order if node not in evidence]
         assignments = all_assignments.iloc[:n_samples].reset_index(drop=True)
+        # The per-row posterior std (discrete parents of R) must match the returned rows
+        for node, std in posterior_std.items():
+            if isinstance(std, np.ndarray):
+                std = std[: len(assignments)]
+                posterior_std[node] = float(std[0]) if np.all(std == std[0]) else std
         # Only the first n_samples draws are returned, so the effective sample sizes are scaled accordingly
         kept_fraction = len(assignments) / len(all_assignments)
         rhat, effective_sample_size, tail_effective_sample_size = {}, {}, {}
