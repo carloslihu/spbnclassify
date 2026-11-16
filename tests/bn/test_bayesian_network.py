@@ -1173,6 +1173,213 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         assert abs(lw_mean - prior_mean) > 0.5
         np.testing.assert_allclose(gs_mean, lw_mean, atol=0.1)
 
+    def test_sampled_nodes_rao_blackwellize(self) -> None:
+        """Test that disabling Rao-Blackwellization samples every node (S = X, R = ∅)."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        assert bn._sampled_nodes() == {"A", "B", "F"}
+        assert bn._sampled_nodes(rao_blackwellize=True) == {"A", "B", "F"}
+        sampled = bn._sampled_nodes(rao_blackwellize=False)
+        assert sampled == set(bn.nodes())
+        assert bn._rb_nodes(sampled) == []
+
+    def test_infer_lw_without_rao_blackwellization(self) -> None:
+        """Test plain likelihood weighting: every node is sampled, the weights are the evidence likelihood of all the
+        evidence nodes (LG ones included), and the posterior means converge to the brute-force reference."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"F": 0.9, "D": 1.0}
+        lw = bn.infer(
+            evidence=evidence, n_samples=2000, seed=SEED, rao_blackwellize=False
+        )
+        assert lw["method"] == "lw"
+        assert lw["rao_blackwellize"] is False
+        parameters = lw["parameters"]
+        assignments = parameters["assignments"]
+        assert parameters["posterior_std"] == {}
+
+        # The LG query nodes hold samples (not a shared posterior mean given the parents)
+        assert assignments["E"].nunique() == len(assignments)
+
+        log_weights = np.zeros(len(assignments))
+        for node in bn.graph().topological_sort():
+            if node in evidence:
+                log_weights += bn._node_logl(node, assignments)
+        expected = np.exp(log_weights - logsumexp(log_weights))
+        np.testing.assert_allclose(parameters["weights"], expected, rtol=1e-10)
+
+        reference = self._reference_means(bn, evidence)
+        estimates = []
+        for run in range(4):
+            parameters = bn.infer(
+                evidence=evidence,
+                n_samples=20000,
+                seed=SEED + 100 * run,
+                rao_blackwellize=False,
+            )["parameters"]
+            estimates.append(
+                [
+                    np.sum(parameters["weights"] * parameters["assignments"][node])
+                    for node in "ABCE"
+                ]
+            )
+        np.testing.assert_allclose(
+            np.mean(estimates, axis=0),
+            [reference[node] for node in "ABCE"],
+            atol=0.03,
+        )
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_infer_lw_rao_blackwellize_common_random_numbers(self) -> None:
+        """Test that the two arms differ only in Rao-Blackwellization: with the same seed the nodes sampled by both arms
+        draw from the same per-node streams, so they get identical values."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"D": 1.0}
+        rb = bn.infer(evidence=evidence, n_samples=300, seed=SEED)
+        plain = bn.infer(
+            evidence=evidence, n_samples=300, seed=SEED, rao_blackwellize=False
+        )
+        assert rb["rao_blackwellize"] is True
+        for node in ["A", "B", "F"]:
+            np.testing.assert_array_equal(
+                rb["parameters"]["assignments"][node].to_numpy(dtype=float),
+                plain["parameters"]["assignments"][node].to_numpy(dtype=float),
+            )
+        assert set(rb["parameters"]["posterior_std"]) == {"C", "E"}
+        assert plain["parameters"]["posterior_std"] == {}
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_infer_gibbs_without_rao_blackwellization(self) -> None:
+        """Test plain Gibbs sampling: every free node is updated and diagnosed, and the posterior means converge to the brute-force reference."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"F": 0.9, "D": 1.0}
+        reference = self._reference_means(bn, evidence)
+        estimates = []
+        for run in range(2):
+            gs = bn.infer(
+                method="gibbs",
+                evidence=evidence,
+                n_samples=4000,
+                n_chains=100,
+                burn_in=100,
+                seed=SEED + run,
+                rao_blackwellize=False,
+            )
+            assert gs["rao_blackwellize"] is False
+            parameters = gs["parameters"]
+            free_nodes = set(bn.nodes()) - set(evidence)
+            assert parameters["posterior_std"] == {}
+            assert set(parameters["acceptance_rate"]) == free_nodes
+            assert set(parameters["rhat"]) == free_nodes
+            # The LG nodes C and E are sampled exactly from their Gaussian full conditionals
+            assert parameters["exact_rate"]["E"] == 1.0
+            assert parameters["assignments"]["E"].nunique() > 1000
+            estimates.append(
+                [parameters["assignments"][node].mean() for node in "ABCE"]
+            )
+        np.testing.assert_allclose(
+            np.mean(estimates, axis=0),
+            [reference[node] for node in "ABCE"],
+            atol=0.08,
+        )
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_infer_gibbs_without_rao_blackwellization_has_no_block_moves(
+        self,
+    ) -> None:
+        """Test that plain Gibbs sampling uses single-site updates only: the block moves of the discrete nodes are disabled."""
+        rng = np.random.default_rng(SEED)
+        n = 500
+        c = rng.choice(["u", "v"], size=n)
+        shift = np.where(c == "u", -1.0, 1.0)
+        df = pd.DataFrame(
+            {
+                "C": pd.Categorical(c),
+                "A": shift + rng.normal(size=n),
+                "B": shift + rng.normal(size=n),
+            }
+        )
+        bn = SemiParametricBayesianNetwork(true_label="C")
+        for node in df.columns:
+            bn.add_node(node)
+        bn.add_arc("C", "A")
+        bn.add_arc("C", "B")
+        bn.set_node_type("C", pbn.DiscreteFactorType())
+        for node in ["A", "B"]:
+            bn.set_node_type(node, pbn.CKDEType())
+        pbn.SemiparametricBN.fit(bn, df)
+
+        kwargs = dict(
+            evidence={"B": 0.4},
+            method="gibbs",
+            n_samples=200,
+            n_chains=20,
+            burn_in=10,
+            seed=SEED,
+        )
+        rb = bn.infer(**kwargs)
+        plain = bn.infer(**kwargs, rao_blackwellize=False)
+        assert set(rb["parameters"]["block_acceptance_rate"]) == {"C"}
+        assert plain["parameters"]["block_acceptance_rate"] == {}
+        assert set(plain["parameters"]["acceptance_rate"]) == {"A", "C"}
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_posterior_rao_blackwellize_validation(self) -> None:
+        """Test that posterior rejects an infer_dict computed with a different rao_blackwellize, and uses a KDE without it."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
+        evidence = {"D": 2.0}
+        point = pd.Series({"E": 0.0})
+        rb = bn.infer(evidence=evidence, n_samples=200, seed=SEED)
+        plain = bn.infer(
+            evidence=evidence, n_samples=200, seed=SEED, rao_blackwellize=False
+        )
+        with pytest.raises(ValueError, match="different rao_blackwellize"):
+            bn.posterior("E", evidence, point, infer_dict=rb, rao_blackwellize=False)
+        with pytest.raises(ValueError, match="different rao_blackwellize"):
+            bn.posterior("E", evidence, point, infer_dict=plain)
+
+        density = bn.posterior(
+            "E", evidence, point, infer_dict=plain, rao_blackwellize=False
+        )
+        recomputed = bn.posterior(
+            "E", evidence, point, n_samples=200, seed=SEED, rao_blackwellize=False
+        )
+        assert np.isfinite(density) and density > 0
+        np.testing.assert_allclose(density, recomputed, rtol=1e-12)
+
+    def test_infer_lw_seed_streams_independent(self) -> None:
+        """Test that likelihood weighting runs with consecutive seeds are independent and reproducible.
+        Regression: with seed + node_index, run s + 1 at node i reused the stream of run s at node i + 1, so two root LG nodes
+        were perfectly correlated across the runs."""
+        rng = np.random.default_rng(SEED)
+        n = 500
+        df = pd.DataFrame({"X": rng.normal(size=n), "Y": rng.normal(size=n)})
+        bn = SemiParametricBayesianNetwork(true_label="Y")
+        for node in df.columns:
+            bn.add_node(node)
+            bn.set_node_type(node, pbn.LinearGaussianCPDType())
+        pbn.SemiparametricBN.fit(bn, df)
+        first, second = list(bn.graph().topological_sort())
+
+        def _draws(seed: int) -> pd.DataFrame:
+            return bn.infer(n_samples=2000, seed=seed, rao_blackwellize=False)[
+                "parameters"
+            ]["assignments"].astype(float)
+
+        # Reproducible for the same seed
+        pd.testing.assert_frame_equal(_draws(SEED), _draws(SEED))
+
+        run, next_run = _draws(SEED), _draws(SEED + 1)
+        for a, b in [
+            (next_run[first], run[second]),
+            (run[first], next_run[first]),
+            (run[first], run[second]),
+        ]:
+            assert abs(np.corrcoef(a, b)[0, 1]) < 0.15
+
+        # The across-repetition spread of the mean matches the Monte Carlo standard error sigma / sqrt(n)
+        means = np.array([_draws(seed)[first].mean() for seed in range(30)])
+        standard_error = np.sqrt(bn.cpd(first).variance / 2000)
+        assert 0.6 < means.std(ddof=1) / standard_error < 1.5
+
     def test_infer_effective_sample_size(self, tmp_path: Path) -> None:
         """Test the likelihood weighting effective sample size, its warning and its JSON export."""
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})

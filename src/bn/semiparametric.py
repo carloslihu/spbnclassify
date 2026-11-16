@@ -160,10 +160,13 @@ class SemiParametricBayesianNetwork(
             )
         return pd.Categorical([value] * n_rows, categories=categories)
 
-    def _sampled_nodes(self) -> set[str]:
+    def _sampled_nodes(self, rao_blackwellize: bool = True) -> set[str]:
         """Returns the CKDE and discrete nodes and their ancestors, i.e. the ancestor-closed set that must be sampled
-        to keep the topological order in likelihood weighting. The rest are LinearGaussian nodes, which are Rao-Blackwellized
+        to keep the topological order in likelihood weighting. The rest are LinearGaussian nodes, which are Rao-Blackwellized.
+        With ``rao_blackwellize=False`` every node is sampled (S = X, R = ∅), i.e. plain likelihood weighting / Gibbs sampling.
         """
+        if not rao_blackwellize:
+            return set(self.nodes())
         sampled = {
             node
             for node in self.nodes()
@@ -173,6 +176,11 @@ class SemiParametricBayesianNetwork(
             if node in sampled:
                 sampled.update(self.parents(node))
         return sampled
+
+    @staticmethod
+    def _stream_seed(seed_sequence: np.random.SeedSequence) -> int:
+        """Integer seed in [0, 2**31 - 1) for the pybnesian samplers drawn from an independent ``SeedSequence`` stream"""
+        return int(np.random.default_rng(seed_sequence).integers(2**31 - 1))
 
     def _rb_nodes(self, sampled_nodes: set[str]) -> list[str]:
         """Returns the non-sampled LinearGaussian nodes R in topological order"""
@@ -487,6 +495,7 @@ class SemiParametricBayesianNetwork(
         burn_in: int = 100,
         thinning: int = 1,
         max_rejection_tries: int = 10,
+        rao_blackwellize: bool = True,
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
@@ -504,8 +513,11 @@ class SemiParametricBayesianNetwork(
             burn_in (int, optional): The number of initial sweeps discarded in each chain. Only used when method="gibbs". Defaults to 100.
             thinning (int, optional): Keep one sweep every ``thinning`` sweeps after burn-in. Only used when method="gibbs". Defaults to 1.
             max_rejection_tries (int, optional): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings. Only used when method="gibbs". Defaults to 10.
+            rao_blackwellize (bool, optional): If True (default), the LinearGaussian nodes outside the ancestors of the CKDE and discrete nodes are Rao-Blackwellized (RBLW / RBGS).
+                If False, every node is sampled (S = X, R = ∅), i.e. plain likelihood weighting / single-site Gibbs sampling without block moves, which is the non-Rao-Blackwellized
+                baseline: everything else (seeding, sweeps, diagnostics) is identical. Defaults to True.
         Returns:
-            dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence, the method and the parameters of the inference results.
+            dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence, the method, ``rao_blackwellize`` and the parameters of the inference results.
             The parameters include the normalized weights (uniform for Gibbs sampling), the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and the diagnostics of the method:
                 - "lw": the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``).
                 - "gibbs": per node ``exact_rate``, ``acceptance_rate``, ``rhat``, ``effective_sample_size`` and ``tail_effective_sample_size``.
@@ -514,7 +526,7 @@ class SemiParametricBayesianNetwork(
             ValueError: If ``method`` is not "lw" or "gibbs".
         """
         if method == "lw":
-            infer_dict = self._infer_lw(evidence, n_samples, seed)
+            infer_dict = self._infer_lw(evidence, n_samples, seed, rao_blackwellize)
         elif method == "gibbs":
             infer_dict = self._infer_gibbs(
                 evidence,
@@ -524,6 +536,7 @@ class SemiParametricBayesianNetwork(
                 thinning,
                 seed,
                 max_rejection_tries,
+                rao_blackwellize,
             )
         else:
             raise ValueError(
@@ -533,16 +546,22 @@ class SemiParametricBayesianNetwork(
         return infer_dict
 
     def _infer_lw(
-        self, evidence: dict[str, float], n_samples: int, seed: int
+        self,
+        evidence: dict[str, float],
+        n_samples: int,
+        seed: int,
+        rao_blackwellize: bool = True,
     ) -> dict[str, dict]:
         """
         Performs likelihood weighting inference on the Bayesian network using the provided evidence.
-        It is Rao-Blackwellized: only the CKDE and discrete nodes and their ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
+        By default it is Rao-Blackwellized: only the CKDE and discrete nodes and their ancestors are sampled, and the remaining LinearGaussian nodes are replaced by their exact CLG posterior.
         The weights include the evidence likelihood of the sampled nodes and the marginal likelihood of the evidence on the remaining LinearGaussian nodes.
+        Each node draws from its own independent stream spawned from ``np.random.SeedSequence(seed)``, so runs with different seeds are independent.
         Args:
             evidence (dict[str, float]): A dictionary mapping node names to their observed values (hard evidence only).
             n_samples (int): The number of samples to draw.
             seed (int): The random seed for reproducibility.
+            rao_blackwellize (bool, optional): If False, every node is sampled (plain likelihood weighting). Defaults to True.
         Returns:
             dict[str, dict]: The inference results (see ``infer``). The parameters include the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``).
             A small n_eff compared to ``n_samples`` means the weights are degenerate (e.g., unlikely evidence on the sampled nodes), so the estimates are unreliable
@@ -556,11 +575,19 @@ class SemiParametricBayesianNetwork(
             "structure": self.arcs(),
             "evidence": dict(evidence),
             "method": "lw",
+            "rao_blackwellize": rao_blackwellize,
             "parameters": {},
         }
 
         # CKDE and discrete nodes and their ancestors are sampled, the rest of CLG nodes are Rao-Blackwellized.
-        sampled = self._sampled_nodes()
+        sampled = self._sampled_nodes(rao_blackwellize)
+
+        # One independent stream per node (indexed by topological position): seed + node_index would make run r at node i
+        # reuse the stream of run r + 1 at node i - 1, correlating repetitions with consecutive seeds.
+        node_seeds = [
+            self._stream_seed(child)
+            for child in np.random.SeedSequence(seed).spawn(len(topo_order))
+        ]
 
         # Sample variables in topological order and accumulate log weights.
         for node_index, node in enumerate(topo_order):
@@ -578,7 +605,7 @@ class SemiParametricBayesianNetwork(
                 assignments[node] = cpd.sample(
                     n_samples,
                     self._parent_values(node, assignments),
-                    seed=seed + node_index,
+                    seed=node_seeds[node_index],
                 ).to_pandas()
 
         # Evidence on the Rao-Blackwellized CLG nodes, with their non-evidence nodes marginalized.
@@ -618,6 +645,7 @@ class SemiParametricBayesianNetwork(
         n_chains: int = 100,
         burn_in: int = 100,
         thinning: int = 1,
+        rao_blackwellize: bool = True,
     ) -> float:
         """
         Approximate the posterior density of query nodes at ``point`` using likelihood weighting (``method="lw"``) or Gibbs sampling (``method="gibbs"``).
@@ -645,6 +673,8 @@ class SemiParametricBayesianNetwork(
             The number of initial sweeps discarded in each chain. Only used when method="gibbs". Defaults to 100.
         thinning : int
             Keep one sweep every ``thinning`` sweeps after burn-in. Only used when method="gibbs". Defaults to 1.
+        rao_blackwellize : bool
+            If False, every node is sampled and its density is a KDE (plain likelihood weighting / Gibbs sampling, see ``infer``). Defaults to True.
         Returns
         -------
         float
@@ -653,7 +683,7 @@ class SemiParametricBayesianNetwork(
         Raises
         ------
         ValueError
-            If the query node is in the evidence, or if ``infer_dict`` was computed with a different evidence or method.
+            If the query node is in the evidence, or if ``infer_dict`` was computed with a different evidence, method or ``rao_blackwellize``.
         """
         if query_node in evidence:
             raise ValueError("Query node and evidence nodes must be disjoint.")
@@ -661,6 +691,14 @@ class SemiParametricBayesianNetwork(
             raise ValueError("infer_dict was computed with a different evidence.")
         if infer_dict != {} and infer_dict.get("method") != method:
             raise ValueError("infer_dict was computed with a different method.")
+        # Older/hand-built dicts without the key are Rao-Blackwellized
+        if (
+            infer_dict != {}
+            and infer_dict.get("rao_blackwellize", True) != rao_blackwellize
+        ):
+            raise ValueError(
+                "infer_dict was computed with a different rao_blackwellize."
+            )
         if infer_dict == {}:
             infer_dict = self.infer(
                 evidence=evidence,
@@ -670,6 +708,7 @@ class SemiParametricBayesianNetwork(
                 n_chains=n_chains,
                 burn_in=burn_in,
                 thinning=thinning,
+                rao_blackwellize=rao_blackwellize,
             )
 
         # The Gibbs KDE bandwidth uses the autocorrelation-aware effective sample size of the query node
@@ -1389,6 +1428,7 @@ class SemiParametricBayesianNetwork(
         thinning: int,
         seed: int,
         max_rejection_tries: int,
+        rao_blackwellize: bool = True,
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
@@ -1408,6 +1448,8 @@ class SemiParametricBayesianNetwork(
             thinning (int): Keep one sweep every ``thinning`` sweeps after burn-in.
             seed (int): The random seed for reproducibility.
             max_rejection_tries (int): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings.
+            rao_blackwellize (bool, optional): If False, plain (standard) Gibbs sampling: every node is sampled (S = X, R = ∅) with single-site
+                updates only, i.e. without the block moves of the discrete nodes. Defaults to True.
         Returns:
             dict[str, dict]: The inference results (see ``infer``). The parameters include the (uniform) weights and:
                 - ``exact_rate`` (per sampled node): the fraction of exact draws from the full conditional.
@@ -1429,16 +1471,20 @@ class SemiParametricBayesianNetwork(
 
         topo_order = list(self.graph().topological_sort())
         # Only the ancestor-closed set S of CKDE and discrete nodes and their ancestors is sampled, the rest is integrated out.
-        sampled = self._sampled_nodes()
+        sampled = self._sampled_nodes(rao_blackwellize)
         sampled_order = [node for node in topo_order if node in sampled]
         free_nodes = [node for node in sampled_order if node not in evidence]
         # Children outside S are integrated out, and their evidence enters through p(e_R | S)
         context = self._gibbs_context(sampled, evidence)
+        if not rao_blackwellize:
+            # Standard Gibbs sampling: single-site updates only, no block moves
+            context["blocks"], context["block_scores"] = {}, {}
         discrete_nodes = context["discrete"]
         infer_dict = {
             "structure": self.arcs(),
             "evidence": dict(evidence),
             "method": "gibbs",
+            "rao_blackwellize": rao_blackwellize,
             "parameters": {},
         }
 
