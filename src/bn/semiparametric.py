@@ -424,6 +424,28 @@ class SemiParametricBayesianNetwork(
                 stacklevel=4,
             )
 
+    @staticmethod
+    def _kde_bandwidth(
+        samples: np.ndarray,
+        weights: np.ndarray,
+        effective_sample_size: float | None = None,
+    ) -> float:
+        """Weighted Silverman's rule of thumb h = 1.06 * std_w * n_eff**(-1/5) of the posterior KDE, with the effective sample
+        size n_eff = 1 / sum(w**2) unless a finite ``effective_sample_size`` is given (e.g., the MCMC ESS). If h is not finite
+        or not positive (e.g., all the samples are equal), h = max(std_w, 1).
+        """
+        weighted_mean = np.sum(weights * samples)
+        weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
+        n_eff = (
+            effective_sample_size
+            if effective_sample_size is not None and np.isfinite(effective_sample_size)
+            else 1.0 / np.sum(weights**2)
+        )
+        bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
+        if not np.isfinite(bandwidth) or bandwidth <= 0:
+            bandwidth = max(weighted_std, 1.0)
+        return float(bandwidth)
+
     def _posterior_density(
         self,
         query_node: str,
@@ -440,18 +462,7 @@ class SemiParametricBayesianNetwork(
         """
 
         def _kernel_values(samples: np.ndarray) -> np.ndarray:
-            # Weighted Silverman’s rule of thumb: 1.06 * std_w * n_eff**(-1/5), with the effective sample size n_eff = 1 / sum(w**2) by default
-            weighted_mean = np.sum(weights * samples)
-            weighted_std = np.sqrt(np.sum(weights * (samples - weighted_mean) ** 2))
-            n_eff = (
-                effective_sample_size
-                if effective_sample_size is not None
-                and np.isfinite(effective_sample_size)
-                else 1.0 / np.sum(weights**2)
-            )
-            bandwidth = 1.06 * weighted_std * (n_eff ** (-1.0 / 5.0))
-            if not np.isfinite(bandwidth) or bandwidth <= 0:
-                bandwidth = max(weighted_std, 1.0)
+            bandwidth = self._kde_bandwidth(samples, weights, effective_sample_size)
 
             # Computes Gaussian kernel values at the target point[query_node]
             normalized_deltas = (float(point[query_node]) - samples) / bandwidth
@@ -496,6 +507,7 @@ class SemiParametricBayesianNetwork(
         thinning: int = 1,
         max_rejection_tries: int = 10,
         rao_blackwellize: bool = True,
+        block_moves: bool = True,
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
@@ -516,10 +528,12 @@ class SemiParametricBayesianNetwork(
             rao_blackwellize (bool, optional): If True (default), the LinearGaussian nodes outside the ancestors of the CKDE and discrete nodes are Rao-Blackwellized (RBLW / RBGS).
                 If False, every node is sampled (S = X, R = ∅), i.e. plain likelihood weighting / single-site Gibbs sampling without block moves, which is the non-Rao-Blackwellized
                 baseline: everything else (seeding, sweeps, diagnostics) is identical. Defaults to True.
+            block_moves (bool, optional): If False, the block moves of the discrete nodes are disabled (ablation of RBGS). Only used when method="gibbs"
+                and ``rao_blackwellize=True`` (standard Gibbs sampling never uses them). Defaults to True.
         Returns:
             dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence, the method, ``rao_blackwellize`` and the parameters of the inference results.
             The parameters include the normalized weights (uniform for Gibbs sampling), the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and the diagnostics of the method:
-                - "lw": the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``).
+                - "lw": the effective sample size n_eff = 1 / sum(w**2) (``effective_sample_size``) and the estimate of log f(e) (``log_evidence``).
                 - "gibbs": per node ``exact_rate``, ``acceptance_rate``, ``rhat``, ``effective_sample_size`` and ``tail_effective_sample_size``.
 
         Raises:
@@ -537,6 +551,7 @@ class SemiParametricBayesianNetwork(
                 seed,
                 max_rejection_tries,
                 rao_blackwellize,
+                block_moves,
             )
         else:
             raise ValueError(
@@ -632,6 +647,8 @@ class SemiParametricBayesianNetwork(
             "assignments": assignments,
             "posterior_std": posterior_std,
             "effective_sample_size": effective_sample_size,
+            # log of the mean unnormalized weight, the importance sampling estimate of log f(e)
+            "log_evidence": float(logsumexp(log_weights) - np.log(n_samples)),
         }
         return infer_dict
 
@@ -648,6 +665,7 @@ class SemiParametricBayesianNetwork(
         burn_in: int = 100,
         thinning: int = 1,
         rao_blackwellize: bool = True,
+        block_moves: bool = True,
     ) -> float:
         """
         Approximate the posterior density of query nodes at ``point`` using likelihood weighting (``method="lw"``) or Gibbs sampling (``method="gibbs"``).
@@ -677,6 +695,8 @@ class SemiParametricBayesianNetwork(
             Keep one sweep every ``thinning`` sweeps after burn-in. Only used when method="gibbs". Defaults to 1.
         rao_blackwellize : bool
             If False, every node is sampled and its density is a KDE (plain likelihood weighting / Gibbs sampling, see ``infer``). Defaults to True.
+        block_moves : bool
+            If False, the block moves of the discrete nodes are disabled (see ``infer``). Only used when method="gibbs". Defaults to True.
         Returns
         -------
         float
@@ -711,6 +731,7 @@ class SemiParametricBayesianNetwork(
                 burn_in=burn_in,
                 thinning=thinning,
                 rao_blackwellize=rao_blackwellize,
+                block_moves=block_moves,
             )
 
         # The Gibbs KDE bandwidth uses the autocorrelation-aware effective sample size of the query node
@@ -1433,6 +1454,7 @@ class SemiParametricBayesianNetwork(
         seed: int,
         max_rejection_tries: int,
         rao_blackwellize: bool = True,
+        block_moves: bool = True,
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
@@ -1454,6 +1476,7 @@ class SemiParametricBayesianNetwork(
             max_rejection_tries (int): Maximum rejection sampling rounds per update before falling back to Metropolis-Hastings.
             rao_blackwellize (bool, optional): If False, plain (standard) Gibbs sampling: every node is sampled (S = X, R = ∅) with single-site
                 updates only, i.e. without the block moves of the discrete nodes. Defaults to True.
+            block_moves (bool, optional): If False, the block moves of the discrete nodes are disabled. Defaults to True.
         Returns:
             dict[str, dict]: The inference results (see ``infer``). The parameters include the (uniform) weights and:
                 - ``exact_rate`` (per sampled node): the fraction of exact draws from the full conditional.
@@ -1480,8 +1503,8 @@ class SemiParametricBayesianNetwork(
         free_nodes = [node for node in sampled_order if node not in evidence]
         # Children outside S are integrated out, and their evidence enters through p(e_R | S)
         context = self._gibbs_context(sampled, evidence)
-        if not rao_blackwellize:
-            # Standard Gibbs sampling: single-site updates only, no block moves
+        if not rao_blackwellize or not block_moves:
+            # Standard Gibbs sampling (or the ablation without block moves): single-site updates only
             context["blocks"], context["block_scores"] = {}, {}
         discrete_nodes = context["discrete"]
         infer_dict = {
@@ -1489,6 +1512,7 @@ class SemiParametricBayesianNetwork(
             "evidence": dict(evidence),
             "method": "gibbs",
             "rao_blackwellize": rao_blackwellize,
+            "block_moves": block_moves,
             "parameters": {},
         }
 
