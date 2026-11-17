@@ -1725,6 +1725,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         classifier_sample_size=1000,
         classifier_reps=5,
     )
+    if args.experiment == "E7":
+        # One stratified reference per test instance, missing rate and classifier: 10**6 samples per class keeps it affordable
+        defaults.update(n_reference=1_000_000)
     if args.experiment == "E5":
         defaults.update(n_reps=5, sample_sizes=[1, 100, 1_000, 10_000, 100_000], gibbs_sample_sizes=[100, 1_000, 10_000])
     if args.quick:
