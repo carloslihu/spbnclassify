@@ -18,7 +18,7 @@ from helpers.data import (
     generate_normal_data,
 )
 from scipy.special import logsumexp
-from scipy.stats import norm
+from scipy.stats import multivariate_normal, norm
 from src.bn import (
     BayesianNetwork,
     DiscreteBayesianNetwork,
@@ -1069,6 +1069,80 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             )
             actual = bn.posterior(query_node, evidence, point, infer_dict=infer_dict)
             np.testing.assert_allclose(actual, expected, rtol=1e-8)
+
+    def test_infer_lw_log_evidence(self) -> None:
+        """Test that log_evidence is the exact log f(e) in a linear Gaussian network (nothing is sampled), and a consistent
+        estimate of it with plain likelihood weighting."""
+        bn = self._toy_bn({})
+        nodes = list(bn.graph().topological_sort())
+        index = {node: i for i, node in enumerate(nodes)}
+        intercepts = np.zeros(len(nodes))
+        variances = np.zeros(len(nodes))
+        coefficients = np.zeros((len(nodes), len(nodes)))
+        for node in nodes:
+            cpd = bn.cpd(node)
+            intercepts[index[node]] = cpd.beta[0]
+            variances[index[node]] = cpd.variance
+            for parent, coef in zip(cpd.evidence(), cpd.beta[1:]):
+                coefficients[index[node], index[parent]] = coef
+        A = np.linalg.inv(np.eye(len(nodes)) - coefficients)
+        joint_mean = A @ intercepts
+        joint_cov = (A * variances) @ A.T
+
+        evidence = {"B": 0.5, "E": 0.5}
+        evidence_index = [index[node] for node in evidence]
+        expected = multivariate_normal.logpdf(
+            list(evidence.values()),
+            mean=joint_mean[evidence_index],
+            cov=joint_cov[np.ix_(evidence_index, evidence_index)],
+        )
+        rb = bn.infer(evidence=evidence, n_samples=10, seed=SEED)
+        np.testing.assert_allclose(rb["parameters"]["log_evidence"], expected, rtol=1e-8)
+        plain = bn.infer(
+            evidence=evidence, n_samples=50000, seed=SEED, rao_blackwellize=False
+        )
+        np.testing.assert_allclose(
+            plain["parameters"]["log_evidence"], expected, atol=0.05
+        )
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_infer_gibbs_without_block_moves(self) -> None:
+        """Test that block_moves=False disables the block moves of RBGS and is recorded in the results."""
+        rng = np.random.default_rng(SEED)
+        n = 500
+        c = rng.choice(["u", "v"], size=n)
+        shift = np.where(c == "u", -1.0, 1.0)
+        df = pd.DataFrame(
+            {
+                "C": pd.Categorical(c),
+                "A": shift + rng.normal(size=n),
+                "B": shift + rng.normal(size=n),
+            }
+        )
+        bn = SemiParametricBayesianNetwork(true_label="C")
+        for node in df.columns:
+            bn.add_node(node)
+        bn.add_arc("C", "A")
+        bn.add_arc("C", "B")
+        bn.set_node_type("C", pbn.DiscreteFactorType())
+        for node in ["A", "B"]:
+            bn.set_node_type(node, pbn.CKDEType())
+        pbn.SemiparametricBN.fit(bn, df)
+
+        kwargs = dict(
+            evidence={"B": 0.4},
+            method="gibbs",
+            n_samples=200,
+            n_chains=20,
+            burn_in=10,
+            seed=SEED,
+        )
+        with_blocks = bn.infer(**kwargs)
+        without_blocks = bn.infer(**kwargs, block_moves=False)
+        assert with_blocks["block_moves"] is True
+        assert without_blocks["block_moves"] is False
+        assert set(with_blocks["parameters"]["block_acceptance_rate"]) == {"C"}
+        assert without_blocks["parameters"]["block_acceptance_rate"] == {}
 
     def test_rao_blackwellize_clg_evidence_logl(self) -> None:
         """Test the evidence log-likelihood of Rao-Blackwellized CLG nodes against closed-form Gaussian densities."""
