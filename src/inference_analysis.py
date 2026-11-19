@@ -9,6 +9,7 @@ Usage (from the library root):
 
 # region Imports
 import argparse
+import json
 import warnings
 from pathlib import Path
 
@@ -432,7 +433,102 @@ def analyze_comparison(
             output / "tables" / f"{prefix}_time_to_epsilon",
             caption=f"Ratio of the times needed to reach RMSE $\\leq {epsilon}$ (below 1 favors Rao--Blackwellization).",
         )
+    diagnostics_table(summary, output, prefix)
     return summary
+
+
+def diagnostics_table(summary: pd.DataFrame, output: Path, prefix: str) -> pd.DataFrame:
+    """Diagnostics of every method, query type and sample size (medians over the tasks): the normalized effective sample
+    size n_eff / N (importance sampling ESS for LW and RBLW, bulk ESS of the query for GS and RBGS), the ESS per second,
+    and for the Gibbs samplers the R-hat of the query, the maximum R-hat and the exact, acceptance and block acceptance
+    rates averaged over the variables"""
+    if "n_eff" not in summary:
+        return pd.DataFrame()
+    summary = summary.copy()
+    summary["neff_frac"] = summary["n_eff"] / summary["n_samples"]
+    summary["ess_per_second"] = summary["n_eff"] / summary["runtime"]
+    columns = [
+        c
+        for c in [
+            "neff_frac",
+            "ess_per_second",
+            "rhat",
+            "max_rhat",
+            "mean_exact_rate",
+            "mean_acceptance_rate",
+            "mean_block_acceptance_rate",
+        ]
+        if c in summary and summary[c].notna().any()
+    ]
+    table = (
+        summary.groupby(["method", "query_type", "n_samples"])[columns]
+        .median()
+        .reset_index()
+    )
+    save_table(
+        table,
+        output / "tables" / f"{prefix}_diagnostics",
+        caption="Diagnostics of the inference methods (medians over the tasks): $n_{\\mathrm{eff}} / N$, ESS per second, "
+        "$\\widehat{R}$ and the rates of the Gibbs samplers.",
+    )
+    return table
+
+
+def _read_jsonl(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.DataFrame([json.loads(line) for line in path.read_text().splitlines() if line.strip()])
+
+
+def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
+    """Fraction of the tasks discarded because their reference failed the checks of ``checked_reference`` (low ESS of the
+    LW reference, non-converged Gibbs chains, or disagreement between both estimates), per configuration and query type.
+    The configuration is the unit identifier without its network index (e.g., "frac_clg=0.3")."""
+    references = _read_jsonl(output / "references.jsonl")
+    tasks = _read_jsonl(output / "tasks.jsonl")
+    if not len(references) or (references["method"] == "none").all():
+        return pd.DataFrame()
+    references = references.merge(tasks[["task_id", "query_type"]], on="task_id", how="left")
+    unit = references["task_id"].str.split("/").str[0]
+    references["configuration"] = unit.str.replace(r"_\d+$", "", regex=True)
+    message = references["message"].fillna("")
+    references["low_ess"] = message.str.contains("ESS")
+    references["not_converged"] = message.str.contains("R-hat")
+    references["disagreement"] = message.str.contains("differ")
+    references["failed"] = ~references["ok"] & ~(
+        references["low_ess"] | references["not_converged"] | references["disagreement"]
+    )
+    table = (
+        references.groupby(["configuration", "query_type"])
+        .agg(
+            n_tasks=("ok", "size"),
+            n_kept=("ok", "sum"),
+            n_low_ess=("low_ess", "sum"),
+            n_not_converged=("not_converged", "sum"),
+            n_disagreement=("disagreement", "sum"),
+            n_failed=("failed", "sum"),
+        )
+        .reset_index()
+    )
+    table["frac_discarded"] = 1.0 - table["n_kept"] / table["n_tasks"]
+    total = table[["n_tasks", "n_kept", "n_low_ess", "n_not_converged", "n_disagreement", "n_failed"]].sum()
+    table = pd.concat(
+        [
+            table,
+            pd.DataFrame(
+                [{"configuration": "all", "query_type": "all", **total.to_dict(),
+                  "frac_discarded": 1.0 - total["n_kept"] / total["n_tasks"]}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    save_table(
+        table,
+        output / "tables" / f"{prefix}_reference_check",
+        caption="Tasks discarded because their reference failed the checks: low effective sample size of the LW reference, "
+        "non-converged Gibbs chains, disagreement between both estimates, or a numerical failure.",
+    )
+    return table
 
 
 def analyze_e1(results: pd.DataFrame, output: Path) -> None:
@@ -485,6 +581,25 @@ def analyze_e1(results: pd.DataFrame, output: Path) -> None:
         output / "figures" / "E1_rmse_vs_n",
         "E1: convergence to the reference",
     )
+
+
+# Order of the non-numeric levels of the regime factors
+LEVEL_ORDER = {"S": 0, "both": 1, "R": 2}
+
+
+def _sort_levels(table: pd.DataFrame) -> pd.DataFrame:
+    """Sorts the rows by factor and by the numeric value of the level (or ``LEVEL_ORDER``), so the levels are plotted in
+    their natural order (10, 20, 50, 100) instead of the string order (10, 100, 20, 50)"""
+    def _key(level) -> float:
+        try:
+            return float(level)
+        except (TypeError, ValueError):
+            return float(LEVEL_ORDER.get(str(level), len(LEVEL_ORDER)))
+
+    table = table.copy()
+    table["_level_key"] = table["level"].map(_key)
+    table = table.sort_values(["factor", "_level_key"], kind="stable").drop(columns="_level_key")
+    return table.reset_index(drop=True)
 
 
 def analyze_e3(results: pd.DataFrame, output: Path) -> None:
@@ -551,10 +666,28 @@ def analyze_e3(results: pd.DataFrame, output: Path) -> None:
         caption="Relative RMSE reduction per regime factor.",
     )
 
+    table = _sort_levels(table)
     factors = list(dict.fromkeys(table["factor"]))
+    # First row: relative RMSE reduction of both pairs; second row: n_eff / N of LW and RBLW
     fig, axes = plt.subplots(
-        1, len(factors), figsize=(3.4 * len(factors), 3.2), squeeze=False
+        2, len(factors), figsize=(3.4 * len(factors), 6.2), squeeze=False
     )
+    for ax, factor in zip(axes[1], factors):
+        by_factor = table[(table["factor"] == factor) & (table["pair"] == "RBLW vs LW")]
+        for method in ["LW", "RBLW"]:
+            column = f"neff_frac_{method}"
+            if column in by_factor:
+                ax.plot(
+                    by_factor["level"],
+                    by_factor[column],
+                    marker="o",
+                    label=method,
+                    color=METHOD_COLORS.get(method),
+                )
+        ax.set_yscale("log")
+        ax.set_xlabel(factor)
+        ax.set_ylabel("$n_{\\mathrm{eff}} / N$")
+        ax.legend(fontsize=7)
     for ax, factor in zip(axes[0], factors):
         by_factor = table[table["factor"] == factor]
         for pair, group in by_factor.groupby("pair"):
@@ -827,6 +960,7 @@ def analyze_e7(results: pd.DataFrame, output: Path) -> None:
 def analyze(experiment: str, input_dir: Path, epsilon: float) -> Path:
     output = input_dir / experiment
     results = load_results(output)
+    reference_check_table(output, experiment)
     match experiment:
         case "E1":
             analyze_e1(results, output)

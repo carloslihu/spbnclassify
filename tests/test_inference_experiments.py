@@ -234,3 +234,22 @@ def test_analyze_comparison(tmp_path: Path) -> None:
     assert (tmp_path / "figures" / "test_rmse_vs_time.png").exists()
     summary = task_summary(results)
     assert set(summary.columns) >= {"rmse", "rmse_se", "runtime"}
+
+
+def test_reference_check_table(tmp_path: Path) -> None:
+    """Test the fraction of discarded tasks and the reasons of the reference checks."""
+    from src.inference_analysis import reference_check_table
+
+    references = [
+        {"task_id": "frac_clg=0.3_0/clg_0", "method": "lw+gibbs", "ok": True, "message": ""},
+        {"task_id": "frac_clg=0.3_1/clg_0", "method": "lw+gibbs", "ok": False, "message": "LW reference ESS 12 < 1000"},
+        {"task_id": "frac_clg=0.3_1/s_continuous_0", "method": "lw+gibbs", "ok": False, "message": "Gibbs check R-hat 1.2 >= 1.01"},
+        {"task_id": "frac_clg=0.5_0/discrete_0", "method": "lw+stratified", "ok": False, "message": "LW and stratified_lw references differ by 0.1 > 0.01"},
+    ]
+    tasks = [{"task_id": r["task_id"], "query_type": r["task_id"].split("/")[1].rsplit("_", 1)[0]} for r in references]
+    for name, rows in [("references.jsonl", references), ("tasks.jsonl", tasks)]:
+        (tmp_path / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
+    table = reference_check_table(tmp_path, "test").set_index(["configuration", "query_type"])
+    assert table.loc[("frac_clg=0.3", "clg"), "frac_discarded"] == 0.5
+    assert table.loc[("all", "all"), ["n_low_ess", "n_not_converged", "n_disagreement", "n_kept"]].tolist() == [1, 1, 1, 1]
+    assert (tmp_path / "tables" / "test_reference_check.tex").exists()
