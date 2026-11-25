@@ -1,7 +1,6 @@
 """Figures, tables and statistical tests of the inference experiments (``inference_experiments.py``).
 
-Reads ``data/results/inference/<experiment>/results.csv`` and writes ``figures/`` (PNG/PDF) and ``tables/`` (CSV and
-booktabs LaTeX) in the same folder.
+Reads ``data/results/inference/<experiment>/results.csv`` and writes ``figures/`` (PNG/PDF) and ``tables/`` (CSV and booktabs LaTeX) in the same folder.
 
 Usage (from the library root):
     python -m src.inference_analysis E2 [--quick] [--epsilon 0.1]
@@ -11,8 +10,8 @@ Usage (from the library root):
 import argparse
 import json
 import warnings
-from typing import cast
 from pathlib import Path
+from typing import cast
 
 import matplotlib
 
@@ -35,7 +34,9 @@ RESULT_PATH = LIBRARY_ROOT_PATH / "data" / "results" / "inference"
 # Each Rao-Blackwellized method and its non-Rao-Blackwellized counterpart (hypotheses H1 and H2)
 PAIRS = [("LW", "RBLW"), ("GS", "RBGS")]
 METHOD_COLORS = {"LW": "#1976D2", "RBLW": "#FFB300", "GS": "#388E3C", "RBGS": "#D81B60"}
+# Number of bootstrap samples for the confidence intervals of the median relative RMSE reduction and the time ratios
 N_BOOTSTRAP = 2000
+# Number of budgets for the RMSE curves at common wall-clock times
 N_BUDGETS = 12
 # Errors below this tolerance are exact up to the precision of the reference (the grid integration error is ~1e-7)
 EXACT_TOLERANCE = 1e-5
@@ -43,9 +44,7 @@ EXACT_TOLERANCE = 1e-5
 
 # region Error aggregation
 def add_error_columns(results: pd.DataFrame) -> pd.DataFrame:
-    """Adds ``error``, the scalar error of every run: the normalized mean error for continuous queries and the maximum
-    absolute probability error for discrete queries (both are 0 for a perfect estimate)
-    """
+    """Adds ``error``, the scalar error of every run: the normalized mean error for continuous queries and the maximum absolute probability error for discrete queries (both are 0 for a perfect estimate)"""
     results = results.copy()
     if "err_mean" not in results:
         results["err_mean"] = np.nan
@@ -166,8 +165,8 @@ def rmse_at_budgets(
 
 
 def unit_of(task_ids: pd.Series) -> pd.Series:
-    """Unit of each task: the network (synthetic experiments) that it belongs to, i.e., the prefix of its
-    identifier before the first "/". Tasks of the same unit share the network, so they are not independent.
+    """Unit of each task: the network (synthetic experiments) that it belongs to, i.e., the prefix of its identifier before the first "/".
+    Tasks of the same unit share the network, so they are not independent.
     """
     return task_ids.astype(str).str.split("/").str[0]
 
@@ -175,8 +174,9 @@ def unit_of(task_ids: pd.Series) -> pd.Series:
 def unit_medians(
     df: pd.DataFrame, value_columns: list[str], keys: list[str]
 ) -> pd.DataFrame:
-    """Median over the tasks of each unit (see ``unit_of``) of ``value_columns``, per ``keys``. The paired tests use one
-    value per unit, so that the correlated tasks of a network count once."""
+    """Median over the tasks of each unit (see ``unit_of``) of ``value_columns``, per ``keys``.
+    The paired tests use one value per unit, so that the correlated tasks of a network count once.
+    """
     df = df.assign(unit=unit_of(df["task_id"]))
     return df.groupby(["unit", *keys])[value_columns].median().reset_index()
 
@@ -989,6 +989,7 @@ def analyze_e7(results: pd.DataFrame, output: Path) -> None:
 # endregion Experiment analyses
 
 
+# region Main
 def analyze(experiment: str, input_dir: Path, epsilon: float) -> Path:
     output = input_dir / experiment
     results = load_results(output)
@@ -1017,9 +1018,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "experiment", choices=["E1", "E2", "E3", "E4", "E5", "E7"]
-    )
+    parser.add_argument("experiment", choices=["E1", "E2", "E3", "E4", "E5", "E7"])
     parser.add_argument(
         "--quick", action="store_true", help="Analyze the results of a --quick run."
     )
@@ -1042,3 +1041,5 @@ if __name__ == "__main__":
     )
     path = analyze(args.experiment, input_dir, args.epsilon)
     print(f"Figures and tables in {path / 'figures'} and {path / 'tables'}")
+
+# endregion Main
