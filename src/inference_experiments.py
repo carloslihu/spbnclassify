@@ -13,7 +13,13 @@ Usage (from the library root):
 import os
 
 # The OpenCL device must be chosen before pybnesian is imported, and the BLAS threads fixed before numpy is imported
-from .opencl_device import opencl_device_name, select_most_available_gpu
+from .utils.opencl_device import (
+    assign_worker_device,
+    available_gpus,
+    opencl_device_name,
+    select_most_available_gpu,
+    worker_slots,
+)
 
 select_most_available_gpu()
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -24,6 +30,7 @@ import argparse
 import itertools
 import json
 import multiprocessing
+import pickle
 import time
 import traceback
 import warnings
@@ -100,6 +107,8 @@ REFERENCE_BATCH_SIZE = 100_000
 GRID_POINTS = {1: 4001, 2: 401, 3: 101}
 MIN_REFERENCE_ESS = 1000
 MAX_REFERENCE_RHAT = 1.01
+# Default parallel workers of the (untimed) reference stage
+DEFAULT_REFERENCE_WORKERS = 16
 # endregion Constants
 
 
@@ -1297,16 +1306,48 @@ def compute_reference(bn, task: Task, unit: UnitSpec, prior: pd.DataFrame) -> Re
     raise ValueError(f"Unknown reference {unit.reference!r}.")
 
 
-def run_unit(unit: UnitSpec, unit_path: Path) -> int:
-    """Runs a unit and writes its files to ``unit_path``; the ``done`` marker is written last, so an interrupted unit is
-    run again from scratch. Returns the number of result rows."""
-    if (unit_path / "done").exists():
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    with open(path, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row, default=_json_default) + "\n")
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _save_network(bn, path: Path) -> None:
+    with open(path, "wb") as f:
+        pickle.dump(bn, f, pickle.HIGHEST_PROTOCOL)
+
+
+def _load_network(path: Path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def _timing_device() -> dict:
+    """GPU (name and identifier) and CPU cores of the process that times the runs"""
+    cores = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
+    return {
+        "device": opencl_device_name(),
+        "device_id": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+        "cpu_cores": ",".join(map(str, cores)),
+    }
+
+
+def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
+    """Reference stage of a unit, which is not timed and can run fully in parallel: builds the network (generated, learned
+    or fitted), draws the tasks and computes their references, and writes ``network.pkl``, ``network.json``,
+    ``tasks.jsonl`` and ``references.jsonl``. The ``references_done`` marker is written last, so an interrupted stage is
+    run again. Returns the number of tasks (-1 if the stage was already done)."""
+    if (unit_path / "references_done").exists():
         return -1
     unit_path.mkdir(parents=True, exist_ok=True)
     if unit.kind == "classifier":
-        rows = run_classifier_unit(unit, unit_path)
-        (unit_path / "done").touch()
-        return rows
+        n_tasks = prepare_classifier_unit(unit, unit_path)
+        (unit_path / "references_done").touch()
+        return n_tasks
 
     test = None
     if unit.kind == "dataset":
@@ -1316,10 +1357,7 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
     else:
         bn, info = build_network(unit)
     info.update({"unit_id": unit.unit_id, "kind": unit.kind, **unit.factors})
-    info["device"] = opencl_device_name()
-    sizes = ckde_sizes(bn)
     prior = bn.sample(unit.n_prior, seed=unit.seed)
-    tasks = []
     if unit.kind == "dataset":
         tasks = dataset_tasks(bn, unit, test)
     else:
@@ -1333,13 +1371,47 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
             id_prefix=f"{unit.unit_id}/",
             query_candidates=unit.extra.get("query_candidates"),
         )
+    references = [compute_reference(bn, task, unit, prior) for task in tasks]
+
+    _save_network(bn, unit_path / "network.pkl")
+    with open(unit_path / "network.json", "w") as f:
+        json.dump(info, f, default=_json_default, indent=2)
+    _write_jsonl(unit_path / "tasks.jsonl", [asdict(task) for task in tasks])
+    _write_jsonl(
+        unit_path / "references.jsonl",
+        [{"task_id": t.task_id, **asdict(r)} for t, r in zip(tasks, references)],
+    )
+    (unit_path / "references_done").touch()
+    return len(tasks)
+
+
+def run_unit(unit: UnitSpec, unit_path: Path) -> int:
+    """Timed stage of a unit: runs the inference methods on the tasks of ``prepare_unit`` (computing them first if needed)
+    and writes ``results.csv``. The ``done`` marker is written last, so an interrupted stage is run again. Returns the
+    number of result rows (-1 if the unit was already done)."""
+    if (unit_path / "done").exists():
+        return -1
+    prepare_unit(unit, unit_path)
+    if unit.kind == "classifier":
+        rows = run_classifier_unit(unit, unit_path)
+        (unit_path / "done").touch()
+        return rows
+
+    bn = _load_network(unit_path / "network.pkl")
+    info = json.loads((unit_path / "network.json").read_text())
+    # The device that times the runs, which may differ from the one of the reference stage
+    info.update(_timing_device())
+    tasks = [Task(**row) for row in _read_jsonl(unit_path / "tasks.jsonl")]
+    references = {
+        row.pop("task_id"): Reference(**row)
+        for row in _read_jsonl(unit_path / "references.jsonl")
+    }
+    sizes = ckde_sizes(bn)
     gibbs_options = {**GIBBS_DEFAULTS, **unit.gibbs_options}
 
-    result_rows, task_rows, reference_rows = [], [], []
+    result_rows = []
     for task in tasks:
-        reference = compute_reference(bn, task, unit, prior)
-        task_rows.append(asdict(task))
-        reference_rows.append({"task_id": task.task_id, **asdict(reference)})
+        reference = references[task.task_id]
         if unit.reference != "none" and not reference.ok:
             continue
         base = {
@@ -1373,12 +1445,6 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
                     result_rows.append({**base, **row})
 
     pd.DataFrame(result_rows).to_csv(unit_path / "results.csv", index=False)
-    with open(unit_path / "tasks.jsonl", "w") as f:
-        for row in task_rows:
-            f.write(json.dumps(row, default=_json_default) + "\n")
-    with open(unit_path / "references.jsonl", "w") as f:
-        for row in reference_rows:
-            f.write(json.dumps(row, default=_json_default) + "\n")
     with open(unit_path / "network.json", "w") as f:
         json.dump(info, f, default=_json_default, indent=2)
     (unit_path / "done").touch()
@@ -1464,16 +1530,11 @@ CLASSIFIERS = {
 }
 
 
-def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
-    """E7: class posterior of an SPBN classifier with features missing completely at random, estimated with the inference methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior of the classifier.
-
-    E7 makes two comparisons on the task that motivates SPBN classifiers: predicting the class when some features are missing:
-    - RB vs non-RB inference (the paper's claim).
-    - Inference vs imputation (whether inference is needed at all).
-    Comparing log-loss, Brier score and accuracy against the true labels shows whether proper inference is worth its cost over the cheap shortcut.
-    """
-    from sklearn.impute import KNNImputer
-
+def prepare_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
+    """Reference stage of E7: fits the classifier, removes features of the test instances completely at random, and
+    computes the reference class posteriors with stratified likelihood weighting. Besides the files of ``prepare_unit``,
+    it writes ``train_features.csv`` (for the imputation baselines) and ``test_rows.csv`` (the selected test instances).
+    Returns the number of tasks."""
     dataset_name, model_name = unit.config["dataset"], unit.config["model"]
     train, test = load_dataset(
         dataset_name, unit.seed, unit.config.get("max_train_size", 2000)
@@ -1484,7 +1545,6 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     model_features = list(model.feature_names_in_)
     # Zero-variance features are not variables of the network, so they cannot be evidence
     network_features = [f for f in model_features if f in model.nodes()]
-    classes = [str(c) for c in model.classes_]
     info = describe_network(model)
     info.update(
         {
@@ -1494,22 +1554,16 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
             **unit.factors,
         }
     )
-    info["device"] = opencl_device_name()
-    sizes = ckde_sizes(model)
-    gibbs_options = {**GIBBS_DEFAULTS, **unit.gibbs_options}
-    imputers = {
-        "MeanImpute": train[model_features].mean(),
-        "kNNImpute": KNNImputer(n_neighbors=5).fit(train[model_features]),
-    }
 
     rng = np.random.default_rng(unit.seed + 1)
-    rows, task_rows, reference_rows = [], [], []
     test_indices = rng.choice(
         len(test), size=min(unit.n_tasks, len(test)), replace=False
     )
+    test_rows = test.iloc[test_indices].reset_index(drop=True)
+    tasks, references = [], []
     for missing_rate in unit.extra["missing_rates"]:
-        for task_index, row_index in enumerate(test_indices):
-            row = test.iloc[int(row_index)]
+        for task_index in range(len(test_rows)):
+            row = test_rows.iloc[task_index]
             missing = rng.random(len(network_features)) < missing_rate
             if missing.all():
                 missing[rng.integers(len(missing))] = False
@@ -1523,89 +1577,141 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 query=model.true_label,
                 query_type="discrete",
                 evidence=evidence,
-                factors={"missing_rate": missing_rate, "n_missing": int(missing.sum())},
+                factors={
+                    "missing_rate": missing_rate,
+                    "n_missing": int(missing.sum()),
+                    "test_row": task_index,
+                },
                 true_value=str(row[TRUE_CLASS_LABEL]),
             )
-            reference = stratified_class_reference(
-                model, task, unit.n_reference, unit.seed + 7919
+            tasks.append(task)
+            references.append(
+                stratified_class_reference(
+                    model, task, unit.n_reference, unit.seed + 7919
+                )
             )
-            task_rows.append(asdict(task))
-            reference_rows.append({"task_id": task.task_id, **asdict(reference)})
-            base = {
-                "unit_id": unit.unit_id,
-                "task_id": task.task_id,
-                "dataset": dataset_name,
-                "model": model_name,
-                "true_label": task.true_value,
-                **unit.factors,
-                **task.factors,
+
+    _save_network(model, unit_path / "network.pkl")
+    train[model_features].to_csv(unit_path / "train_features.csv", index=False)
+    test_rows.to_csv(unit_path / "test_rows.csv", index=False)
+    with open(unit_path / "network.json", "w") as f:
+        json.dump(info, f, default=_json_default, indent=2)
+    _write_jsonl(unit_path / "tasks.jsonl", [asdict(task) for task in tasks])
+    _write_jsonl(
+        unit_path / "references.jsonl",
+        [{"task_id": t.task_id, **asdict(r)} for t, r in zip(tasks, references)],
+    )
+    return len(tasks)
+
+
+def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
+    """Timed stage of E7: class posterior of an SPBN classifier with features missing completely at random, estimated
+    with the inference methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior
+    of the classifier (on the tasks and references of ``prepare_classifier_unit``).
+
+    E7 makes two comparisons on the task that motivates SPBN classifiers, predicting the class when some features are
+    missing:
+    - RB vs non-RB inference (the paper's claim), through the error of the class posterior with respect to the reference.
+    - Inference vs imputation (whether inference is needed at all), through the log-loss, Brier score and accuracy with
+      respect to the true labels.
+    """
+    from sklearn.impute import KNNImputer
+
+    dataset_name, model_name = unit.config["dataset"], unit.config["model"]
+    model = _load_network(unit_path / "network.pkl")
+    info = json.loads((unit_path / "network.json").read_text())
+    info.update(_timing_device())
+    model_features = list(model.feature_names_in_)
+    network_features = [f for f in model_features if f in model.nodes()]
+    classes = [str(c) for c in model.classes_]
+    train_features = pd.read_csv(unit_path / "train_features.csv")
+    test_rows = pd.read_csv(unit_path / "test_rows.csv")
+    tasks = [Task(**row) for row in _read_jsonl(unit_path / "tasks.jsonl")]
+    references = {
+        row.pop("task_id"): Reference(**row)
+        for row in _read_jsonl(unit_path / "references.jsonl")
+    }
+    sizes = ckde_sizes(model)
+    gibbs_options = {**GIBBS_DEFAULTS, **unit.gibbs_options}
+    imputers = {
+        "MeanImpute": train_features.mean(),
+        "kNNImpute": KNNImputer(n_neighbors=5).fit(train_features),
+    }
+
+    rows = []
+    for task in tasks:
+        reference = references[task.task_id]
+        row = test_rows.iloc[task.factors["test_row"]]
+        missing = np.array([f not in task.evidence for f in network_features])
+        base = {
+            "unit_id": unit.unit_id,
+            "task_id": task.task_id,
+            "dataset": dataset_name,
+            "model": model_name,
+            "true_label": task.true_value,
+            **unit.factors,
+            **task.factors,
+        }
+
+        def _scores(probabilities: dict[str, float]) -> dict:
+            p = np.array([probabilities.get(c, 0.0) for c in classes])
+            truth = np.array([c == task.true_value for c in classes], dtype=float)
+            scores = {
+                "log_loss": float(-np.log(max(p[truth == 1].sum(), 1e-12))),
+                "brier": float(np.sum((p - truth) ** 2)),
+                "correct": float(classes[int(np.argmax(p))] == task.true_value),
+                "probabilities": json.dumps(dict(zip(classes, p.tolist()))),
             }
-
-            def _scores(probabilities: dict[str, float]) -> dict:
-                p = np.array([probabilities.get(c, 0.0) for c in classes])
-                truth = np.array([c == task.true_value for c in classes], dtype=float)
-                scores = {
-                    "log_loss": float(-np.log(max(p[truth == 1].sum(), 1e-12))),
-                    "brier": float(np.sum((p - truth) ** 2)),
-                    "correct": float(classes[int(np.argmax(p))] == task.true_value),
-                    "probabilities": json.dumps(dict(zip(classes, p.tolist()))),
-                }
-                if reference.ok:
-                    scores["prob_error"] = float(
-                        max(
-                            abs(probabilities.get(c, 0.0) - reference.probabilities[c])
-                            for c in classes
-                        )
+            if reference.ok:
+                scores["prob_error"] = float(
+                    max(
+                        abs(probabilities.get(c, 0.0) - reference.probabilities[c])
+                        for c in classes
                     )
-                return scores
+                )
+            return scores
 
-            for method_name in unit.methods:
-                family = METHODS[method_name]["method"]
-                for n_samples in unit.sample_sizes[family]:
-                    for rep in range(unit.n_reps):
-                        result = run_method(
-                            model,
-                            task,
-                            method_name,
-                            n_samples,
-                            rep,
-                            reference,
-                            sizes,
-                            gibbs_options,
-                        )
-                        probabilities = json.loads(result.pop("probabilities"))
-                        result.pop("prob_error", None)
-                        rows.append({**base, **result, **_scores(probabilities)})
-            for imputer_name, imputer in imputers.items():
-                x = pd.DataFrame(
-                    [row[model_features].to_numpy(dtype=float)], columns=model_features
-                )
-                x.loc[0, np.asarray(network_features)[missing]] = np.nan
-                start = time.perf_counter()
-                if imputer_name == "MeanImpute":
-                    x = x.fillna(imputer)
-                else:
-                    x = pd.DataFrame(imputer.transform(x), columns=model_features)
-                probabilities = model.predict_proba(x)[0]
-                runtime = time.perf_counter() - start
-                rows.append(
-                    {
-                        **base,
-                        "method": imputer_name,
-                        "n_samples": 0,
-                        "seed": 0,
-                        "runtime": runtime,
-                        **_scores(dict(zip(classes, probabilities.tolist()))),
-                    }
-                )
+        for method_name in unit.methods:
+            family = METHODS[method_name]["method"]
+            for n_samples in unit.sample_sizes[family]:
+                for rep in range(unit.n_reps):
+                    result = run_method(
+                        model,
+                        task,
+                        method_name,
+                        n_samples,
+                        rep,
+                        reference,
+                        sizes,
+                        gibbs_options,
+                    )
+                    probabilities = json.loads(result.pop("probabilities"))
+                    result.pop("prob_error", None)
+                    rows.append({**base, **result, **_scores(probabilities)})
+        for imputer_name, imputer in imputers.items():
+            x = pd.DataFrame(
+                [row[model_features].to_numpy(dtype=float)], columns=model_features
+            )
+            x.loc[0, np.asarray(network_features)[missing]] = np.nan
+            start = time.perf_counter()
+            if imputer_name == "MeanImpute":
+                x = x.fillna(imputer)
+            else:
+                x = pd.DataFrame(imputer.transform(x), columns=model_features)
+            probabilities = model.predict_proba(x)[0]
+            runtime = time.perf_counter() - start
+            rows.append(
+                {
+                    **base,
+                    "method": imputer_name,
+                    "n_samples": 0,
+                    "seed": 0,
+                    "runtime": runtime,
+                    **_scores(dict(zip(classes, probabilities.tolist()))),
+                }
+            )
 
     pd.DataFrame(rows).to_csv(unit_path / "results.csv", index=False)
-    with open(unit_path / "tasks.jsonl", "w") as f:
-        for row in task_rows:
-            f.write(json.dumps(row, default=_json_default) + "\n")
-    with open(unit_path / "references.jsonl", "w") as f:
-        for row in reference_rows:
-            f.write(json.dumps(row, default=_json_default) + "\n")
     with open(unit_path / "network.json", "w") as f:
         json.dump(info, f, default=_json_default, indent=2)
     return len(rows)
@@ -1937,9 +2043,14 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
 
 
 # region Execution
-def _run_unit_safely(unit: UnitSpec, unit_path: Path) -> tuple[str, int, str]:
+STAGE_FUNCTIONS = {"references": prepare_unit, "runs": run_unit}
+
+
+def _run_stage_safely(
+    stage: str, unit: UnitSpec, unit_path: Path
+) -> tuple[str, int, str]:
     try:
-        return unit.unit_id, run_unit(unit, unit_path), ""
+        return unit.unit_id, STAGE_FUNCTIONS[stage](unit, unit_path), ""
     except Exception:
         return unit.unit_id, 0, traceback.format_exc()
 
@@ -1948,8 +2059,82 @@ def _safe_name(unit_id: str) -> str:
     return "".join(c if c.isalnum() or c in "-_=." else "_" for c in unit_id)
 
 
+def _execute_stage(
+    stage: str,
+    units: list[UnitSpec],
+    output_path: Path,
+    n_workers: int,
+    gpus: list[str],
+    pin_cores: bool,
+) -> list[tuple[str, str]]:
+    """Runs a stage on the units, sequentially or with ``n_workers`` spawned processes. Each worker gets its own GPU
+    (round-robin over ``gpus``) and, with ``pin_cores``, its own CPU core, so that parallel timed runs do not compete for
+    the same devices. Returns the failed units with their tracebacks."""
+    label = "references" if stage == "references" else "rows"
+    failures = []
+
+    def _report(index: int, unit_id: str, count: int, error: str) -> None:
+        print(
+            f"[{stage} {index + 1}/{len(units)}] {unit_id}: {count} {label}"
+            + (" FAILED" if error else "")
+        )
+        if error:
+            failures.append((unit_id, error))
+
+    if n_workers <= 1:
+        for index, unit in enumerate(units):
+            _report(
+                index,
+                *_run_stage_safely(
+                    stage, unit, output_path / "units" / _safe_name(unit.unit_id)
+                ),
+            )
+        return failures
+
+    cores = (
+        sorted(os.sched_getaffinity(0))
+        if pin_cores and hasattr(os, "sched_getaffinity")
+        else None
+    )
+    if stage == "runs" and gpus and n_workers > len(gpus):
+        warnings.warn(
+            f"{n_workers} workers share {len(gpus)} GPUs: the runtimes of the workers on the same GPU are not independent.",
+            RuntimeWarning,
+        )
+    # spawn: pybnesian/OpenCL contexts must not be inherited through fork
+    context = multiprocessing.get_context("spawn")
+    slots = context.Queue()
+    for slot in worker_slots(n_workers, gpus, cores):
+        slots.put(slot)
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=context,
+        initializer=assign_worker_device,
+        initargs=(slots,),
+    ) as executor:
+        futures = [
+            executor.submit(
+                _run_stage_safely,
+                stage,
+                unit,
+                output_path / "units" / _safe_name(unit.unit_id),
+            )
+            for unit in units
+        ]
+        for index, future in enumerate(as_completed(futures)):
+            _report(index, *future.result())
+    return failures
+
+
 def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
-    """Runs (or resumes) all the units of an experiment and concatenates their files in the experiment folder"""
+    """Runs (or resumes) the units of an experiment in two stages and concatenates their files in the experiment folder.
+
+    - "references": builds the networks, tasks and references. It is not timed, so it can use many workers
+      (``--reference_workers``), and it is the most expensive stage.
+    - "runs": runs and times the inference methods. With several workers (``--max_workers``), each worker has its own GPU
+      and CPU core, so keep at most one worker per GPU.
+    ``--stage all`` runs both stages in order.
+    """
     output_path = Path(args.output_dir) / experiment
     units = build_units(experiment, args)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1961,48 +2146,41 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
             indent=2,
         )
 
-    pending = [
-        u
-        for u in units
-        if not (output_path / "units" / _safe_name(u.unit_id) / "done").exists()
-    ]
-    print(
-        f"{experiment}: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
-    )
+    def _pending(marker: str) -> list[UnitSpec]:
+        return [
+            u
+            for u in units
+            if not (output_path / "units" / _safe_name(u.unit_id) / marker).exists()
+        ]
+
+    gpus = args.gpus if args.gpus is not None else available_gpus()
     failures = []
-    if args.max_workers <= 1:
-        for index, unit in enumerate(pending):
-            unit_id, n_rows, error = _run_unit_safely(
-                unit, output_path / "units" / _safe_name(unit.unit_id)
-            )
-            print(
-                f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows"
-                + (" FAILED" if error else "")
-            )
-            if error:
-                failures.append((unit_id, error))
-    else:
-        # spawn: pybnesian/OpenCL contexts must not be inherited through fork
-        context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(
-            max_workers=args.max_workers, mp_context=context
-        ) as executor:
-            futures = [
-                executor.submit(
-                    _run_unit_safely,
-                    unit,
-                    output_path / "units" / _safe_name(unit.unit_id),
-                )
-                for unit in pending
-            ]
-            for index, future in enumerate(as_completed(futures)):
-                unit_id, n_rows, error = future.result()
-                print(
-                    f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows"
-                    + (" FAILED" if error else "")
-                )
-                if error:
-                    failures.append((unit_id, error))
+    if args.stage in ("all", "references"):
+        pending = _pending("references_done")
+        print(
+            f"{experiment} references: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
+        )
+        failures += _execute_stage(
+            "references",
+            pending,
+            output_path,
+            args.reference_workers,
+            gpus,
+            pin_cores=False,
+        )
+    if args.stage in ("all", "runs"):
+        pending = _pending("done")
+        print(
+            f"{experiment} runs: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
+        )
+        failures += _execute_stage(
+            "runs",
+            pending,
+            output_path,
+            args.max_workers,
+            gpus,
+            pin_cores=not args.no_pin,
+        )
     for unit_id, error in failures:
         print(f"Unit {unit_id} failed:\n{error}")
     combine_units(output_path)
@@ -2098,10 +2276,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--classifier_reps", type=int, help="Repetitions per test instance in E7."
     )
     parser.add_argument(
+        "--stage",
+        choices=["all", "references", "runs"],
+        default="all",
+        help="'references' builds the networks, tasks and references (untimed); 'runs' runs and times the methods "
+        "(computing the missing references first); 'all' runs both stages.",
+    )
+    parser.add_argument(
         "--max_workers",
         type=int,
-        default=1,
-        help="Parallel units (keep 1 when timing).",
+        help="Parallel units of the timed stage; each worker gets its own GPU and CPU core. Defaults to one worker per "
+        "GPU (1 without GPUs).",
+    )
+    parser.add_argument(
+        "--reference_workers",
+        type=int,
+        help=f"Parallel units of the (untimed) reference stage. Defaults to {DEFAULT_REFERENCE_WORKERS} (at most the "
+        "number of CPUs).",
+    )
+    parser.add_argument(
+        "--gpus",
+        nargs="+",
+        help="GPUs (indices or UUIDs) for the workers. Defaults to the CUDA_VISIBLE_DEVICES set before the run, or all GPUs.",
+    )
+    parser.add_argument(
+        "--no_pin",
+        action="store_true",
+        help="Do not pin each worker of the timed stage to its own CPU core.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -2111,6 +2312,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "units of a full run as done).",
     )
     args = parser.parse_args(argv)
+    if args.max_workers is None:
+        # One timed worker per GPU, so that no two timed runs share a device
+        args.max_workers = max(
+            len(args.gpus if args.gpus is not None else available_gpus()), 1
+        )
+    if args.reference_workers is None:
+        # The reference stage is not timed, so its workers can share the GPUs
+        args.reference_workers = min(DEFAULT_REFERENCE_WORKERS, os.cpu_count() or 1)
     if args.output_dir is None:
         args.output_dir = str(RESULT_PATH / "quick" if args.quick else RESULT_PATH)
 
@@ -2132,6 +2341,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         classifier_sample_size=1000,
         classifier_reps=5,
     )
+    if args.experiment == "E3":
+        # Tasks of the same network are correlated, so E3 uses more networks with fewer tasks each (tested per network)
+        defaults.update(n_networks=10, n_tasks=3)
     if args.experiment == "E7":
         # One stratified reference per test instance, missing rate and classifier: 10**6 samples per class keeps it affordable
         defaults.update(n_reference=1_000_000)

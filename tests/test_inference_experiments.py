@@ -253,3 +253,69 @@ def test_reference_check_table(tmp_path: Path) -> None:
     assert table.loc[("frac_clg=0.3", "clg"), "frac_discarded"] == 0.5
     assert table.loc[("all", "all"), ["n_low_ess", "n_not_converged", "n_disagreement", "n_kept"]].tolist() == [1, 1, 1, 1]
     assert (tmp_path / "tables" / "test_reference_check.tex").exists()
+
+
+def test_reference_and_run_stages(tmp_path: Path) -> None:
+    """Test that the timed stage reuses the network, tasks and references of the reference stage, and that it gives the
+    same estimates as running both stages at once (the pickled network is the same network)."""
+    from src.inference_experiments import prepare_unit
+
+    unit = _small_unit("staged")
+    n_tasks = prepare_unit(unit, tmp_path / "staged")
+    assert n_tasks > 0 and (tmp_path / "staged" / "references_done").exists()
+    assert (tmp_path / "staged" / "network.pkl").exists() and not (tmp_path / "staged" / "done").exists()
+    assert prepare_unit(unit, tmp_path / "staged") == -1
+    references_time = (tmp_path / "staged" / "references.jsonl").stat().st_mtime
+    run_unit(unit, tmp_path / "staged")
+    assert (tmp_path / "staged" / "references.jsonl").stat().st_mtime == references_time
+
+    run_unit(_small_unit("staged"), tmp_path / "all_at_once")
+    staged = pd.read_csv(tmp_path / "staged" / "results.csv")
+    all_at_once = pd.read_csv(tmp_path / "all_at_once" / "results.csv")
+    columns = [c for c in ["mean", "std", "w1", "probabilities", "n_eff"] if c in staged]
+    pd.testing.assert_frame_equal(staged[columns], all_at_once[columns])
+
+
+def test_worker_slots() -> None:
+    """Test the round-robin assignment of GPUs and cores to the workers, and that a worker takes its slot."""
+    import os
+    import queue
+
+    from src.utils.opencl_device import assign_worker_device, worker_slots
+
+    slots = worker_slots(3, ["g0", "g1"], [4, 5, 6, 7])
+    assert slots == [("g0", 4), ("g1", 5), ("g0", 6)]
+    assert worker_slots(2, [], None) == [(None, None), (None, None)]
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    affinity = os.sched_getaffinity(0)
+    core = min(affinity)
+    slot_queue = queue.Queue()
+    slot_queue.put(("test-gpu", core))
+    try:
+        assign_worker_device(slot_queue)
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "test-gpu"
+        assert os.sched_getaffinity(0) == {core}
+    finally:
+        if visible is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = visible
+        os.sched_setaffinity(0, affinity)
+
+
+def test_pair_tests_per_unit() -> None:
+    """Test that the paired tests use one value per network (the median of its tasks), not one per task."""
+    from src.inference_analysis import pair_tests
+
+    rows = []
+    for network in range(6):
+        for task in range(3):
+            for method, rmse in [("LW", 1.0 + 0.1 * task), ("RBLW", 0.5 + 0.1 * task)]:
+                rows.append({"task_id": f"network_{network}/clg_{task}", "query_type": "clg",
+                             "method": method, "n_samples": 100, "rmse": rmse, "runtime": 1.0})
+    tests = pair_tests(pd.DataFrame(rows), {})
+    row = tests[(tests["pair"] == "RBLW vs LW") & (tests["comparison"] == "equal N")].iloc[0]
+    assert row["n_units"] == 6
+    np.testing.assert_allclose(row["median_reduction"], (1.1 - 0.6) / 1.1)
+    assert row["frac_better"] == 1.0 and row["p_value"] < 0.05
