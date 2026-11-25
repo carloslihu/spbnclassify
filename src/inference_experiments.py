@@ -1,8 +1,7 @@
 """Experiments of the article on Rao-Blackwellized inference in semiparametric Bayesian networks (sections/04-results.tex).
 
 Each experiment (E1-E7) writes its raw results to ``data/results/inference/<experiment>/``:
-    - ``units/<unit_id>/``: the network, tasks, references and results of each independent unit (a network or a dataset),
-      written when the unit finishes, so an interrupted run resumes by skipping the finished units.
+    - ``units/<unit_id>/``: the network, tasks, references and results of each independent unit (a network or a dataset), written when the unit finishes, so an interrupted run resumes by skipping the finished units.
     - ``results.csv``, ``tasks.jsonl``, ``references.jsonl`` and ``networks.csv``: the concatenation of all the units.
 ``inference_analysis.py`` builds the figures, tables and statistical tests from these files.
 
@@ -56,9 +55,7 @@ RESULT_PATH = LIBRARY_ROOT_PATH / "data" / "results" / "inference"
 EXPERIMENT_NAMES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]
 
 # Inference methods: the arguments of ``SemiParametricBayesianNetwork.infer``, plus the posterior ``estimator``:
-# "default" is the estimate of the article (mixture of exact posteriors for the Rao-Blackwellized CLG query, KDE for a
-# sampled continuous query, frequencies for a discrete query), and "sampled_kde" draws the Rao-Blackwellized query from its
-# exact posterior given each sample and uses a KDE (ablation E4).
+# "default" is the estimate of the article (mixture of exact posteriors for the Rao-Blackwellized CLG query, KDE for a sampled continuous query, frequencies for a discrete query), and "sampled_kde" draws the Rao-Blackwellized query from its exact posterior given each sample and uses a KDE (ablation E4).
 METHODS = {
     "LW": {"method": "lw", "rao_blackwellize": False},
     "RBLW": {"method": "lw", "rao_blackwellize": True},
@@ -67,8 +64,16 @@ METHODS = {
     # E4 ablations
     "RBLW-KDE": {"method": "lw", "rao_blackwellize": True, "estimator": "sampled_kde"},
     "RBGS-noblock": {"method": "gibbs", "rao_blackwellize": True, "block_moves": False},
-    "RBGS-rej0": {"method": "gibbs", "rao_blackwellize": True, "max_rejection_tries": 0},
-    "RBGS-rej1": {"method": "gibbs", "rao_blackwellize": True, "max_rejection_tries": 1},
+    "RBGS-rej0": {
+        "method": "gibbs",
+        "rao_blackwellize": True,
+        "max_rejection_tries": 0,
+    },
+    "RBGS-rej1": {
+        "method": "gibbs",
+        "rao_blackwellize": True,
+        "max_rejection_tries": 1,
+    },
     "RBGS-rej10": {
         "method": "gibbs",
         "rao_blackwellize": True,
@@ -80,8 +85,14 @@ METHODS = {
         "max_rejection_tries": 100,
     },
 }
-GIBBS_DEFAULTS = {"n_chains": 100, "burn_in": 100, "thinning": 1, "max_rejection_tries": 10}
+GIBBS_DEFAULTS = {
+    "n_chains": 100,
+    "burn_in": 100,
+    "thinning": 1,
+    "max_rejection_tries": 10,
+}
 QUERY_TYPES = ["clg", "s_continuous", "discrete"]
+# Number of points on which the posterior CDFs are evaluated to compute the Wasserstein-1 error of a continuous query, W₁ = ∫|F̂ − F*| dq
 CDF_GRID_SIZE = 1024
 # Batch size of the reference likelihood weighting
 REFERENCE_BATCH_SIZE = 100_000
@@ -89,7 +100,6 @@ REFERENCE_BATCH_SIZE = 100_000
 GRID_POINTS = {1: 4001, 2: 401, 3: 101}
 MIN_REFERENCE_ESS = 1000
 MAX_REFERENCE_RHAT = 1.01
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
 # endregion Constants
 
 
@@ -98,17 +108,15 @@ _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 class SyntheticConfig:
     """Generative configuration of a synthetic SPBN.
 
-    The discrete variables (D0, D1, ...) are roots, followed in topological order by the CKDE variables and by the CLG
-    variables. Since the CKDE variables only have discrete and CKDE parents, the sampled set S is exactly the discrete and
-    CKDE block, and the Rao-Blackwellized set R the CLG block, so |R| / n = ``frac_clg`` up to rounding.
+    The discrete variables (D0, D1, ...) are roots, followed in topological order by the CKDE variables and by the CLG variables.
+    Since the CKDE variables only have discrete and CKDE parents, the sampled set S is exactly the discrete and CKDE block, and the Rao-Blackwellized set R the CLG block, so |R| / n = ``frac_clg`` up to rounding.
 
     Attributes:
         n_nodes: Total number of variables, discrete ones included.
         frac_clg: Fraction of CLG variables |R| / n.
         n_discrete: Number of discrete root variables.
         n_categories: Number of categories of every discrete variable.
-        n_discrete_parents_R: Number of discrete variables that are parents of every CLG variable, so the number of
-            configurations delta of the discrete parents of R is n_categories ** n_discrete_parents_R.
+        n_discrete_parents_R: Number of discrete variables that are parents of every CLG variable, so the number of configurations delta of the discrete parents of R is n_categories ** n_discrete_parents_R.
         max_parents: Maximum number of continuous parents of every continuous variable.
         prob_discrete_parent: Probability that the first discrete variable is a parent of each CKDE variable.
         chain_prob: Probability that each CLG variable has the previous CLG variable as parent (deep CLG chains).
@@ -136,21 +144,21 @@ def _standardize(values: np.ndarray) -> np.ndarray:
 
 
 def _unit_noise(rng: np.random.Generator, size: int, gaussian: bool) -> np.ndarray:
-    """Unit-variance noise: Gaussian for the CLG variables, Student-t (4 degrees of freedom) or a two-component mixture for
-    the CKDE variables."""
+    """Unit-variance noise: Gaussian for the CLG variables, Student-t (4 degrees of freedom) or a two-component mixture for the CKDE variables."""
     if gaussian:
         return rng.standard_normal(size)
     if rng.random() < 0.5:
         return rng.standard_t(4, size) / np.sqrt(2.0)
     component = rng.random(size) < 0.5
-    return _standardize(np.where(component, -1.0, 1.0) + 0.5 * rng.standard_normal(size))
+    return _standardize(
+        np.where(component, -1.0, 1.0) + 0.5 * rng.standard_normal(size)
+    )
 
 
 def generate_synthetic_spbn(
     config: SyntheticConfig, seed: int
 ) -> tuple[SemiParametricBayesianNetwork, dict]:
-    """Generates a synthetic SPBN: a random structure and CPD types (see ``SyntheticConfig``), training data sampled from a
-    nonlinear generative process with that structure, and the CPDs fitted to the data with the given types.
+    """Generates a synthetic SPBN: a random structure and CPD types (see ``SyntheticConfig``), training data sampled from a nonlinear generative process with that structure, and the CPDs fitted to the data with the given types.
 
     The ground truth of the experiments is the posterior of the fitted SPBN itself, not of the generative process.
 
@@ -178,14 +186,18 @@ def generate_synthetic_spbn(
         continuous_parents = []
         if i > 0 and rng.random() < config.chain_prob:
             continuous_parents.append(clg_nodes[i - 1])
-        candidates = [c for c in ckde_nodes + clg_nodes[:i] if c not in continuous_parents]
+        candidates = [
+            c for c in ckde_nodes + clg_nodes[:i] if c not in continuous_parents
+        ]
         n_extra = rng.integers(
             1 if not continuous_parents and candidates else 0,
             max(config.max_parents - len(continuous_parents), 0) + 1,
         )
         n_extra = min(n_extra, len(candidates))
         continuous_parents += list(rng.choice(candidates, size=n_extra, replace=False))
-        parents[node] = discrete_nodes[: config.n_discrete_parents_R] + continuous_parents
+        parents[node] = (
+            discrete_nodes[: config.n_discrete_parents_R] + continuous_parents
+        )
 
     # Data, sampled in topological order
     n = config.n_train
@@ -196,7 +208,9 @@ def generate_synthetic_spbn(
     if m > 0:
         configurations = rng.permutation(np.arange(n) % config.n_categories**m)
         for position, node in enumerate(discrete_nodes[:m]):
-            data[node] = (configurations // config.n_categories**position) % config.n_categories
+            data[node] = (
+                configurations // config.n_categories**position
+            ) % config.n_categories
     for node in discrete_nodes[m:]:
         probabilities = rng.dirichlet([3.0] * config.n_categories)
         data[node] = rng.choice(config.n_categories, size=n, p=probabilities)
@@ -211,20 +225,25 @@ def generate_synthetic_spbn(
         continuous_parents = [p for p in parents[node] if p not in discrete_nodes]
         noise = _unit_noise(rng, n, gaussian=is_clg)
         if continuous_parents:
-            coefficients = rng.choice([-1.0, 1.0], len(continuous_parents)) * rng.uniform(
-                0.5, 1.5, len(continuous_parents)
+            coefficients = rng.choice(
+                [-1.0, 1.0], len(continuous_parents)
+            ) * rng.uniform(0.5, 1.5, len(continuous_parents))
+            signal = (
+                np.column_stack([data[p] for p in continuous_parents]) @ coefficients
             )
-            signal = np.column_stack([data[p] for p in continuous_parents]) @ coefficients
             if not is_clg:
                 signal = nonlinearities[rng.integers(len(nonlinearities))](signal)
-            values = np.sqrt(config.dependence) * _standardize(signal) + np.sqrt(
-                1.0 - config.dependence
-            ) * noise
+            values = (
+                np.sqrt(config.dependence) * _standardize(signal)
+                + np.sqrt(1.0 - config.dependence) * noise
+            )
         elif is_clg:
             values = noise
         else:
             # Root CKDE variables are bimodal
-            values = _standardize(np.where(rng.random(n) < 0.5, -1.5, 1.5) + 0.6 * noise)
+            values = _standardize(
+                np.where(rng.random(n) < 0.5, -1.5, 1.5) + 0.6 * noise
+            )
         for discrete_parent in [p for p in parents[node] if p in discrete_nodes]:
             shifts = rng.normal(0.0, config.class_separation, config.n_categories)
             values = values + shifts[data[discrete_parent]]
@@ -261,8 +280,7 @@ def generate_synthetic_spbn(
 
 
 def ckde_sizes(bn: SemiParametricBayesianNetwork) -> dict[str, float]:
-    """Expected number of kernels of each CKDE-CPD per evaluation: its number of training instances, or, with discrete
-    parents, sum_c L_c**2 / sum_c L_c, the size of the configuration c of a sample drawn with the training frequencies."""
+    """Expected number of kernels of each CKDE-CPD per evaluation: its number of training instances, or, with discrete parents, sum_c L_c**2 / sum_c L_c, the size of the configuration c of a sample drawn with the training frequencies."""
     categories = bn._categories()
     discrete = bn._discrete_nodes()
     sizes = {}
@@ -288,7 +306,9 @@ def describe_network(bn: SemiParametricBayesianNetwork) -> dict:
     rb_nodes = bn._rb_nodes(sampled)
     discrete = bn._discrete_nodes()
     categories = bn._categories() if discrete else {}
-    rb_discrete_parents = {p for node in rb_nodes for p in bn.parents(node) if p in discrete}
+    rb_discrete_parents = {
+        p for node in rb_nodes for p in bn.parents(node) if p in discrete
+    }
     sizes = ckde_sizes(bn)
     node_types = [bn.cpd(node).type() for node in bn.nodes()]
     return {
@@ -300,14 +320,18 @@ def describe_network(bn: SemiParametricBayesianNetwork) -> dict:
         "n_sampled": len(sampled),
         "n_rb": len(rb_nodes),
         "frac_rb": len(rb_nodes) / len(bn.nodes()),
-        "n_delta": int(np.prod([len(categories[p]) for p in rb_discrete_parents]))
-        if rb_discrete_parents
-        else 1,
+        "n_delta": (
+            int(np.prod([len(categories[p]) for p in rb_discrete_parents]))
+            if rb_discrete_parents
+            else 1
+        ),
         "mean_ckde_size": float(np.mean(list(sizes.values()))) if sizes else 0.0,
     }
 
 
-def two_node_spbn(child_type: str, seed: int, n_train: int = 300) -> SemiParametricBayesianNetwork:
+def two_node_spbn(
+    child_type: str, seed: int, n_train: int = 300
+) -> SemiParametricBayesianNetwork:
     """x (bimodal CKDE) -> y (``child_type`` "clg" or "ckde"), the E1 check of the rejection sampling of RBGS"""
     rng = np.random.default_rng(seed)
     x = np.concatenate(
@@ -350,10 +374,8 @@ class EvidenceSpec:
     Attributes:
         n_evidence: Number of evidence variables.
         location: "S" (only sampled variables), "R" (only Rao-Blackwellized variables) or "both".
-        n_rb_ancestors: If set, the evidence on R is a single CLG variable with exactly this number of unobserved CLG
-            ancestors (its excess ancestors are also observed), and the rest of the evidence is on S.
-        rarity: Prior tail probability of the evidence values: 0.5 draws them jointly from the prior, and q < 0.5 sets each
-            continuous evidence variable to its prior q or 1 - q quantile (random side).
+        n_rb_ancestors: If set, the evidence on R is a single CLG variable with exactly this number of unobserved CLG ancestors (its excess ancestors are also observed), and the rest of the evidence is on S.
+        rarity: Prior tail probability of the evidence values: 0.5 draws them jointly from the prior, and q < 0.5 sets each continuous evidence variable to its prior q or 1 - q quantile (random side).
     """
 
     n_evidence: int = 4
@@ -362,7 +384,10 @@ class EvidenceSpec:
     rarity: float = 0.5
 
 
-def node_query_type(bn: SemiParametricBayesianNetwork, node: str, sampled: set[str]) -> str:
+def node_query_type(
+    bn: SemiParametricBayesianNetwork, node: str, sampled: set[str]
+) -> str:
+    """Query type of a node: "discrete", "clg" or "s_continuous"."""
     if node in bn._discrete_nodes():
         return "discrete"
     return "s_continuous" if node in sampled else "clg"
@@ -371,8 +396,7 @@ def node_query_type(bn: SemiParametricBayesianNetwork, node: str, sampled: set[s
 def unobserved_rb_ancestors(
     bn: SemiParametricBayesianNetwork, evidence: dict, sampled: set[str]
 ) -> int:
-    """Number of unobserved CLG variables of R that are ancestors of the evidence on R, which determines the variance
-    reduction of the RBLW weights (with 0, the RBLW and LW weights coincide)"""
+    """Number of unobserved CLG variables of R that are ancestors of the evidence on R, which determines the variance reduction of the RBLW weights (with 0, the RBLW and LW weights coincide)"""
     rb_nodes = set(bn._rb_nodes(sampled))
     ancestors = set()
     for node in evidence:
@@ -382,6 +406,7 @@ def unobserved_rb_ancestors(
 
 
 def _ancestors(bn: SemiParametricBayesianNetwork, node: str) -> set[str]:
+    """All the ancestors of a node in the BN, including the node itself."""
     result, stack = set(), list(bn.parents(node))
     while stack:
         parent = stack.pop()
@@ -401,8 +426,7 @@ def generate_tasks(
     id_prefix: str = "",
     query_candidates: list[str] | None = None,
 ) -> list[Task]:
-    """Generates up to ``n_tasks`` tasks per query type with the evidence of ``spec``. Infeasible combinations (e.g., no
-    unobserved CLG variable left, or no CLG variable with enough ancestors) are skipped.
+    """Generates up to ``n_tasks`` tasks per query type with the evidence of ``spec``. Infeasible combinations (e.g., no unobserved CLG variable left, or no CLG variable with enough ancestors) are skipped.
 
     Args:
         prior: Samples of the prior of ``bn`` (``bn.sample``), used to draw the evidence values.
@@ -419,13 +443,19 @@ def generate_tasks(
     }
     topo_order = list(bn.graph().topological_sort())
     pools = {
-        key: [n for n in topo_order if n in nodes and (query_candidates is None or n in query_candidates)]
+        key: [
+            n
+            for n in topo_order
+            if n in nodes and (query_candidates is None or n in query_candidates)
+        ]
         for key, nodes in pools.items()
     }
     tasks = []
     for query_type in query_types:
         for task_index in range(n_tasks):
-            task = _draw_task(bn, query_type, spec, rng, prior, pools, sampled, rb_nodes)
+            task = _draw_task(
+                bn, query_type, spec, rng, prior, pools, sampled, rb_nodes
+            )
             if task is None:
                 continue
             task.task_id = f"{id_prefix}{query_type}_{task_index}"
@@ -433,7 +463,10 @@ def generate_tasks(
     return tasks
 
 
-def _draw_task(bn, query_type, spec, rng, prior, pools, sampled, rb_nodes) -> Task | None:
+def _draw_task(
+    bn, query_type, spec, rng, prior, pools, sampled, rb_nodes
+) -> Task | None:
+    """Draws a single task of the given query type and evidence spec, or returns None if the combination is infeasible."""
     if not pools[query_type]:
         return None
     query = str(rng.choice(pools[query_type]))
@@ -442,9 +475,7 @@ def _draw_task(bn, query_type, spec, rng, prior, pools, sampled, rb_nodes) -> Ta
     evidence_nodes: list[str] = []
     if spec.n_rb_ancestors is not None:
         rb_set = set(rb_nodes)
-        counts = {
-            n: len((_ancestors(bn, n) & rb_set) - {query}) for n in r_pool
-        }
+        counts = {n: len((_ancestors(bn, n) & rb_set) - {query}) for n in r_pool}
         candidates = [n for n, c in counts.items() if c >= spec.n_rb_ancestors]
         if not candidates:
             return None
@@ -457,7 +488,9 @@ def _draw_task(bn, query_type, spec, rng, prior, pools, sampled, rb_nodes) -> Ta
         # Observe the earliest excess ancestors, so exactly n_rb_ancestors remain unobserved
         evidence_nodes = [target] + ancestors[: len(ancestors) - spec.n_rb_ancestors]
         n_s = max(spec.n_evidence - len(evidence_nodes), 0)
-        evidence_nodes += list(rng.choice(s_pool, size=min(n_s, len(s_pool)), replace=False))
+        evidence_nodes += list(
+            rng.choice(s_pool, size=min(n_s, len(s_pool)), replace=False)
+        )
     else:
         if spec.location == "S":
             n_s, n_r = spec.n_evidence, 0
@@ -492,9 +525,9 @@ def _draw_task(bn, query_type, spec, rng, prior, pools, sampled, rb_nodes) -> Ta
         evidence=evidence,
         factors={
             "n_evidence": len(evidence),
-            "evidence_location": spec.location
-            if spec.n_rb_ancestors is None
-            else "both",
+            "evidence_location": (
+                spec.location if spec.n_rb_ancestors is None else "both"
+            ),
             "rarity": spec.rarity,
             "n_evidence_S": sum(n in sampled for n in evidence),
             "n_evidence_R": sum(n not in sampled for n in evidence),
@@ -529,14 +562,25 @@ def _evaluation_grid(mean: float, std: float, lo: float, hi: float) -> np.ndarra
 
 
 def _reference_from_weighted_samples(
-    values: np.ndarray, log_weights: np.ndarray, is_discrete: bool, categories: list[str]
+    values: np.ndarray,
+    log_weights: np.ndarray,
+    is_discrete: bool,
+    categories: list[str],
 ) -> Reference:
     weights = np.exp(log_weights - logsumexp(log_weights))
     ess = float(1.0 / np.sum(weights**2))
     if is_discrete:
         probabilities = {c: float(np.sum(weights[values == c])) for c in categories}
-        mcse = float(np.max([np.sqrt(p * (1 - p) / ess) for p in probabilities.values()]))
-        return Reference("lw", True, probabilities=probabilities, mcse=mcse, effective_sample_size=ess)
+        mcse = float(
+            np.max([np.sqrt(p * (1 - p) / ess) for p in probabilities.values()])
+        )
+        return Reference(
+            "lw",
+            True,
+            probabilities=probabilities,
+            mcse=mcse,
+            effective_sample_size=ess,
+        )
     values = values.astype(float)
     mean = float(np.sum(weights * values))
     std = float(np.sqrt(np.sum(weights * (values - mean) ** 2)))
@@ -562,10 +606,11 @@ def _reference_from_weighted_samples(
 def lw_reference(
     bn: SemiParametricBayesianNetwork, task: Task, n_samples: int, seed: int
 ) -> Reference:
-    """Reference posterior with plain likelihood weighting (every variable sampled), in batches combined through their
-    ``log_evidence``, so the unnormalized weights of all the batches are on the same scale"""
+    """Reference posterior with plain likelihood weighting (every variable sampled), in batches combined through their ``log_evidence``, so the unnormalized weights of all the batches are on the same scale"""
     values, log_weights = [], []
-    seeds = np.random.SeedSequence(seed).spawn(int(np.ceil(n_samples / REFERENCE_BATCH_SIZE)))
+    seeds = np.random.SeedSequence(seed).spawn(
+        int(np.ceil(n_samples / REFERENCE_BATCH_SIZE))
+    )
     remaining = n_samples
     for child in seeds:
         batch = min(REFERENCE_BATCH_SIZE, remaining)
@@ -582,10 +627,16 @@ def lw_reference(
         parameters = result["parameters"]
         with np.errstate(divide="ignore"):
             log_weights.append(
-                np.log(parameters["weights"]) + parameters["log_evidence"] + np.log(batch)
+                np.log(parameters["weights"])
+                + parameters["log_evidence"]
+                + np.log(batch)
             )
         column = parameters["assignments"][task.query]
-        values.append(column.astype(str).to_numpy() if task.query_type == "discrete" else column.to_numpy(dtype=float))
+        values.append(
+            column.astype(str).to_numpy()
+            if task.query_type == "discrete"
+            else column.to_numpy(dtype=float)
+        )
     is_discrete = task.query_type == "discrete"
     categories = bn._categories()[task.query] if is_discrete else []
     return _reference_from_weighted_samples(
@@ -623,10 +674,20 @@ def gibbs_reference(
     message = "" if converged else f"Gibbs check R-hat {rhat:.3g} >= {max_rhat}"
     if task.query_type == "discrete":
         probabilities = {
-            c: float(np.mean(column.astype(str) == c)) for c in bn._categories()[task.query]
+            c: float(np.mean(column.astype(str) == c))
+            for c in bn._categories()[task.query]
         }
-        mcse = float(np.max([np.sqrt(p * (1 - p) / ess) for p in probabilities.values()]))
-        return Reference("gibbs", converged, probabilities=probabilities, mcse=mcse, effective_sample_size=ess, message=message)
+        mcse = float(
+            np.max([np.sqrt(p * (1 - p) / ess) for p in probabilities.values()])
+        )
+        return Reference(
+            "gibbs",
+            converged,
+            probabilities=probabilities,
+            mcse=mcse,
+            effective_sample_size=ess,
+            message=message,
+        )
     values = column.to_numpy(dtype=float)
     return Reference(
         "gibbs",
@@ -648,13 +709,14 @@ def checked_reference(
     gibbs_burn_in: int = 1000,
     max_rhat: float = MAX_REFERENCE_RHAT,
 ) -> Reference:
-    """Likelihood weighting reference checked against an independent reference: the task is kept (``ok``) only if the
-    likelihood weighting ESS is at least ``MIN_REFERENCE_ESS``, the check is valid and both agree within 3 combined Monte
-    Carlo standard errors. The check uses long plain Gibbs chains (which must converge, R-hat < ``max_rhat``) for continuous
-    queries, and stratified likelihood weighting (one run per category, ``n_gibbs_samples`` samples each) for discrete
-    queries, since plain Gibbs sampling barely moves between categories that separate their children. With
-    ``n_gibbs_samples <= 0`` there is no check (quick runs).
-    The Rao-Blackwellized methods are never used, so the reference is independent of the methods that it evaluates."""
+    """Likelihood weighting reference checked against an independent reference:
+    the task is kept (``ok``) only if the likelihood weighting ESS is at least ``MIN_REFERENCE_ESS``, the check is valid and both agree within 3 combined Monte Carlo standard errors.
+
+    The check uses long plain Gibbs chains (which must converge, R-hat < ``max_rhat``) for continuous queries, and stratified likelihood weighting (one run per category, ``n_gibbs_samples`` samples each) for discrete queries, since plain Gibbs sampling barely moves between categories that separate their children.
+
+    With ``n_gibbs_samples <= 0`` there is no check (quick runs).
+    The Rao-Blackwellized methods are never used, so the reference is independent of the methods that it evaluates.
+    """
     reference = lw_reference(bn, task, n_samples, seed)
     if reference.effective_sample_size < MIN_REFERENCE_ESS:
         reference.ok = False
@@ -666,7 +728,14 @@ def checked_reference(
         check = stratified_class_reference(bn, task, n_gibbs_samples, seed + 1)
         reference.method = "lw+stratified"
     else:
-        check = gibbs_reference(bn, task, n_gibbs_samples, seed + 1, burn_in=gibbs_burn_in, max_rhat=max_rhat)
+        check = gibbs_reference(
+            bn,
+            task,
+            n_gibbs_samples,
+            seed + 1,
+            burn_in=gibbs_burn_in,
+            max_rhat=max_rhat,
+        )
         reference.method = "lw+gibbs"
     if not check.ok:
         reference.ok = False
@@ -675,7 +744,8 @@ def checked_reference(
     tolerance = 3.0 * np.sqrt(reference.mcse**2 + check.mcse**2)
     if task.query_type == "discrete":
         difference = max(
-            abs(reference.probabilities[c] - check.probabilities[c]) for c in reference.probabilities
+            abs(reference.probabilities[c] - check.probabilities[c])
+            for c in reference.probabilities
         )
     else:
         difference = abs(reference.mean - check.mean)
@@ -706,7 +776,10 @@ def gaussian_reference(bn: SemiParametricBayesianNetwork, task: Task) -> Referen
     posterior_mean = float(mean[q] + gain @ (values - mean[e]))
     posterior_std = float(np.sqrt(covariance[q, q] - covariance[q, e] @ gain))
     grid = _evaluation_grid(
-        posterior_mean, posterior_std, posterior_mean - 5 * posterior_std, posterior_mean + 5 * posterior_std
+        posterior_mean,
+        posterior_std,
+        posterior_mean - 5 * posterior_std,
+        posterior_mean + 5 * posterior_std,
     )
     return Reference(
         "exact",
@@ -721,7 +794,9 @@ def gaussian_reference(bn: SemiParametricBayesianNetwork, task: Task) -> Referen
 
 
 def _joint_log_density(
-    bn: SemiParametricBayesianNetwork, points: pd.DataFrame, discrete_values: dict[str, str]
+    bn: SemiParametricBayesianNetwork,
+    points: pd.DataFrame,
+    discrete_values: dict[str, str],
 ) -> np.ndarray:
     """log f(x) of every row of ``points`` (all the variables), with the discrete variables fixed to ``discrete_values``"""
     discrete = bn._discrete_nodes()
@@ -738,10 +813,13 @@ def _joint_log_density(
 
 
 def grid_reference(
-    bn: SemiParametricBayesianNetwork, task: Task, prior: pd.DataFrame, chunk_size: int = 4000
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    prior: pd.DataFrame,
+    chunk_size: int = 4000,
 ) -> Reference:
-    """Reference posterior by numerical integration on a grid of the (at most 3) unobserved continuous variables,
-    enumerating the unobserved discrete variables. A first pass on the prior range locates the posterior mass of each
+    """Reference posterior by numerical integration on a grid of the (at most 3) unobserved continuous variables, enumerating the unobserved discrete variables.
+    A first pass on the prior range locates the posterior mass of each
     variable, and a second pass refines the grid on that region."""
     discrete = bn._discrete_nodes()
     categories = bn._categories() if discrete else {}
@@ -749,15 +827,23 @@ def grid_reference(
     continuous = [n for n in unobserved if n not in discrete]
     hidden_discrete = [n for n in unobserved if n in discrete]
     if len(continuous) > 3:
-        raise ValueError("The grid reference supports at most 3 unobserved continuous variables.")
+        raise ValueError(
+            "The grid reference supports at most 3 unobserved continuous variables."
+        )
     n_points = GRID_POINTS.get(len(continuous), 1)
 
     def _evaluate(axes: dict[str, np.ndarray]):
         """Unnormalized posterior on the grid: marginal of the query and of every continuous axis"""
-        mesh = np.meshgrid(*(axes[n] for n in continuous), indexing="ij") if continuous else []
+        mesh = (
+            np.meshgrid(*(axes[n] for n in continuous), indexing="ij")
+            if continuous
+            else []
+        )
         flat = {n: m.ravel() for n, m in zip(continuous, mesh)}
         n_rows = len(next(iter(flat.values()))) if flat else 1
-        configurations = list(itertools.product(*(categories[n] for n in hidden_discrete)))
+        configurations = list(
+            itertools.product(*(categories[n] for n in hidden_discrete))
+        )
         log_blocks = []
         for configuration in configurations:
             values = dict(zip(hidden_discrete, configuration))
@@ -778,12 +864,16 @@ def grid_reference(
                     index=np.arange(stop - start),
                 )
                 for n, v in fixed.items():
-                    points[n] = pd.Categorical([v] * (stop - start), categories=categories[n])
+                    points[n] = pd.Categorical(
+                        [v] * (stop - start), categories=categories[n]
+                    )
                 log_density[start:stop] = _joint_log_density(bn, points, fixed)
             log_blocks.append(log_density)
         log_blocks = np.array(log_blocks)  # (configurations, grid points)
         weights = np.exp(log_blocks - np.max(log_blocks))
-        return configurations, weights.reshape((len(configurations), *[len(axes[n]) for n in continuous]))
+        return configurations, weights.reshape(
+            (len(configurations), *[len(axes[n]) for n in continuous])
+        )
 
     def _prior_axis(node):
         values = prior[node].to_numpy(dtype=float)
@@ -796,11 +886,17 @@ def grid_reference(
         configurations, weights = _evaluate(axes)
         refined = {}
         for d, node in enumerate(continuous):
-            marginal = weights.sum(axis=tuple(i for i in range(weights.ndim) if i != d + 1))
+            marginal = weights.sum(
+                axis=tuple(i for i in range(weights.ndim) if i != d + 1)
+            )
             cumulative = np.cumsum(marginal) / marginal.sum()
             lo_index = max(np.searchsorted(cumulative, 1e-7) - 2, 0)
-            hi_index = min(np.searchsorted(cumulative, 1 - 1e-7) + 2, len(axes[node]) - 1)
-            refined[node] = np.linspace(axes[node][lo_index], axes[node][hi_index], n_points)
+            hi_index = min(
+                np.searchsorted(cumulative, 1 - 1e-7) + 2, len(axes[node]) - 1
+            )
+            refined[node] = np.linspace(
+                axes[node][lo_index], axes[node][hi_index], n_points
+            )
         axes = refined if continuous else axes
     configurations, weights = _evaluate(axes)
 
@@ -821,9 +917,9 @@ def grid_reference(
     d = continuous.index(task.query)
     axis = axes[task.query]
     density = weights.sum(axis=tuple(i for i in range(weights.ndim) if i != d + 1))
-    density = density / _trapezoid(density, axis)
-    mean = float(_trapezoid(axis * density, axis))
-    std = float(np.sqrt(_trapezoid((axis - mean) ** 2 * density, axis)))
+    density = density / np.trapezoid(density, axis)
+    mean = float(np.trapezoid(axis * density, axis))
+    std = float(np.sqrt(np.trapezoid((axis - mean) ** 2 * density, axis)))
     cumulative = np.concatenate(
         [[0.0], np.cumsum(0.5 * (density[1:] + density[:-1]) * np.diff(axis))]
     )
@@ -844,8 +940,12 @@ def grid_reference(
 def stratified_class_reference(
     bn: SemiParametricBayesianNetwork, task: Task, n_samples: int, seed: int
 ) -> Reference:
-    """Reference class posterior P(c | e) ∝ f(e, c) of a classifier, with one plain likelihood weighting run per class
-    clamped as evidence, whose ``log_evidence`` estimates log f(e, c). Stratifying by class avoids sampling the class."""
+    """Reference class posterior P(c | e) ∝ f(e, c) of a classifier, with one plain likelihood weighting run per class clamped as evidence, whose ``log_evidence`` estimates log f(e, c).
+    Stratifying by class avoids sampling the class.
+
+    The class is a discrete variable with only a few categories, so instead of drawing it at random, the reference fixes each category in turn and sums over them exactly.
+    That removes the noise that comes from which class each sample happens to get.
+    """
     categories = bn._categories()[task.query]
     log_joint, relative_variances = [], []
     for index, category in enumerate(categories):
@@ -867,7 +967,8 @@ def stratified_class_reference(
     # Delta method for P_c = Z_c / sum_k Z_k with independent estimates Z_k of relative variances r_k
     r = np.asarray(relative_variances)
     variances = [
-        (1 - p) ** 2 * p**2 * r[c] + p**2 * sum(probabilities[k] ** 2 * r[k] for k in range(len(r)) if k != c)
+        (1 - p) ** 2 * p**2 * r[c]
+        + p**2 * sum(probabilities[k] ** 2 * r[k] for k in range(len(r)) if k != c)
         for c, p in enumerate(probabilities)
     ]
     return Reference(
@@ -883,16 +984,20 @@ def stratified_class_reference(
 
 # region Posterior estimates and errors
 def _weighted_normal_cdf(
-    grid: np.ndarray, weights: np.ndarray, means: np.ndarray, scales: np.ndarray | float, chunk: int = 64
+    grid: np.ndarray,
+    weights: np.ndarray,
+    means: np.ndarray,
+    scales: np.ndarray | float,
+    chunk: int = 64,
 ) -> np.ndarray:
     """sum_j w_j Phi((g - m_j) / s_j) at every grid point, in chunks of the grid to bound the memory"""
     cdf = np.empty(len(grid))
     scales = np.broadcast_to(np.asarray(scales, dtype=float), means.shape)
     for start in range(0, len(grid), chunk):
         block = grid[start : start + chunk]
-        cdf[start : start + chunk] = norm.cdf(
-            (block[:, None] - means[None, :]) / scales[None, :]
-        ) @ weights
+        cdf[start : start + chunk] = (
+            norm.cdf((block[:, None] - means[None, :]) / scales[None, :]) @ weights
+        )
     return cdf
 
 
@@ -903,15 +1008,23 @@ def mixture_estimate(
     stds = np.broadcast_to(np.asarray(stds, dtype=float), means.shape)
     mean = float(np.sum(weights * means))
     std = float(np.sqrt(np.sum(weights * (stds**2 + (means - mean) ** 2))))
-    return {"mean": mean, "std": std, "cdf": _weighted_normal_cdf(grid, weights, means, stds)}
+    return {
+        "mean": mean,
+        "std": std,
+        "cdf": _weighted_normal_cdf(grid, weights, means, stds),
+    }
 
 
 def kde_estimate(
-    weights: np.ndarray, samples: np.ndarray, grid: np.ndarray, effective_sample_size: float | None = None
+    weights: np.ndarray,
+    samples: np.ndarray,
+    grid: np.ndarray,
+    effective_sample_size: float | None = None,
 ) -> dict:
-    """Moments and CDF of the weighted Gaussian KDE of the article, with the bandwidth of
-    ``SemiParametricBayesianNetwork._kde_bandwidth``; the variance of the KDE is the weighted variance plus h**2"""
-    bandwidth = SemiParametricBayesianNetwork._kde_bandwidth(samples, weights, effective_sample_size)
+    """Moments and CDF of the weighted Gaussian KDE of the article, with the bandwidth of ``SemiParametricBayesianNetwork._kde_bandwidth``; the variance of the KDE is the weighted variance plus h**2"""
+    bandwidth = SemiParametricBayesianNetwork._kde_bandwidth(
+        samples, weights, effective_sample_size
+    )
     mean = float(np.sum(weights * samples))
     variance = float(np.sum(weights * (samples - mean) ** 2))
     return {
@@ -930,19 +1043,22 @@ def estimate_posterior(
     estimator: str = "default",
     seed: int = 0,
 ) -> dict:
-    """Posterior estimate of the query (Equation posterior_estimate of the article) and its errors with respect to the
-    reference: the mean and standard deviation errors and the Wasserstein-1 distance normalized by the reference standard
-    deviation for continuous queries, and the maximum absolute probability error for discrete queries."""
+    """Posterior estimate of the query (Equation posterior_estimate of the article) and its errors with respect to the reference:
+    the mean and standard deviation errors and the Wasserstein-1 distance normalized by the reference standard deviation for continuous queries, and the maximum absolute probability error for discrete queries.
+    """
     parameters = infer_dict["parameters"]
     weights = np.asarray(parameters["weights"], dtype=float)
     column = parameters["assignments"][task.query]
     if task.query_type == "discrete":
         values = column.astype(str).to_numpy()
-        probabilities = {c: float(np.sum(weights[values == c])) for c in bn._categories()[task.query]}
+        probabilities = {
+            c: float(np.sum(weights[values == c])) for c in bn._categories()[task.query]
+        }
         row = {"probabilities": json.dumps(probabilities)}
         if reference.ok and reference.probabilities:
             row["prob_error"] = max(
-                abs(probabilities[c] - reference.probabilities[c]) for c in probabilities
+                abs(probabilities[c] - reference.probabilities[c])
+                for c in probabilities
             )
         return row
 
@@ -955,17 +1071,28 @@ def estimate_posterior(
     if task.query in posterior_std and estimator == "sampled_kde":
         # Ablation: draw the query from its exact posterior given each sample, then a KDE as if it had been sampled
         rng = np.random.default_rng(seed)
-        draws = values + np.asarray(posterior_std[task.query]) * rng.standard_normal(len(values))
+        draws = values + np.asarray(posterior_std[task.query]) * rng.standard_normal(
+            len(values)
+        )
         estimate = kde_estimate(weights, draws, grid, ess)
     elif task.query in posterior_std:
         estimate = mixture_estimate(weights, values, posterior_std[task.query], grid)
     else:
         estimate = kde_estimate(weights, values, grid, ess)
-    row = {"mean": estimate["mean"], "std": estimate["std"], "bandwidth": estimate.get("bandwidth", np.nan)}
+    row = {
+        "mean": estimate["mean"],
+        "std": estimate["std"],
+        "bandwidth": estimate.get("bandwidth", np.nan),
+    }
     if reference.ok and len(grid) > 0:
         row["err_mean"] = (estimate["mean"] - reference.mean) / reference.std
         row["err_std"] = (estimate["std"] - reference.std) / reference.std
-        row["w1"] = float(_trapezoid(np.abs(estimate["cdf"] - np.asarray(reference.cdf)), grid)) / reference.std
+        row["w1"] = (
+            float(
+                np.trapezoid(np.abs(estimate["cdf"] - np.asarray(reference.cdf)), grid)
+            )
+            / reference.std
+        )
     return row
 
 
@@ -975,8 +1102,10 @@ def estimate_posterior(
 # region Inference runs
 @contextmanager
 def count_kernel_evaluations():
-    """Counts the kernel evaluations of the CKDE-CPDs computed with the cached mixtures (``_conditional_mixture``, used by
-    the Gibbs samplers): the number of rows times the number of kernels of every call. Yields a one-element list."""
+    """Counts the kernel evaluations of the CKDE-CPDs computed with the cached mixtures (``_conditional_mixture``, used by the Gibbs samplers):
+    the number of rows times the number of kernels of every call.
+    Yields a one-element list.
+    """
     original = SemiParametricBayesianNetwork.__dict__["_conditional_mixture"]
     counter = [0]
 
@@ -1003,12 +1132,11 @@ def run_method(
     gibbs_options: dict,
     true_value: float | None = None,
 ) -> dict:
-    """Runs one inference method on one task and returns the result row: runtime, kernel evaluations, posterior estimate,
-    errors with respect to the reference and diagnostics. With ``true_value`` (E6), the row also contains the log-density
-    of the posterior estimate at the true value of the query (``log_score``).
+    """Runs one inference method on one task and returns the result row:
+    runtime, kernel evaluations, posterior estimate, errors with respect to the reference and diagnostics.
+    With ``true_value`` (E6), the row also contains the log-density of the posterior estimate at the true value of the query (``log_score``).
 
-    The repetition seed is shared by all the methods, so likelihood weighting and RBLW draw the same values of the sampled
-    variables (common random numbers) and the comparisons are paired.
+    The repetition seed is shared by all the methods, so likelihood weighting and RBLW draw the same values of the sampled variables (common random numbers) and the comparisons are paired.
     """
     spec = dict(METHODS[method_name])
     estimator = spec.pop("estimator", "default")
@@ -1030,7 +1158,9 @@ def run_method(
     else:
         # The chains are initialized by forward sampling with the CKDE-CPDs of pybnesian
         kernel_evaluations = counter[0] + kwargs["n_chains"] * sum(
-            size for node, size in sizes.items() if node in sampled and node not in task.evidence
+            size
+            for node, size in sizes.items()
+            if node in sampled and node not in task.evidence
         )
     row = {
         "method": method_name,
@@ -1046,14 +1176,20 @@ def run_method(
     else:
         row["rhat"] = parameters["rhat"].get(task.query, np.nan)
         row["n_eff"] = parameters["effective_sample_size"].get(task.query, np.nan)
-        row["tail_ess"] = parameters["tail_effective_sample_size"].get(task.query, np.nan)
+        row["tail_ess"] = parameters["tail_effective_sample_size"].get(
+            task.query, np.nan
+        )
         finite_rhat = [r for r in parameters["rhat"].values() if np.isfinite(r)]
         row["max_rhat"] = max(finite_rhat) if finite_rhat else np.nan
         for rate in ["exact_rate", "acceptance_rate", "block_acceptance_rate"]:
             values = list(parameters[rate].values())
             row[f"mean_{rate}"] = float(np.mean(values)) if values else np.nan
     if true_value is not None:
-        ess = parameters["effective_sample_size"].get(task.query) if spec["method"] == "gibbs" else None
+        ess = (
+            parameters["effective_sample_size"].get(task.query)
+            if spec["method"] == "gibbs"
+            else None
+        )
         density = bn._posterior_density(
             task.query,
             pd.Series({task.query: true_value}),
@@ -1138,15 +1274,26 @@ def compute_reference(bn, task: Task, unit: UnitSpec, prior: pd.DataFrame) -> Re
                 return grid_reference(bn, task, prior)
             case "lw+gibbs":
                 return checked_reference(
-                    bn, task, unit.n_reference, unit.n_reference_gibbs, unit.seed + 7919,
-                    unit.reference_burn_in, unit.reference_max_rhat,
+                    bn,
+                    task,
+                    unit.n_reference,
+                    unit.n_reference_gibbs,
+                    unit.seed + 7919,
+                    unit.reference_burn_in,
+                    unit.reference_max_rhat,
                 )
             case "lw":
-                return checked_reference(bn, task, unit.n_reference, 0, unit.seed + 7919)
+                return checked_reference(
+                    bn, task, unit.n_reference, 0, unit.seed + 7919
+                )
             case "none":
                 return Reference("none", False)
-    except Exception as error:  # e.g., singular covariance or numerical failure: the task is excluded
-        return Reference(unit.reference, False, message=f"{type(error).__name__}: {error}")
+    except (
+        Exception
+    ) as error:  # e.g., singular covariance or numerical failure: the task is excluded
+        return Reference(
+            unit.reference, False, message=f"{type(error).__name__}: {error}"
+        )
     raise ValueError(f"Unknown reference {unit.reference!r}.")
 
 
@@ -1203,14 +1350,24 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
             "reference_method": reference.method,
             **unit.factors,
             **task.factors,
-            **{key: info[key] for key in ["n_nodes", "n_rb", "frac_rb", "n_delta", "mean_ckde_size"]},
+            **{
+                key: info[key]
+                for key in ["n_nodes", "n_rb", "frac_rb", "n_delta", "mean_ckde_size"]
+            },
         }
         for method_name in unit.methods:
             family = METHODS[method_name]["method"]
             for n_samples in unit.sample_sizes[family]:
                 for rep in range(unit.n_reps):
                     row = run_method(
-                        bn, task, method_name, n_samples, rep, reference, sizes, gibbs_options,
+                        bn,
+                        task,
+                        method_name,
+                        n_samples,
+                        rep,
+                        reference,
+                        sizes,
+                        gibbs_options,
                         true_value=task.true_value if unit.kind == "dataset" else None,
                     )
                     result_rows.append({**base, **row})
@@ -1232,9 +1389,13 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
 
 
 # region Real datasets (E6, E7)
-def load_dataset(dataset_name: str, seed: int, max_train_size: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_dataset(
+    dataset_name: str, seed: int, max_train_size: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train and test partitions of a public dataset (continuous features and ``TRUE_CLASS_LABEL``)"""
-    handler = DataHandler.from_public_data(dataset_name, seed=seed, max_train_data_size=max_train_size)
+    handler = DataHandler.from_public_data(
+        dataset_name, seed=seed, max_train_data_size=max_train_size
+    )
     train = handler.train_attack_data.reset_index(drop=True)
     test = handler.test_data_dict["test_full"].reset_index(drop=True)
     features = [c for c in train.columns if c != TRUE_CLASS_LABEL]
@@ -1257,16 +1418,22 @@ def learn_dataset_spbn(
     return bn, info, test[list(bn.nodes())]
 
 
-def dataset_tasks(bn: SemiParametricBayesianNetwork, unit: UnitSpec, test: pd.DataFrame) -> list[Task]:
+def dataset_tasks(
+    bn: SemiParametricBayesianNetwork, unit: UnitSpec, test: pd.DataFrame
+) -> list[Task]:
     """E6 tasks: held-out instances with a random fraction of the variables observed and one of the rest as query"""
     rng = np.random.default_rng(unit.seed + 1)
     sampled = bn._sampled_nodes()
     nodes = list(bn.nodes())
     observed_fraction = unit.extra.get("observed_fraction", 0.5)
     tasks = []
-    for task_index, row_index in enumerate(rng.choice(len(test), size=min(unit.n_tasks, len(test)), replace=False)):
+    for task_index, row_index in enumerate(
+        rng.choice(len(test), size=min(unit.n_tasks, len(test)), replace=False)
+    ):
         row = test.iloc[int(row_index)]
-        n_observed = max(1, min(len(nodes) - 1, int(round(observed_fraction * len(nodes)))))
+        n_observed = max(
+            1, min(len(nodes) - 1, int(round(observed_fraction * len(nodes))))
+        )
         permutation = list(rng.permutation(nodes))
         evidence_nodes, query = permutation[:n_observed], permutation[n_observed]
         evidence = {n: float(row[n]) for n in evidence_nodes}
@@ -1280,7 +1447,9 @@ def dataset_tasks(bn: SemiParametricBayesianNetwork, unit: UnitSpec, test: pd.Da
                     "n_evidence": len(evidence),
                     "n_evidence_S": sum(n in sampled for n in evidence),
                     "n_evidence_R": sum(n not in sampled for n in evidence),
-                    "n_unobserved_rb_ancestors": unobserved_rb_ancestors(bn, evidence, sampled),
+                    "n_unobserved_rb_ancestors": unobserved_rb_ancestors(
+                        bn, evidence, sampled
+                    ),
                 },
                 true_value=float(row[query]),
             )
@@ -1296,12 +1465,19 @@ CLASSIFIERS = {
 
 
 def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
-    """E7: class posterior of an SPBN classifier with features missing completely at random, estimated with the inference
-    methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior of the classifier."""
+    """E7: class posterior of an SPBN classifier with features missing completely at random, estimated with the inference methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior of the classifier.
+
+    E7 makes two comparisons on the task that motivates SPBN classifiers: predicting the class when some features are missing:
+    - RB vs non-RB inference (the paper's claim).
+    - Inference vs imputation (whether inference is needed at all).
+    Comparing log-loss, Brier score and accuracy against the true labels shows whether proper inference is worth its cost over the cheap shortcut.
+    """
     from sklearn.impute import KNNImputer
 
     dataset_name, model_name = unit.config["dataset"], unit.config["model"]
-    train, test = load_dataset(dataset_name, unit.seed, unit.config.get("max_train_size", 2000))
+    train, test = load_dataset(
+        dataset_name, unit.seed, unit.config.get("max_train_size", 2000)
+    )
     features = [c for c in train.columns if c != TRUE_CLASS_LABEL]
     model = CLASSIFIERS[model_name](seed=unit.seed)
     model.fit(train[features], train[TRUE_CLASS_LABEL])
@@ -1310,7 +1486,14 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     network_features = [f for f in model_features if f in model.nodes()]
     classes = [str(c) for c in model.classes_]
     info = describe_network(model)
-    info.update({"unit_id": unit.unit_id, "dataset": dataset_name, "model": model_name, **unit.factors})
+    info.update(
+        {
+            "unit_id": unit.unit_id,
+            "dataset": dataset_name,
+            "model": model_name,
+            **unit.factors,
+        }
+    )
     info["device"] = opencl_device_name()
     sizes = ckde_sizes(model)
     gibbs_options = {**GIBBS_DEFAULTS, **unit.gibbs_options}
@@ -1321,7 +1504,9 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
 
     rng = np.random.default_rng(unit.seed + 1)
     rows, task_rows, reference_rows = [], [], []
-    test_indices = rng.choice(len(test), size=min(unit.n_tasks, len(test)), replace=False)
+    test_indices = rng.choice(
+        len(test), size=min(unit.n_tasks, len(test)), replace=False
+    )
     for missing_rate in unit.extra["missing_rates"]:
         for task_index, row_index in enumerate(test_indices):
             row = test.iloc[int(row_index)]
@@ -1330,7 +1515,9 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 missing[rng.integers(len(missing))] = False
             if not missing.any():
                 missing[rng.integers(len(missing))] = True
-            evidence = {f: float(row[f]) for f, m in zip(network_features, missing) if not m}
+            evidence = {
+                f: float(row[f]) for f, m in zip(network_features, missing) if not m
+            }
             task = Task(
                 task_id=f"{unit.unit_id}/{missing_rate}/{task_index}",
                 query=model.true_label,
@@ -1339,7 +1526,9 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 factors={"missing_rate": missing_rate, "n_missing": int(missing.sum())},
                 true_value=str(row[TRUE_CLASS_LABEL]),
             )
-            reference = stratified_class_reference(model, task, unit.n_reference, unit.seed + 7919)
+            reference = stratified_class_reference(
+                model, task, unit.n_reference, unit.seed + 7919
+            )
             task_rows.append(asdict(task))
             reference_rows.append({"task_id": task.task_id, **asdict(reference)})
             base = {
@@ -1363,7 +1552,10 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 }
                 if reference.ok:
                     scores["prob_error"] = float(
-                        max(abs(probabilities.get(c, 0.0) - reference.probabilities[c]) for c in classes)
+                        max(
+                            abs(probabilities.get(c, 0.0) - reference.probabilities[c])
+                            for c in classes
+                        )
                     )
                 return scores
 
@@ -1371,12 +1563,23 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 family = METHODS[method_name]["method"]
                 for n_samples in unit.sample_sizes[family]:
                     for rep in range(unit.n_reps):
-                        result = run_method(model, task, method_name, n_samples, rep, reference, sizes, gibbs_options)
+                        result = run_method(
+                            model,
+                            task,
+                            method_name,
+                            n_samples,
+                            rep,
+                            reference,
+                            sizes,
+                            gibbs_options,
+                        )
                         probabilities = json.loads(result.pop("probabilities"))
                         result.pop("prob_error", None)
                         rows.append({**base, **result, **_scores(probabilities)})
             for imputer_name, imputer in imputers.items():
-                x = pd.DataFrame([row[model_features].to_numpy(dtype=float)], columns=model_features)
+                x = pd.DataFrame(
+                    [row[model_features].to_numpy(dtype=float)], columns=model_features
+                )
                 x.loc[0, np.asarray(network_features)[missing]] = np.nan
                 start = time.perf_counter()
                 if imputer_name == "MeanImpute":
@@ -1428,10 +1631,13 @@ EVIDENCE_FACTORS = {
 
 
 def _network_factor_config(factor: str, level) -> dict:
+    """Configuration of a synthetic network with one factor varied from the base configuration (see ``NETWORK_FACTORS``)"""
     config = asdict(SyntheticConfig())
     if factor == "n_discrete_parents_R":
         # delta = 4 ** m configurations of the discrete parents of R
-        config.update(n_categories=4, n_discrete=max(1, level), n_discrete_parents_R=level)
+        config.update(
+            n_categories=4, n_discrete=max(1, level), n_discrete_parents_R=level
+        )
     else:
         config[factor] = level
     return config
@@ -1459,30 +1665,63 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         for i, seed in enumerate(seeds):
             units.append(
                 UnitSpec(
-                    f"gaussian_{i}", "gaussian", {"check": "gaussian"},
+                    f"gaussian_{i}",
+                    "gaussian",
+                    {"check": "gaussian"},
                     asdict(SyntheticConfig(n_nodes=8, frac_clg=1.0, n_discrete=0)),
-                    seed, asdict(EvidenceSpec(n_evidence=3, location="R")), ["clg"],
-                    args.n_tasks, all_methods, sizes, reference="exact", **common,
+                    seed,
+                    asdict(EvidenceSpec(n_evidence=3, location="R")),
+                    ["clg"],
+                    args.n_tasks,
+                    all_methods,
+                    sizes,
+                    reference="exact",
+                    **common,
                 )
             )
             # 5 variables (1 discrete, 2 CKDE, 2 CLG) with 2 evidence variables: at most 3 unobserved continuous ones
             units.append(
                 UnitSpec(
-                    f"small_{i}", "synthetic", {"check": "grid"},
-                    asdict(SyntheticConfig(n_nodes=5, frac_clg=0.4, n_discrete=1, n_train=500)),
-                    seed, asdict(EvidenceSpec(n_evidence=2, location="both")), QUERY_TYPES,
-                    args.n_tasks, all_methods, sizes, reference="grid", **common,
+                    f"small_{i}",
+                    "synthetic",
+                    {"check": "grid"},
+                    asdict(
+                        SyntheticConfig(
+                            n_nodes=5, frac_clg=0.4, n_discrete=1, n_train=500
+                        )
+                    ),
+                    seed,
+                    asdict(EvidenceSpec(n_evidence=2, location="both")),
+                    QUERY_TYPES,
+                    args.n_tasks,
+                    all_methods,
+                    sizes,
+                    reference="grid",
+                    **common,
                 )
             )
             # Bimodal CKDE x with an observed CLG (in R) or CKDE (in S) child y; the query is always x
             for child_type in ["clg", "ckde"]:
                 units.append(
                     UnitSpec(
-                        f"two_node_{child_type}_{i}", "two_node", {"check": f"two_node_{child_type}"},
-                        {"child_type": child_type}, seed,
-                        asdict(EvidenceSpec(n_evidence=1, location="R" if child_type == "clg" else "S")),
-                        ["s_continuous"], args.n_tasks, all_methods, sizes, reference="grid",
-                        extra={"query_candidates": ["x"]}, **common,
+                        f"two_node_{child_type}_{i}",
+                        "two_node",
+                        {"check": f"two_node_{child_type}"},
+                        {"child_type": child_type},
+                        seed,
+                        asdict(
+                            EvidenceSpec(
+                                n_evidence=1,
+                                location="R" if child_type == "clg" else "S",
+                            )
+                        ),
+                        ["s_continuous"],
+                        args.n_tasks,
+                        all_methods,
+                        sizes,
+                        reference="grid",
+                        extra={"query_candidates": ["x"]},
+                        **common,
                     )
                 )
         return units
@@ -1491,9 +1730,18 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         for i, seed in enumerate(seeds):
             units.append(
                 UnitSpec(
-                    f"network_{i}", "synthetic", {"factor": "base", "level": "base"},
-                    asdict(SyntheticConfig()), seed, base_evidence, QUERY_TYPES, args.n_tasks,
-                    all_methods, sizes, reference="lw+gibbs", **common,
+                    f"network_{i}",
+                    "synthetic",
+                    {"factor": "base", "level": "base"},
+                    asdict(SyntheticConfig()),
+                    seed,
+                    base_evidence,
+                    QUERY_TYPES,
+                    args.n_tasks,
+                    all_methods,
+                    sizes,
+                    reference="lw+gibbs",
+                    **common,
                 )
             )
         return units
@@ -1504,23 +1752,41 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
-                            f"{factor}={level}_{i}", "synthetic", {"factor": factor, "level": level},
-                            _network_factor_config(factor, level), seed, base_evidence,
-                            ["clg", "s_continuous"], args.n_tasks, all_methods, sizes,
-                            reference="lw+gibbs", **common,
+                            f"{factor}={level}_{i}",
+                            "synthetic",
+                            {"factor": factor, "level": level},
+                            _network_factor_config(factor, level),
+                            seed,
+                            base_evidence,
+                            ["clg", "s_continuous"],
+                            args.n_tasks,
+                            all_methods,
+                            sizes,
+                            reference="lw+gibbs",
+                            **common,
                         )
                     )
         for factor, levels in EVIDENCE_FACTORS.items():
             for level in levels:
                 # Long CLG chains are needed for up to 10 unobserved CLG ancestors
-                config = asdict(SyntheticConfig(n_nodes=40 if factor == "n_rb_ancestors" else 20))
+                config = asdict(
+                    SyntheticConfig(n_nodes=40 if factor == "n_rb_ancestors" else 20)
+                )
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
-                            f"{factor}={level}_{i}", "synthetic", {"factor": factor, "level": level},
-                            config, seed, asdict(replace(EvidenceSpec(), **{factor: level})),
-                            ["clg", "s_continuous"], args.n_tasks, all_methods, sizes,
-                            reference="lw+gibbs", **common,
+                            f"{factor}={level}_{i}",
+                            "synthetic",
+                            {"factor": factor, "level": level},
+                            config,
+                            seed,
+                            asdict(replace(EvidenceSpec(), **{factor: level})),
+                            ["clg", "s_continuous"],
+                            args.n_tasks,
+                            all_methods,
+                            sizes,
+                            reference="lw+gibbs",
+                            **common,
                         )
                     )
         return units
@@ -1530,27 +1796,60 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
             # (i) Decomposition of the RBLW gain on CLG queries with evidence on R behind unobserved CLG variables
             units.append(
                 UnitSpec(
-                    f"decomposition_{i}", "synthetic", {"ablation": "decomposition"},
-                    asdict(SyntheticConfig()), seed, asdict(EvidenceSpec(n_evidence=4, n_rb_ancestors=2)),
-                    ["clg"], args.n_tasks, ["LW", "RBLW-KDE", "RBLW"], sizes, reference="lw+gibbs", **common,
+                    f"decomposition_{i}",
+                    "synthetic",
+                    {"ablation": "decomposition"},
+                    asdict(SyntheticConfig()),
+                    seed,
+                    asdict(EvidenceSpec(n_evidence=4, n_rb_ancestors=2)),
+                    ["clg"],
+                    args.n_tasks,
+                    ["LW", "RBLW-KDE", "RBLW"],
+                    sizes,
+                    reference="lw+gibbs",
+                    **common,
                 )
             )
             # (ii) Block moves in a classifier whose classes separate the CKDE features
             units.append(
                 UnitSpec(
-                    f"block_moves_{i}", "synthetic", {"ablation": "block_moves"},
-                    asdict(SyntheticConfig(n_nodes=10, frac_clg=0.3, n_discrete=1, prob_discrete_parent=1.0, class_separation=3.0)),
-                    seed, asdict(EvidenceSpec(n_evidence=3, location="S")), ["discrete"], args.n_tasks,
-                    ["RBGS", "RBGS-noblock"], sizes, reference="lw+gibbs", **common,
+                    f"block_moves_{i}",
+                    "synthetic",
+                    {"ablation": "block_moves"},
+                    asdict(
+                        SyntheticConfig(
+                            n_nodes=10,
+                            frac_clg=0.3,
+                            n_discrete=1,
+                            prob_discrete_parent=1.0,
+                            class_separation=3.0,
+                        )
+                    ),
+                    seed,
+                    asdict(EvidenceSpec(n_evidence=3, location="S")),
+                    ["discrete"],
+                    args.n_tasks,
+                    ["RBGS", "RBGS-noblock"],
+                    sizes,
+                    reference="lw+gibbs",
+                    **common,
                 )
             )
             # (iii) Rejection rounds, with evidence on CKDE variables so that the updates of their parents need rejection
             units.append(
                 UnitSpec(
-                    f"rejection_{i}", "synthetic", {"ablation": "rejection"},
-                    asdict(SyntheticConfig()), seed, asdict(EvidenceSpec(n_evidence=4, location="S")),
-                    ["s_continuous"], args.n_tasks,
-                    ["RBGS-rej0", "RBGS-rej1", "RBGS-rej10", "RBGS-rej100"], sizes, reference="lw+gibbs", **common,
+                    f"rejection_{i}",
+                    "synthetic",
+                    {"ablation": "rejection"},
+                    asdict(SyntheticConfig()),
+                    seed,
+                    asdict(EvidenceSpec(n_evidence=4, location="S")),
+                    ["s_continuous"],
+                    args.n_tasks,
+                    ["RBGS-rej0", "RBGS-rej1", "RBGS-rej10", "RBGS-rej100"],
+                    sizes,
+                    reference="lw+gibbs",
+                    **common,
                 )
             )
         return units
@@ -1563,9 +1862,18 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
-                            f"{factor}={level}_{i}", "synthetic", {"factor": factor, "level": level},
-                            _network_factor_config(factor, level), seed, base_evidence, ["clg"], 1,
-                            all_methods, sizes, reference="none", **common,
+                            f"{factor}={level}_{i}",
+                            "synthetic",
+                            {"factor": factor, "level": level},
+                            _network_factor_config(factor, level),
+                            seed,
+                            base_evidence,
+                            ["clg"],
+                            1,
+                            all_methods,
+                            sizes,
+                            reference="none",
+                            **common,
                         )
                     )
         return units
@@ -1574,10 +1882,19 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         for dataset in args.datasets:
             units.append(
                 UnitSpec(
-                    dataset, "dataset", {"dataset": dataset},
-                    {"dataset": dataset, "max_train_size": args.max_train_size}, args.seed, {}, [],
-                    args.n_tasks, all_methods, sizes, reference="lw+gibbs",
-                    extra={"observed_fraction": 0.5}, **common,
+                    dataset,
+                    "dataset",
+                    {"dataset": dataset},
+                    {"dataset": dataset, "max_train_size": args.max_train_size},
+                    args.seed,
+                    {},
+                    [],
+                    args.n_tasks,
+                    all_methods,
+                    sizes,
+                    reference="lw+gibbs",
+                    extra={"observed_fraction": 0.5},
+                    **common,
                 )
             )
         return units
@@ -1587,17 +1904,33 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
             for model_name in CLASSIFIERS:
                 units.append(
                     UnitSpec(
-                        f"{dataset}_{model_name}", "classifier", {"dataset": dataset, "model": model_name},
-                        {"dataset": dataset, "model": model_name, "max_train_size": args.max_train_size},
-                        args.seed, {}, ["discrete"], args.n_tasks, all_methods,
-                        {"lw": [args.classifier_sample_size], "gibbs": [args.classifier_sample_size]},
-                        reference="stratified_lw", extra={"missing_rates": [0.1, 0.2, 0.3, 0.5]},
+                        f"{dataset}_{model_name}",
+                        "classifier",
+                        {"dataset": dataset, "model": model_name},
+                        {
+                            "dataset": dataset,
+                            "model": model_name,
+                            "max_train_size": args.max_train_size,
+                        },
+                        args.seed,
+                        {},
+                        ["discrete"],
+                        args.n_tasks,
+                        all_methods,
+                        {
+                            "lw": [args.classifier_sample_size],
+                            "gibbs": [args.classifier_sample_size],
+                        },
+                        reference="stratified_lw",
+                        extra={"missing_rates": [0.1, 0.2, 0.3, 0.5]},
                         **{**common, "n_reps": args.classifier_reps},
                     )
                 )
         return units
 
-    raise ValueError(f"Unknown experiment {experiment!r}, expected one of {EXPERIMENT_NAMES}.")
+    raise ValueError(
+        f"Unknown experiment {experiment!r}, expected one of {EXPERIMENT_NAMES}."
+    )
 
 
 # endregion Experiment definitions
@@ -1621,28 +1954,53 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
     units = build_units(experiment, args)
     output_path.mkdir(parents=True, exist_ok=True)
     with open(output_path / "config.json", "w") as f:
-        json.dump({"args": vars(args), "units": [asdict(u) for u in units]}, f, default=_json_default, indent=2)
+        json.dump(
+            {"args": vars(args), "units": [asdict(u) for u in units]},
+            f,
+            default=_json_default,
+            indent=2,
+        )
 
-    pending = [u for u in units if not (output_path / "units" / _safe_name(u.unit_id) / "done").exists()]
-    print(f"{experiment}: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}.")
+    pending = [
+        u
+        for u in units
+        if not (output_path / "units" / _safe_name(u.unit_id) / "done").exists()
+    ]
+    print(
+        f"{experiment}: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
+    )
     failures = []
     if args.max_workers <= 1:
         for index, unit in enumerate(pending):
-            unit_id, n_rows, error = _run_unit_safely(unit, output_path / "units" / _safe_name(unit.unit_id))
-            print(f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows" + (" FAILED" if error else ""))
+            unit_id, n_rows, error = _run_unit_safely(
+                unit, output_path / "units" / _safe_name(unit.unit_id)
+            )
+            print(
+                f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows"
+                + (" FAILED" if error else "")
+            )
             if error:
                 failures.append((unit_id, error))
     else:
         # spawn: pybnesian/OpenCL contexts must not be inherited through fork
         context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=args.max_workers, mp_context=context) as executor:
+        with ProcessPoolExecutor(
+            max_workers=args.max_workers, mp_context=context
+        ) as executor:
             futures = [
-                executor.submit(_run_unit_safely, unit, output_path / "units" / _safe_name(unit.unit_id))
+                executor.submit(
+                    _run_unit_safely,
+                    unit,
+                    output_path / "units" / _safe_name(unit.unit_id),
+                )
                 for unit in pending
             ]
             for index, future in enumerate(as_completed(futures)):
                 unit_id, n_rows, error = future.result()
-                print(f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows" + (" FAILED" if error else ""))
+                print(
+                    f"[{index + 1}/{len(pending)}] {unit_id}: {n_rows} rows"
+                    + (" FAILED" if error else "")
+                )
                 if error:
                     failures.append((unit_id, error))
     for unit_id, error in failures:
@@ -1653,10 +2011,18 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
 
 def combine_units(output_path: Path) -> None:
     """Concatenates the files of the finished units into the experiment folder"""
-    unit_paths = sorted(p for p in (output_path / "units").glob("*") if (p / "done").exists())
-    results = [pd.read_csv(p / "results.csv") for p in unit_paths if (p / "results.csv").stat().st_size > 1]
+    unit_paths = sorted(
+        p for p in (output_path / "units").glob("*") if (p / "done").exists()
+    )
+    results = [
+        pd.read_csv(p / "results.csv")
+        for p in unit_paths
+        if (p / "results.csv").stat().st_size > 1
+    ]
     if results:
-        pd.concat(results, ignore_index=True).to_csv(output_path / "results.csv", index=False)
+        pd.concat(results, ignore_index=True).to_csv(
+            output_path / "results.csv", index=False
+        )
     networks = []
     for p in unit_paths:
         if (p / "network.json").exists():
@@ -1671,31 +2037,72 @@ def combine_units(output_path: Path) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("experiment", choices=EXPERIMENT_NAMES)
-    parser.add_argument("--quick", action="store_true", help="Tiny sizes for a smoke run.")
-    parser.add_argument("--n_networks", type=int, help="Synthetic networks per configuration.")
-    parser.add_argument("--n_tasks", type=int, help="Tasks per query type (test instances for E6/E7).")
-    parser.add_argument("--n_reps", type=int, help="Repetitions per method and sample size.")
-    parser.add_argument("--sample_sizes", type=int, nargs="+", help="Sample sizes of LW and RBLW.")
-    parser.add_argument("--gibbs_sample_sizes", type=int, nargs="+", help="Sample sizes of GS and RBGS.")
-    parser.add_argument("--n_reference", type=int, help="Samples of the likelihood weighting reference.")
+    parser.add_argument(
+        "--quick", action="store_true", help="Tiny sizes for a smoke run."
+    )
+    parser.add_argument(
+        "--n_networks", type=int, help="Synthetic networks per configuration."
+    )
+    parser.add_argument(
+        "--n_tasks", type=int, help="Tasks per query type (test instances for E6/E7)."
+    )
+    parser.add_argument(
+        "--n_reps", type=int, help="Repetitions per method and sample size."
+    )
+    parser.add_argument(
+        "--sample_sizes", type=int, nargs="+", help="Sample sizes of LW and RBLW."
+    )
+    parser.add_argument(
+        "--gibbs_sample_sizes", type=int, nargs="+", help="Sample sizes of GS and RBGS."
+    )
+    parser.add_argument(
+        "--n_reference", type=int, help="Samples of the likelihood weighting reference."
+    )
     parser.add_argument(
         "--n_reference_gibbs",
         type=int,
         help="Samples of the check of the reference: Gibbs samples for continuous queries, samples per category of the "
         "stratified likelihood weighting for discrete queries (0 disables the check).",
     )
-    parser.add_argument("--reference_burn_in", type=int, help="Burn-in sweeps of the Gibbs check of the reference.")
-    parser.add_argument("--reference_max_rhat", type=float, help="Maximum R-hat of the Gibbs check of the reference.")
-    parser.add_argument("--n_prior", type=int, help="Prior samples used to draw the evidence and the grid ranges.")
+    parser.add_argument(
+        "--reference_burn_in",
+        type=int,
+        help="Burn-in sweeps of the Gibbs check of the reference.",
+    )
+    parser.add_argument(
+        "--reference_max_rhat",
+        type=float,
+        help="Maximum R-hat of the Gibbs check of the reference.",
+    )
+    parser.add_argument(
+        "--n_prior",
+        type=int,
+        help="Prior samples used to draw the evidence and the grid ranges.",
+    )
     parser.add_argument("--n_chains", type=int, help="Chains of GS and RBGS.")
     parser.add_argument("--burn_in", type=int, help="Burn-in sweeps of GS and RBGS.")
     parser.add_argument("--datasets", nargs="+", help="Public datasets of E6 and E7.")
-    parser.add_argument("--max_train_size", type=int, help="Maximum training instances of the real datasets.")
-    parser.add_argument("--classifier_sample_size", type=int, help="Samples per class posterior in E7.")
-    parser.add_argument("--classifier_reps", type=int, help="Repetitions per test instance in E7.")
-    parser.add_argument("--max_workers", type=int, default=1, help="Parallel units (keep 1 when timing).")
+    parser.add_argument(
+        "--max_train_size",
+        type=int,
+        help="Maximum training instances of the real datasets.",
+    )
+    parser.add_argument(
+        "--classifier_sample_size", type=int, help="Samples per class posterior in E7."
+    )
+    parser.add_argument(
+        "--classifier_reps", type=int, help="Repetitions per test instance in E7."
+    )
+    parser.add_argument(
+        "--max_workers",
+        type=int,
+        default=1,
+        help="Parallel units (keep 1 when timing).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--output_dir",
@@ -1729,7 +2136,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         # One stratified reference per test instance, missing rate and classifier: 10**6 samples per class keeps it affordable
         defaults.update(n_reference=1_000_000)
     if args.experiment == "E5":
-        defaults.update(n_reps=5, sample_sizes=[1, 100, 1_000, 10_000, 100_000], gibbs_sample_sizes=[100, 1_000, 10_000])
+        defaults.update(
+            n_reps=5,
+            sample_sizes=[1, 100, 1_000, 10_000, 100_000],
+            gibbs_sample_sizes=[100, 1_000, 10_000],
+        )
     if args.quick:
         defaults.update(
             n_networks=1,

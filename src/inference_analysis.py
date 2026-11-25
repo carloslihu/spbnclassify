@@ -477,18 +477,23 @@ def diagnostics_table(summary: pd.DataFrame, output: Path, prefix: str) -> pd.Da
 def _read_jsonl(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
-    return pd.DataFrame([json.loads(line) for line in path.read_text().splitlines() if line.strip()])
+    return pd.DataFrame(
+        [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    )
 
 
 def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
     """Fraction of the tasks discarded because their reference failed the checks of ``checked_reference`` (low ESS of the
     LW reference, non-converged Gibbs chains, or disagreement between both estimates), per configuration and query type.
-    The configuration is the unit identifier without its network index (e.g., "frac_clg=0.3")."""
+    The configuration is the unit identifier without its network index (e.g., "frac_clg=0.3").
+    """
     references = _read_jsonl(output / "references.jsonl")
     tasks = _read_jsonl(output / "tasks.jsonl")
     if not len(references) or (references["method"] == "none").all():
         return pd.DataFrame()
-    references = references.merge(tasks[["task_id", "query_type"]], on="task_id", how="left")
+    references = references.merge(
+        tasks[["task_id", "query_type"]], on="task_id", how="left"
+    )
     unit = references["task_id"].str.split("/").str[0]
     references["configuration"] = unit.str.replace(r"_\d+$", "", regex=True)
     message = references["message"].fillna("")
@@ -511,13 +516,28 @@ def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
         .reset_index()
     )
     table["frac_discarded"] = 1.0 - table["n_kept"] / table["n_tasks"]
-    total = table[["n_tasks", "n_kept", "n_low_ess", "n_not_converged", "n_disagreement", "n_failed"]].sum()
+    total = table[
+        [
+            "n_tasks",
+            "n_kept",
+            "n_low_ess",
+            "n_not_converged",
+            "n_disagreement",
+            "n_failed",
+        ]
+    ].sum()
     table = pd.concat(
         [
             table,
             pd.DataFrame(
-                [{"configuration": "all", "query_type": "all", **total.to_dict(),
-                  "frac_discarded": 1.0 - total["n_kept"] / total["n_tasks"]}]
+                [
+                    {
+                        "configuration": "all",
+                        "query_type": "all",
+                        **total.to_dict(),
+                        "frac_discarded": 1.0 - total["n_kept"] / total["n_tasks"],
+                    }
+                ]
             ),
         ],
         ignore_index=True,
@@ -589,7 +609,9 @@ LEVEL_ORDER = {"S": 0, "both": 1, "R": 2}
 
 def _sort_levels(table: pd.DataFrame) -> pd.DataFrame:
     """Sorts the rows by factor and by the numeric value of the level (or ``LEVEL_ORDER``), so the levels are plotted in
-    their natural order (10, 20, 50, 100) instead of the string order (10, 100, 20, 50)"""
+    their natural order (10, 20, 50, 100) instead of the string order (10, 100, 20, 50)
+    """
+
     def _key(level) -> float:
         try:
             return float(level)
@@ -598,7 +620,9 @@ def _sort_levels(table: pd.DataFrame) -> pd.DataFrame:
 
     table = table.copy()
     table["_level_key"] = table["level"].map(_key)
-    table = table.sort_values(["factor", "_level_key"], kind="stable").drop(columns="_level_key")
+    table = table.sort_values(["factor", "_level_key"], kind="stable").drop(
+        columns="_level_key"
+    )
     return table.reset_index(drop=True)
 
 
