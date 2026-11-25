@@ -1,8 +1,24 @@
 """Experiments of the article on Rao-Blackwellized inference in semiparametric Bayesian networks (sections/04-results.tex).
 
 Each experiment (E1-E7) writes its raw results to ``data/results/inference/<experiment>/``:
-    - ``units/<unit_id>/``: the network, tasks, references and results of each independent unit (a network or a dataset), written when the unit finishes, so an interrupted run resumes by skipping the finished units.
+    - ``units/<unit_id>/``: the files of each independent unit (a network or a dataset),
+    written as its stages finish, so an interrupted run resumes by skipping the finished units:
+        - ``network.pkl``: the fitted network (or classifier), which the timed stage loads.
+        - ``network.json``: its description, with the timing device added by the timed stage.
+        - ``train_features.csv`` and ``test_rows.csv`` (E7): the training features of the imputers and the test instances.
+        - ``tasks.jsonl``, ``references.jsonl`` and ``results.csv``: as below, for this unit only.
+        - ``references_done`` and ``done``: empty markers of the finished reference and timed stages.
     - ``results.csv``, ``tasks.jsonl``, ``references.jsonl`` and ``networks.csv``: the concatenation of all the units.
+        - ``networks.csv``: one row per unit, with the realized structure (``n_nodes``, ``n_ckde``, ``n_clg``, ``n_rb``,
+          ``frac_rb``, ``n_delta``, ``mean_ckde_size``), the generator settings (``config_*``), ``network_seed``, the
+          factor and level, and the GPU and cores of the timed runs.
+        - ``tasks.jsonl``: one record per task, with the query, its type, the evidence values, the task factors
+          (evidence location, rarity, k, ...) and the true class (E7 only).
+        - ``references.jsonl``: one record per task with the reference posterior: its method (exact, grid or lw),
+          whether it passed the check (``ok``, and ``message`` otherwise), mean, std, class probabilities, the CDF on a
+          1024-point grid (for W1), and its MCSE and effective sample size.
+        - ``results.csv``: one row per (task, method, N, repetition), with the estimates, errors, cost and diagnostics of
+          the run.
 ``analysis.py`` builds the figures, tables and statistical tests from these files.
 
 Usage (from the library root):
@@ -648,7 +664,11 @@ def lw_reference(
     drawn = 0
 
     def _ess() -> float:
-        return float(np.exp(2 * log_sum - log_sum_squares)) if np.isfinite(log_sum) else 0.0
+        return (
+            float(np.exp(2 * log_sum - log_sum_squares))
+            if np.isfinite(log_sum)
+            else 0.0
+        )
 
     while drawn < max_samples:
         if drawn >= n_samples and _ess() >= MIN_REFERENCE_ESS:
@@ -679,7 +699,9 @@ def lw_reference(
             else column.to_numpy(dtype=float)
         )
         log_sum = np.logaddexp(log_sum, logsumexp(batch_log_weights))
-        log_sum_squares = np.logaddexp(log_sum_squares, logsumexp(2 * batch_log_weights))
+        log_sum_squares = np.logaddexp(
+            log_sum_squares, logsumexp(2 * batch_log_weights)
+        )
         log_max = max(log_max, float(np.max(batch_log_weights)))
         keep = batch_log_weights > log_max - REFERENCE_PRUNE_LOG_WEIGHT
         values.append(batch_values[keep])
@@ -1324,7 +1346,11 @@ def compute_reference(bn, task: Task, unit: UnitSpec, prior: pd.DataFrame) -> Re
                 )
             case "lw":
                 return checked_reference(
-                    bn, task, unit.n_reference, 0, unit.seed + 7919,
+                    bn,
+                    task,
+                    unit.n_reference,
+                    0,
+                    unit.seed + 7919,
                     max_samples=unit.n_reference_max,
                 )
             case "none":
@@ -1447,7 +1473,9 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
             "reference_method": reference.method,
             # Near-certain discrete tasks (above NEAR_CERTAIN_PROBABILITY) are reported apart by the analysis
             "reference_max_probability": (
-                max(reference.probabilities.values()) if reference.probabilities else np.nan
+                max(reference.probabilities.values())
+                if reference.probabilities
+                else np.nan
             ),
             **unit.factors,
             **task.factors,
@@ -2183,7 +2211,8 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
 
 def combine_units(output_path: Path, unit_names: list[str] | None = None) -> None:
     """Concatenates the files of the finished units into the experiment folder. With ``unit_names``, only those units
-    are combined, so the folders of units of an older definition of the experiment are ignored."""
+    are combined, so the folders of units of an older definition of the experiment are ignored.
+    """
     unit_paths = sorted(
         p
         for p in (output_path / "units").glob("*")

@@ -2,6 +2,35 @@
 
 Reads ``data/results/inference/<experiment>/results.csv`` and writes ``figures/`` (PNG/PDF) and ``tables/`` (CSV and booktabs LaTeX) in the same folder.
 
+Tables (``tables/<name>.csv`` and ``.tex``):
+    - ``<E>_reference_check`` (all but E5): tasks per query type, and how many were discarded for a low reference ESS, a
+      non-converged or disagreeing check, or a failed reference, and how many are near-certain discrete tasks.
+    - E1: ``E1_errors`` (median RMSE and W1 per check, query type, method and N) and ``E1_convergence_slopes`` (slope of
+      log RMSE versus log N, about -1/2 for a consistent estimator).
+    - E2: ``E2_task_summary`` (RMSE with MCSE, runtime and diagnostics per task, method and N), ``E2_paired_tests``
+      (RB method versus its baseline per query type at equal N and at equal time: median relative RMSE reduction with
+      bootstrap 95% CI, fraction of units improved, Wilcoxon p-value with Holm correction, primary or secondary
+      endpoint), ``E2_paired_tests_without_near_certain`` (the same tests without the near-certain discrete tasks, if there are any),
+      ``E2_time_to_epsilon`` (time to reach RMSE epsilon and its RB/baseline ratio) and ``E2_diagnostics`` (n_eff / N,
+      R-hat, ESS per second, exact and acceptance rates).
+    - E3: ``E3_regimes`` (relative RMSE reduction and n_eff / N per factor, level and pair, with the base units as the
+      base level of every factor).
+    - E4: ``E4_decomposition``, ``E4_block_moves`` and ``E4_rejection`` (RMSE, W1, R-hat, ESS per second and rates of
+      each variant per N).
+    - E5: ``E5_costs`` (setup time a and time per sample b of runtime(N) = a + b N, and kernel evaluations per sample,
+      per factor level and method) and ``E5_slopes`` (log-log slope of b versus each numeric factor).
+    - E7: ``E7_classification`` (log-loss, Brier, accuracy, probability error and runtime per dataset, model, missing
+      rate and method), ``E7_overall`` (the same per missing rate and method), and for the log-loss and the probability
+      error ``E7_<metric>_ranking.csv`` and ``E7_<metric>_friedman.csv`` (ranks and Friedman test with the datasets as
+      blocks), overall and per missing rate (``E7_<metric>_rate<r>``).
+
+Figures (``figures/<name>.png`` and ``.pdf``):
+    - ``E1_rmse_vs_n``, ``E2_rmse_vs_n``, ``E2_rmse_vs_time`` and ``E4_<ablation>_rmse_vs_n``: median RMSE over the
+      tasks (with IQR band) versus N or runtime, on log-log axes.
+    - ``E3_regimes``: relative RMSE reduction (top) and n_eff / N (bottom) versus each factor.
+    - ``E5_time_per_sample``: time per sample versus each factor.
+    - ``E7_missing_rate``: metrics versus the missing rate; ``E7_<metric>_cd_diagram.png``: critical difference diagram.
+
 Usage (from the library root):
     python -m src.experiments.inference.analysis E2 [--quick] [--epsilon 0.1]
 """
@@ -75,9 +104,13 @@ def task_summary(
 ) -> pd.DataFrame:
     """RMSE over the repetitions of every (task, method, sample size), with its Monte Carlo standard error (delta method),
     and the mean runtime, kernel evaluations, W1 distance and diagnostics"""
-    keys = ["task_id", "query_type", "method", "n_samples", "reference_max_probability"] + (
-        extra_keys or []
-    )
+    keys = [
+        "task_id",
+        "query_type",
+        "method",
+        "n_samples",
+        "reference_max_probability",
+    ] + (extra_keys or [])
     keys = [k for k in keys if k in results]
     aggregations = {
         "squared_error": ("error", lambda e: np.mean(np.square(e))),
@@ -304,13 +337,15 @@ def pair_tests(
     if len(tests):
         # Primary endpoint: equal time at the largest budget covered by both methods, one test per pair and query type;
         # the other numbers of samples and budgets are secondary. Holm corrects each family of tests separately.
-        primary = (tests["comparison"] == "equal time") & tests["level"].astype(str).str.startswith(
-            f"budget {N_BUDGETS}/"
-        )
+        primary = (tests["comparison"] == "equal time") & tests["level"].astype(
+            str
+        ).str.startswith(f"budget {N_BUDGETS}/")
         tests.insert(2, "endpoint", np.where(primary, "primary", "secondary"))
         tests["p_holm"] = np.nan
         for endpoint, index in tests.groupby("endpoint").groups.items():
-            tests.loc[index, "p_holm"] = holm_correction(tests.loc[index, "p_value"].to_numpy())
+            tests.loc[index, "p_holm"] = holm_correction(
+                tests.loc[index, "p_value"].to_numpy()
+            )
         tests = tests.sort_values("endpoint", kind="stable").reset_index(drop=True)
     return tests
 
@@ -708,7 +743,10 @@ def analyze_e3(results: pd.DataFrame, output: Path) -> None:
     base = summary[summary["factor"] == "base"]
     summary = pd.concat(
         [summary[summary["factor"] != "base"]]
-        + [base.assign(factor=factor, level=level) for factor, level in REGIME_BASE_LEVELS.items()],
+        + [
+            base.assign(factor=factor, level=level)
+            for factor, level in REGIME_BASE_LEVELS.items()
+        ],
         ignore_index=True,
     )
     summary["level"] = summary["level"].astype(str)
