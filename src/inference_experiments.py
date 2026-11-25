@@ -59,7 +59,9 @@ from .utils.constants import TRUE_CLASS_LABEL
 # region Constants
 LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
 RESULT_PATH = LIBRARY_ROOT_PATH / "data" / "results" / "inference"
-EXPERIMENT_NAMES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]
+# E6 (SPBNs learned from real data) was removed; the other experiments keep their numbers so that their result folders
+# stay valid. E1, E5 and the rejection ablation of E4 are reported in the appendix of the article.
+EXPERIMENT_NAMES = ["E1", "E2", "E3", "E4", "E5", "E7"]
 
 # Inference methods: the arguments of ``SemiParametricBayesianNetwork.infer``, plus the posterior ``estimator``:
 # "default" is the estimate of the article (mixture of exact posteriors for the Rao-Blackwellized CLG query, KDE for a sampled continuous query, frequencies for a discrete query), and "sampled_kde" draws the Rao-Blackwellized query from its exact posterior given each sample and uses a KDE (ablation E4).
@@ -1139,11 +1141,9 @@ def run_method(
     reference: Reference,
     sizes: dict[str, float],
     gibbs_options: dict,
-    true_value: float | None = None,
 ) -> dict:
     """Runs one inference method on one task and returns the result row:
     runtime, kernel evaluations, posterior estimate, errors with respect to the reference and diagnostics.
-    With ``true_value`` (E6), the row also contains the log-density of the posterior estimate at the true value of the query (``log_score``).
 
     The repetition seed is shared by all the methods, so likelihood weighting and RBLW draw the same values of the sampled variables (common random numbers) and the comparisons are paired.
     """
@@ -1193,21 +1193,6 @@ def run_method(
         for rate in ["exact_rate", "acceptance_rate", "block_acceptance_rate"]:
             values = list(parameters[rate].values())
             row[f"mean_{rate}"] = float(np.mean(values)) if values else np.nan
-    if true_value is not None:
-        ess = (
-            parameters["effective_sample_size"].get(task.query)
-            if spec["method"] == "gibbs"
-            else None
-        )
-        density = bn._posterior_density(
-            task.query,
-            pd.Series({task.query: true_value}),
-            parameters["assignments"],
-            parameters["weights"],
-            parameters["posterior_std"],
-            ess,
-        )
-        row["log_score"] = float(np.log(max(density, 1e-300)))
     return row
 
 
@@ -1217,11 +1202,11 @@ def run_method(
 # region Experiment units
 @dataclass
 class UnitSpec:
-    """An independent unit of an experiment: a network (synthetic or learned from a dataset) and its tasks and runs.
+    """An independent unit of an experiment: a synthetic network, or a dataset and classifier and its tasks and runs.
 
     Attributes:
         unit_id: Unique identifier within the experiment (also the folder name).
-        kind: "synthetic", "gaussian", "two_node", "dataset" or "classifier".
+        kind: "synthetic", "gaussian", "two_node" or "classifier".
         factors: Experimental factors of the unit (e.g., {"factor": "frac_clg", "level": 0.3}), copied to every row.
         config: Synthetic configuration (``SyntheticConfig`` as a dict), or the dataset and model.
         seed: Seed of the network and of the tasks.
@@ -1349,28 +1334,19 @@ def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
         (unit_path / "references_done").touch()
         return n_tasks
 
-    test = None
-    if unit.kind == "dataset":
-        bn, info, test = learn_dataset_spbn(
-            unit.config["dataset"], unit.seed, unit.config.get("max_train_size", 2000)
-        )
-    else:
-        bn, info = build_network(unit)
+    bn, info = build_network(unit)
     info.update({"unit_id": unit.unit_id, "kind": unit.kind, **unit.factors})
     prior = bn.sample(unit.n_prior, seed=unit.seed)
-    if unit.kind == "dataset":
-        tasks = dataset_tasks(bn, unit, test)
-    else:
-        tasks = generate_tasks(
-            bn,
-            unit.n_tasks,
-            unit.query_types,
-            EvidenceSpec(**unit.evidence),
-            unit.seed + 1,
-            prior,
-            id_prefix=f"{unit.unit_id}/",
-            query_candidates=unit.extra.get("query_candidates"),
-        )
+    tasks = generate_tasks(
+        bn,
+        unit.n_tasks,
+        unit.query_types,
+        EvidenceSpec(**unit.evidence),
+        unit.seed + 1,
+        prior,
+        id_prefix=f"{unit.unit_id}/",
+        query_candidates=unit.extra.get("query_candidates"),
+    )
     references = [compute_reference(bn, task, unit, prior) for task in tasks]
 
     _save_network(bn, unit_path / "network.pkl")
@@ -1440,7 +1416,6 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
                         reference,
                         sizes,
                         gibbs_options,
-                        true_value=task.true_value if unit.kind == "dataset" else None,
                     )
                     result_rows.append({**base, **row})
 
@@ -1454,7 +1429,7 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
 # endregion Experiment units
 
 
-# region Real datasets (E6, E7)
+# region Real datasets (E7)
 def load_dataset(
     dataset_name: str, seed: int, max_train_size: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1468,59 +1443,6 @@ def load_dataset(
     train[features] = train[features].astype(float)
     test[features] = test[features].astype(float)
     return train, test
-
-
-def learn_dataset_spbn(
-    dataset_name: str, seed: int, max_train_size: int
-) -> tuple[SemiParametricBayesianNetwork, dict, pd.DataFrame]:
-    """Learns an SPBN over the continuous features of a dataset with hill climbing and the validated likelihood score.
-    Returns the SPBN, its description and the held-out instances of its variables."""
-    train, test = load_dataset(dataset_name, seed, max_train_size)
-    features = [c for c in train.columns if c != TRUE_CLASS_LABEL]
-    bn = SemiParametricBayesianNetwork(seed=seed, max_train_data_size=max_train_size)
-    bn.fit(train[features])
-    info = describe_network(bn)
-    info.update({"dataset": dataset_name, "n_train": len(train), "n_test": len(test)})
-    return bn, info, test[list(bn.nodes())]
-
-
-def dataset_tasks(
-    bn: SemiParametricBayesianNetwork, unit: UnitSpec, test: pd.DataFrame
-) -> list[Task]:
-    """E6 tasks: held-out instances with a random fraction of the variables observed and one of the rest as query"""
-    rng = np.random.default_rng(unit.seed + 1)
-    sampled = bn._sampled_nodes()
-    nodes = list(bn.nodes())
-    observed_fraction = unit.extra.get("observed_fraction", 0.5)
-    tasks = []
-    for task_index, row_index in enumerate(
-        rng.choice(len(test), size=min(unit.n_tasks, len(test)), replace=False)
-    ):
-        row = test.iloc[int(row_index)]
-        n_observed = max(
-            1, min(len(nodes) - 1, int(round(observed_fraction * len(nodes))))
-        )
-        permutation = list(rng.permutation(nodes))
-        evidence_nodes, query = permutation[:n_observed], permutation[n_observed]
-        evidence = {n: float(row[n]) for n in evidence_nodes}
-        tasks.append(
-            Task(
-                task_id=f"{unit.unit_id}/{task_index}",
-                query=query,
-                query_type=node_query_type(bn, query, sampled),
-                evidence=evidence,
-                factors={
-                    "n_evidence": len(evidence),
-                    "n_evidence_S": sum(n in sampled for n in evidence),
-                    "n_evidence_R": sum(n not in sampled for n in evidence),
-                    "n_unobserved_rb_ancestors": unobserved_rb_ancestors(
-                        bn, evidence, sampled
-                    ),
-                },
-                true_value=float(row[query]),
-            )
-        )
-    return tasks
 
 
 CLASSIFIERS = {
@@ -1717,11 +1639,12 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     return len(rows)
 
 
-# endregion Real datasets (E6, E7)
+# endregion Real datasets (E7)
 
 
 # region Experiment definitions
-# Levels of the regime factors of Table tab:regime_factors, varied one at a time from the base configuration
+# Levels of the network factors, varied one at a time from the base configuration. E3 (Table tab:regime_factors) varies
+# ``REGIME_NETWORK_FACTORS``, the factors with a predicted effect on the gain; E5 (appendix) varies ``SCALING_FACTORS``.
 NETWORK_FACTORS = {
     "frac_clg": [0.1, 0.3, 0.5, 0.7, 0.9],
     "dependence": [0.3, 0.6, 0.9],
@@ -1729,6 +1652,8 @@ NETWORK_FACTORS = {
     "n_discrete_parents_R": [0, 1, 2, 3],
     "n_nodes": [10, 20, 50, 100],
 }
+REGIME_NETWORK_FACTORS = ["frac_clg", "n_discrete_parents_R"]
+SCALING_FACTORS = ["n_nodes", "frac_clg", "n_train", "n_discrete_parents_R"]
 EVIDENCE_FACTORS = {
     "location": ["S", "both", "R"],
     "n_rb_ancestors": [0, 2, 5, 10],
@@ -1853,8 +1778,8 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         return units
 
     if experiment == "E3":
-        for factor, levels in NETWORK_FACTORS.items():
-            for level in levels:
+        for factor in REGIME_NETWORK_FACTORS:
+            for level in NETWORK_FACTORS[factor]:
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
@@ -1961,10 +1886,8 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         return units
 
     if experiment == "E5":
-        for factor, levels in NETWORK_FACTORS.items():
-            if factor == "dependence":
-                continue
-            for level in levels:
+        for factor in SCALING_FACTORS:
+            for level in NETWORK_FACTORS[factor]:
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
@@ -1982,27 +1905,6 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
                             **common,
                         )
                     )
-        return units
-
-    if experiment == "E6":
-        for dataset in args.datasets:
-            units.append(
-                UnitSpec(
-                    dataset,
-                    "dataset",
-                    {"dataset": dataset},
-                    {"dataset": dataset, "max_train_size": args.max_train_size},
-                    args.seed,
-                    {},
-                    [],
-                    args.n_tasks,
-                    all_methods,
-                    sizes,
-                    reference="lw+gibbs",
-                    extra={"observed_fraction": 0.5},
-                    **common,
-                )
-            )
         return units
 
     if experiment == "E7":
@@ -2226,7 +2128,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--n_networks", type=int, help="Synthetic networks per configuration."
     )
     parser.add_argument(
-        "--n_tasks", type=int, help="Tasks per query type (test instances for E6/E7)."
+        "--n_tasks", type=int, help="Tasks per query type (test instances for E7)."
     )
     parser.add_argument(
         "--n_reps", type=int, help="Repetitions per method and sample size."
@@ -2263,7 +2165,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--n_chains", type=int, help="Chains of GS and RBGS.")
     parser.add_argument("--burn_in", type=int, help="Burn-in sweeps of GS and RBGS.")
-    parser.add_argument("--datasets", nargs="+", help="Public datasets of E6 and E7.")
+    parser.add_argument("--datasets", nargs="+", help="Public datasets of E7.")
     parser.add_argument(
         "--max_train_size",
         type=int,
@@ -2325,7 +2227,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     defaults = dict(
         n_networks=10 if args.experiment in ("E1", "E2") else 5,
-        n_tasks=5 if args.experiment not in ("E6", "E7") else 50,
+        n_tasks=5 if args.experiment != "E7" else 50,
         n_reps=50 if args.experiment in ("E1", "E2", "E4") else 20,
         sample_sizes=[100, 1_000, 10_000, 100_000],
         gibbs_sample_sizes=[100, 1_000, 10_000],
@@ -2356,7 +2258,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.quick:
         defaults.update(
             n_networks=1,
-            n_tasks=1 if args.experiment not in ("E6", "E7") else 2,
+            n_tasks=1 if args.experiment != "E7" else 2,
             n_reps=2,
             sample_sizes=[100, 1_000],
             gibbs_sample_sizes=[100, 400],

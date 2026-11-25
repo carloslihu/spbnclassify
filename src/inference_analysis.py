@@ -11,6 +11,7 @@ Usage (from the library root):
 import argparse
 import json
 import warnings
+from typing import cast
 from pathlib import Path
 
 import matplotlib
@@ -86,7 +87,6 @@ def task_summary(
         "mean_exact_rate",
         "mean_acceptance_rate",
         "mean_block_acceptance_rate",
-        "log_score",
     ]:
         if column in results:
             aggregations[column] = (column, "mean")
@@ -165,6 +165,22 @@ def rmse_at_budgets(
     return pd.DataFrame(rows)
 
 
+def unit_of(task_ids: pd.Series) -> pd.Series:
+    """Unit of each task: the network (synthetic experiments) that it belongs to, i.e., the prefix of its
+    identifier before the first "/". Tasks of the same unit share the network, so they are not independent.
+    """
+    return task_ids.astype(str).str.split("/").str[0]
+
+
+def unit_medians(
+    df: pd.DataFrame, value_columns: list[str], keys: list[str]
+) -> pd.DataFrame:
+    """Median over the tasks of each unit (see ``unit_of``) of ``value_columns``, per ``keys``. The paired tests use one
+    value per unit, so that the correlated tasks of a network count once."""
+    df = df.assign(unit=unit_of(df["task_id"]))
+    return df.groupby(["unit", *keys])[value_columns].median().reset_index()
+
+
 # endregion Error aggregation
 
 
@@ -196,8 +212,9 @@ def bootstrap_ci(
 
 
 def paired_comparison(baseline: np.ndarray, proposed: np.ndarray) -> dict:
-    """Paired comparison of per-task RMSEs: the median relative reduction (baseline - proposed) / baseline with a bootstrap
-    95% CI, the fraction of tasks where the proposed method is better, and the Wilcoxon signed-rank p-value
+    """Paired comparison of the RMSEs of the units (networks or datasets, see ``unit_medians``): the median relative
+    reduction (baseline - proposed) / baseline with a bootstrap 95% CI, the fraction of units where the proposed method is
+    better, and the Wilcoxon signed-rank p-value (with at least 5 units)
     """
     baseline, proposed = np.asarray(baseline, dtype=float), np.asarray(
         proposed, dtype=float
@@ -212,7 +229,7 @@ def paired_comparison(baseline: np.ndarray, proposed: np.ndarray) -> dict:
             p_value = float(wilcoxon(baseline, proposed, zero_method="wilcox").pvalue)
     lo, hi = bootstrap_ci(reduction)
     return {
-        "n_tasks": int(len(reduction)),
+        "n_units": int(len(reduction)),
         "median_reduction": float(np.median(reduction)) if len(reduction) else np.nan,
         "ci_low": lo,
         "ci_high": hi,
@@ -227,7 +244,8 @@ def pair_tests(
     summary: pd.DataFrame, budgets: dict[tuple, pd.DataFrame]
 ) -> pd.DataFrame:
     """Paired comparisons of every pair, query type and sample size (equal N) or budget (equal time), Holm-corrected
-    together"""
+    together. The RMSEs of the tasks of each unit (network or dataset) are summarized by their median, and the units are
+    the paired observations."""
     rows = []
     for baseline, proposed in PAIRS:
         for query_type, by_type in summary.groupby("query_type"):
@@ -236,7 +254,8 @@ def pair_tests(
             )
             if baseline not in wide or proposed not in wide:
                 continue
-            for n_samples, group in wide.reset_index().groupby("n_samples"):
+            wide = unit_medians(wide.reset_index(), [baseline, proposed], ["n_samples"])
+            for n_samples, group in wide.groupby("n_samples"):
                 rows.append(
                     {
                         "pair": f"{proposed} vs {baseline}",
@@ -248,22 +267,26 @@ def pair_tests(
                 )
             at_budgets = budgets.get((baseline, proposed), pd.DataFrame())
             if len(at_budgets):
-                for budget_index, group in at_budgets[
-                    at_budgets["query_type"] == query_type
-                ].groupby("budget_index"):
+                at_budgets = unit_medians(
+                    at_budgets[at_budgets["query_type"] == query_type],
+                    [baseline, proposed, "budget"],
+                    ["budget_index"],
+                )
+                for budget_index, group in at_budgets.groupby("budget_index"):
                     rows.append(
                         {
                             "pair": f"{proposed} vs {baseline}",
                             "query_type": query_type,
                             "comparison": "equal time",
-                            "level": f"budget {budget_index + 1}/{N_BUDGETS} (median {group['budget'].median():.3g} s)",
+                            # groupby keys are typed as generic scalars; budget_index is an integer (from enumerate)
+                            "level": f"budget {cast(int, budget_index) + 1}/{N_BUDGETS} (median {group['budget'].median():.3g} s)",
                             **paired_comparison(group[baseline], group[proposed]),
                         }
                     )
     tests = pd.DataFrame(rows)
     if len(tests):
         # Sample sizes that only one family uses (e.g., the Gibbs sizes for the LW pair) leave no paired tasks
-        tests = tests[tests["n_tasks"] > 0].reset_index(drop=True)
+        tests = tests[tests["n_units"] > 0].reset_index(drop=True)
     if len(tests):
         tests["p_holm"] = holm_correction(tests["p_value"].to_numpy())
     return tests
@@ -639,10 +662,17 @@ def analyze_e3(results: pd.DataFrame, output: Path) -> None:
             if baseline not in wide or proposed not in wide:
                 continue
             n_max = wide.dropna(subset=[baseline, proposed])["n_samples"].max()
-            at_n = wide[wide["n_samples"] == n_max]
+            # One value per network: the tasks of a network are correlated
+            at_n = unit_medians(
+                wide[wide["n_samples"] == n_max], [baseline, proposed], ["n_samples"]
+            )
             budgets = rmse_at_budgets(group, (baseline, proposed))
             last = (
-                budgets[budgets["budget_index"] == budgets["budget_index"].max()]
+                unit_medians(
+                    budgets[budgets["budget_index"] == budgets["budget_index"].max()],
+                    [baseline, proposed],
+                    ["budget_index"],
+                )
                 if len(budgets)
                 else budgets
             )
@@ -890,30 +920,6 @@ def _friedman_and_cd(
     plt.close("all")
 
 
-def analyze_e6(results: pd.DataFrame, output: Path, epsilon: float) -> None:
-    """E6: comparison per dataset, log score of the true values, and Friedman test across datasets"""
-    analyze_comparison(
-        results, output, epsilon, "E6", "E6: SPBNs learned from real data"
-    )
-    summary = task_summary(results, ["dataset"])
-    columns = [c for c in ["rmse", "w1", "log_score", "runtime"] if c in summary]
-    table = (
-        summary.groupby(["dataset", "method", "n_samples"])[columns]
-        .median()
-        .reset_index()
-    )
-    save_table(
-        table,
-        output / "tables" / "E6_datasets",
-        caption="Median errors and log score per dataset.",
-    )
-    n_max = summary.groupby("method")["n_samples"].max().min()
-    matrix = summary[summary["n_samples"] == n_max].pivot_table(
-        index="dataset", columns="method", values="rmse"
-    )
-    _friedman_and_cd(matrix, output, "E6_rmse", lower_better=True)
-
-
 def analyze_e7(results: pd.DataFrame, output: Path) -> None:
     """E7: classification with missing features per dataset, model and missing rate, and Friedman test on the log-loss"""
     columns = [
@@ -943,23 +949,25 @@ def analyze_e7(results: pd.DataFrame, output: Path) -> None:
         output / "tables" / "E7_overall",
         caption="Classification with missing features, all datasets.",
     )
+    # The blocks of the Friedman tests are the datasets: the classifiers and missing rates of a dataset share its data, so
+    # they are averaged within the dataset instead of being counted as independent blocks
     for metric, lower_better in [("log_loss", True), ("prob_error", True)]:
         if metric not in results:
             continue
-        blocks = (
-            results.groupby(["dataset", "model", "missing_rate", "method"])[metric]
-            .mean()
-            .reset_index()
+        matrix = results.pivot_table(
+            index="dataset", columns="method", values=metric, aggfunc="mean"
         )
-        blocks["block"] = (
-            blocks["dataset"]
-            + "/"
-            + blocks["model"]
-            + "/"
-            + blocks["missing_rate"].astype(str)
-        )
-        matrix = blocks.pivot_table(index="block", columns="method", values=metric)
         _friedman_and_cd(matrix, output, f"E7_{metric}", lower_better=lower_better)
+        for missing_rate, by_rate in results.groupby("missing_rate"):
+            matrix = by_rate.pivot_table(
+                index="dataset", columns="method", values=metric, aggfunc="mean"
+            )
+            _friedman_and_cd(
+                matrix,
+                output,
+                f"E7_{metric}_rate{missing_rate}",
+                lower_better=lower_better,
+            )
 
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
     for ax, metric in zip(axes, ["log_loss", "accuracy"]):
@@ -998,8 +1006,6 @@ def analyze(experiment: str, input_dir: Path, epsilon: float) -> Path:
             analyze_e4(results, output)
         case "E5":
             analyze_e5(results, output)
-        case "E6":
-            analyze_e6(results, output, epsilon)
         case "E7":
             analyze_e7(results, output)
         case _:
@@ -1012,7 +1018,7 @@ if __name__ == "__main__":
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "experiment", choices=["E1", "E2", "E3", "E4", "E5", "E6", "E7"]
+        "experiment", choices=["E1", "E2", "E3", "E4", "E5", "E7"]
     )
     parser.add_argument(
         "--quick", action="store_true", help="Analyze the results of a --quick run."
