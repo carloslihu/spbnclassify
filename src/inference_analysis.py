@@ -38,6 +38,17 @@ METHOD_COLORS = {"LW": "#1976D2", "RBLW": "#FFB300", "GS": "#388E3C", "RBGS": "#
 N_BOOTSTRAP = 2000
 # Number of budgets for the RMSE curves at common wall-clock times
 N_BUDGETS = 12
+# Discrete tasks whose reference gives more than this probability to one category are near-certain: every method tends to
+# be exact on them, so the comparisons are repeated without them (same value as in inference_experiments)
+NEAR_CERTAIN_PROBABILITY = 0.99
+# Base levels of the regime factors of E3, whose units are shared by all the factors ("base" units); keep in sync with
+# inference_experiments.REGIME_BASE_LEVELS
+REGIME_BASE_LEVELS = {
+    "frac_clg": 0.5,
+    "n_discrete_parents_R": 0,
+    "location": "both",
+    "rarity": 0.5,
+}
 # Errors below this tolerance are exact up to the precision of the reference (the grid integration error is ~1e-7)
 EXACT_TOLERANCE = 1e-5
 
@@ -63,7 +74,9 @@ def task_summary(
 ) -> pd.DataFrame:
     """RMSE over the repetitions of every (task, method, sample size), with its Monte Carlo standard error (delta method),
     and the mean runtime, kernel evaluations, W1 distance and diagnostics"""
-    keys = ["task_id", "query_type", "method", "n_samples"] + (extra_keys or [])
+    keys = ["task_id", "query_type", "method", "n_samples", "reference_max_probability"] + (
+        extra_keys or []
+    )
     keys = [k for k in keys if k in results]
     aggregations = {
         "squared_error": ("error", lambda e: np.mean(np.square(e))),
@@ -288,8 +301,28 @@ def pair_tests(
         # Sample sizes that only one family uses (e.g., the Gibbs sizes for the LW pair) leave no paired tasks
         tests = tests[tests["n_units"] > 0].reset_index(drop=True)
     if len(tests):
-        tests["p_holm"] = holm_correction(tests["p_value"].to_numpy())
+        # Primary endpoint: equal time at the largest budget covered by both methods, one test per pair and query type;
+        # the other numbers of samples and budgets are secondary. Holm corrects each family of tests separately.
+        primary = (tests["comparison"] == "equal time") & tests["level"].astype(str).str.startswith(
+            f"budget {N_BUDGETS}/"
+        )
+        tests.insert(2, "endpoint", np.where(primary, "primary", "secondary"))
+        tests["p_holm"] = np.nan
+        for endpoint, index in tests.groupby("endpoint").groups.items():
+            tests.loc[index, "p_holm"] = holm_correction(tests.loc[index, "p_value"].to_numpy())
+        tests = tests.sort_values("endpoint", kind="stable").reset_index(drop=True)
     return tests
+
+
+def without_near_certain(summary: pd.DataFrame) -> pd.DataFrame:
+    """Drops the discrete tasks whose reference probability of the most probable category exceeds
+    ``NEAR_CERTAIN_PROBABILITY`` (the continuous tasks are kept)"""
+    if "reference_max_probability" not in summary:
+        return summary
+    near_certain = (summary["query_type"] == "discrete") & (
+        summary["reference_max_probability"] > NEAR_CERTAIN_PROBABILITY
+    )
+    return summary[~near_certain]
 
 
 # endregion Statistical tests
@@ -416,8 +449,20 @@ def analyze_comparison(
             tests,
             output / "tables" / f"{prefix}_paired_tests",
             caption="Median relative RMSE reduction of the Rao--Blackwellized methods, with bootstrap 95\\% CIs and "
-            "Holm-corrected Wilcoxon signed-rank p-values.",
+            "Holm-corrected Wilcoxon signed-rank p-values (primary endpoint: equal time at the largest common budget).",
         )
+    # Sensitivity analysis: the same tests without the near-certain discrete tasks
+    filtered = without_near_certain(summary)
+    if len(filtered) < len(summary):
+        filtered_budgets = {pair: rmse_at_budgets(filtered, pair) for pair in PAIRS}
+        filtered_tests = pair_tests(filtered, filtered_budgets)
+        if len(filtered_tests):
+            save_table(
+                filtered_tests,
+                output / "tables" / f"{prefix}_paired_tests_without_near_certain",
+                caption=f"Paired tests without the discrete tasks whose reference probability of the most probable "
+                f"category exceeds {NEAR_CERTAIN_PROBABILITY}.",
+            )
     rows = []
     for baseline, proposed in PAIRS:
         for query_type, by_type in summary.groupby("query_type"):
@@ -523,6 +568,10 @@ def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
     references["low_ess"] = message.str.contains("ESS")
     references["not_converged"] = message.str.contains("R-hat")
     references["disagreement"] = message.str.contains("differ")
+    probabilities = references.get("probabilities", pd.Series([{}] * len(references)))
+    references["near_certain"] = references["ok"] & probabilities.map(
+        lambda p: bool(p) and max(p.values()) > NEAR_CERTAIN_PROBABILITY
+    )
     references["failed"] = ~references["ok"] & ~(
         references["low_ess"] | references["not_converged"] | references["disagreement"]
     )
@@ -535,6 +584,7 @@ def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
             n_not_converged=("not_converged", "sum"),
             n_disagreement=("disagreement", "sum"),
             n_failed=("failed", "sum"),
+            n_near_certain=("near_certain", "sum"),
         )
         .reset_index()
     )
@@ -547,6 +597,7 @@ def reference_check_table(output: Path, prefix: str) -> pd.DataFrame:
             "n_not_converged",
             "n_disagreement",
             "n_failed",
+            "n_near_certain",
         ]
     ].sum()
     table = pd.concat(
@@ -652,6 +703,13 @@ def _sort_levels(table: pd.DataFrame) -> pd.DataFrame:
 def analyze_e3(results: pd.DataFrame, output: Path) -> None:
     """E3: relative RMSE reduction of each pair at the largest common sample size, and n_eff / N, versus every factor"""
     summary = task_summary(results, ["factor", "level"])
+    # The "base" units are the base level of every factor that has one
+    base = summary[summary["factor"] == "base"]
+    summary = pd.concat(
+        [summary[summary["factor"] != "base"]]
+        + [base.assign(factor=factor, level=level) for factor, level in REGIME_BASE_LEVELS.items()],
+        ignore_index=True,
+    )
     summary["level"] = summary["level"].astype(str)
     rows = []
     for (factor, level), group in summary.groupby(["factor", "level"]):

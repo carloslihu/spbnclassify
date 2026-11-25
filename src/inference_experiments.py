@@ -108,6 +108,10 @@ REFERENCE_BATCH_SIZE = 100_000
 # Grid points per dimension of the grid reference, by number of unobserved continuous variables
 GRID_POINTS = {1: 4001, 2: 401, 3: 101}
 MIN_REFERENCE_ESS = 1000
+# Samples of the reference LW whose weight is below exp(-40) times the maximum are not stored (negligible contribution)
+REFERENCE_PRUNE_LOG_WEIGHT = 40.0
+# A discrete task whose reference gives more than this probability to one category is near-certain (reported apart)
+NEAR_CERTAIN_PROBABILITY = 0.99
 MAX_REFERENCE_RHAT = 1.01
 # Default parallel workers of the (untimed) reference stage
 DEFAULT_REFERENCE_WORKERS = 16
@@ -565,6 +569,7 @@ class Reference:
     mcse: float = np.nan
     effective_sample_size: float = np.nan
     message: str = ""
+    n_samples: int = 0
 
 
 def _evaluation_grid(mean: float, std: float, lo: float, hi: float) -> np.ndarray:
@@ -577,9 +582,13 @@ def _reference_from_weighted_samples(
     log_weights: np.ndarray,
     is_discrete: bool,
     categories: list[str],
+    ess: float | None = None,
 ) -> Reference:
+    """Reference from weighted samples; ``ess`` overrides the effective sample size of the given weights (e.g., when
+    negligible samples were not stored)"""
     weights = np.exp(log_weights - logsumexp(log_weights))
-    ess = float(1.0 / np.sum(weights**2))
+    if ess is None:
+        ess = float(1.0 / np.sum(weights**2))
     if is_discrete:
         probabilities = {c: float(np.sum(weights[values == c])) for c in categories}
         mcse = float(
@@ -615,17 +624,37 @@ def _reference_from_weighted_samples(
 
 
 def lw_reference(
-    bn: SemiParametricBayesianNetwork, task: Task, n_samples: int, seed: int
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    n_samples: int,
+    seed: int,
+    max_samples: int | None = None,
 ) -> Reference:
-    """Reference posterior with plain likelihood weighting (every variable sampled), in batches combined through their ``log_evidence``, so the unnormalized weights of all the batches are on the same scale"""
+    """Reference posterior with plain likelihood weighting (every variable sampled), in batches combined through their
+    ``log_evidence``, so the unnormalized weights of all the batches are on the same scale.
+
+    After ``n_samples``, sampling continues in batches while the effective sample size is below ``MIN_REFERENCE_ESS``, up
+    to ``max_samples`` (unlikely evidence degenerates the weights, which is where the methods differ most, so a fixed budget
+    would discard exactly those tasks). Samples whose weight is below exp(-``REFERENCE_PRUNE_LOG_WEIGHT``) times the
+    running maximum are not stored, since their contribution is negligible, which bounds the memory of large references;
+    the effective sample size is computed from all the weights.
+    """
+    max_samples = max(max_samples or n_samples, n_samples)
+    is_discrete = task.query_type == "discrete"
+    seed_sequence = np.random.SeedSequence(seed)
     values, log_weights = [], []
-    seeds = np.random.SeedSequence(seed).spawn(
-        int(np.ceil(n_samples / REFERENCE_BATCH_SIZE))
-    )
-    remaining = n_samples
-    for child in seeds:
-        batch = min(REFERENCE_BATCH_SIZE, remaining)
-        remaining -= batch
+    log_sum, log_sum_squares, log_max = -np.inf, -np.inf, -np.inf
+    drawn = 0
+
+    def _ess() -> float:
+        return float(np.exp(2 * log_sum - log_sum_squares)) if np.isfinite(log_sum) else 0.0
+
+    while drawn < max_samples:
+        if drawn >= n_samples and _ess() >= MIN_REFERENCE_ESS:
+            break
+        target = n_samples if drawn < n_samples else max_samples
+        batch = min(REFERENCE_BATCH_SIZE, target - drawn)
+        child = seed_sequence.spawn(1)[0]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             result = bn.infer(
@@ -637,22 +666,34 @@ def lw_reference(
             )
         parameters = result["parameters"]
         with np.errstate(divide="ignore"):
-            log_weights.append(
+            batch_log_weights = (
                 np.log(parameters["weights"])
                 + parameters["log_evidence"]
                 + np.log(batch)
             )
         column = parameters["assignments"][task.query]
-        values.append(
+        batch_values = (
             column.astype(str).to_numpy()
-            if task.query_type == "discrete"
+            if is_discrete
             else column.to_numpy(dtype=float)
         )
-    is_discrete = task.query_type == "discrete"
+        log_sum = np.logaddexp(log_sum, logsumexp(batch_log_weights))
+        log_sum_squares = np.logaddexp(log_sum_squares, logsumexp(2 * batch_log_weights))
+        log_max = max(log_max, float(np.max(batch_log_weights)))
+        keep = batch_log_weights > log_max - REFERENCE_PRUNE_LOG_WEIGHT
+        values.append(batch_values[keep])
+        log_weights.append(batch_log_weights[keep])
+        drawn += batch
     categories = bn._categories()[task.query] if is_discrete else []
-    return _reference_from_weighted_samples(
-        np.concatenate(values), np.concatenate(log_weights), is_discrete, categories
+    reference = _reference_from_weighted_samples(
+        np.concatenate(values),
+        np.concatenate(log_weights),
+        is_discrete,
+        categories,
+        ess=_ess(),
     )
+    reference.n_samples = drawn
+    return reference
 
 
 def gibbs_reference(
@@ -719,8 +760,9 @@ def checked_reference(
     seed: int,
     gibbs_burn_in: int = 1000,
     max_rhat: float = MAX_REFERENCE_RHAT,
+    max_samples: int | None = None,
 ) -> Reference:
-    """Likelihood weighting reference checked against an independent reference:
+    """Likelihood weighting reference checked against an independent reference (``max_samples``: see ``lw_reference``):
     the task is kept (``ok``) only if the likelihood weighting ESS is at least ``MIN_REFERENCE_ESS``, the check is valid and both agree within 3 combined Monte Carlo standard errors.
 
     The check uses long plain Gibbs chains (which must converge, R-hat < ``max_rhat``) for continuous queries, and stratified likelihood weighting (one run per category, ``n_gibbs_samples`` samples each) for discrete queries, since plain Gibbs sampling barely moves between categories that separate their children.
@@ -728,7 +770,7 @@ def checked_reference(
     With ``n_gibbs_samples <= 0`` there is no check (quick runs).
     The Rao-Blackwellized methods are never used, so the reference is independent of the methods that it evaluates.
     """
-    reference = lw_reference(bn, task, n_samples, seed)
+    reference = lw_reference(bn, task, n_samples, seed, max_samples)
     if reference.effective_sample_size < MIN_REFERENCE_ESS:
         reference.ok = False
         reference.message = f"LW reference ESS {reference.effective_sample_size:.0f} < {MIN_REFERENCE_ESS}"
@@ -1232,6 +1274,8 @@ class UnitSpec:
     n_reps: int
     reference: str
     n_reference: int = 10_000_000
+    # The LW reference continues up to this many samples while its ESS is below MIN_REFERENCE_ESS
+    n_reference_max: int = 100_000_000
     n_reference_gibbs: int = 200_000
     reference_burn_in: int = 1000
     reference_max_rhat: float = MAX_REFERENCE_RHAT
@@ -1275,10 +1319,12 @@ def compute_reference(bn, task: Task, unit: UnitSpec, prior: pd.DataFrame) -> Re
                     unit.seed + 7919,
                     unit.reference_burn_in,
                     unit.reference_max_rhat,
+                    unit.n_reference_max,
                 )
             case "lw":
                 return checked_reference(
-                    bn, task, unit.n_reference, 0, unit.seed + 7919
+                    bn, task, unit.n_reference, 0, unit.seed + 7919,
+                    max_samples=unit.n_reference_max,
                 )
             case "none":
                 return Reference("none", False)
@@ -1326,7 +1372,9 @@ def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
     or fitted), draws the tasks and computes their references, and writes ``network.pkl``, ``network.json``,
     ``tasks.jsonl`` and ``references.jsonl``. The ``references_done`` marker is written last, so an interrupted stage is
     run again. Returns the number of tasks (-1 if the stage was already done)."""
-    if (unit_path / "references_done").exists():
+    # A finished unit keeps the references its results were computed with (units run before the stages were split have
+    # no references_done marker)
+    if (unit_path / "references_done").exists() or (unit_path / "done").exists():
         return -1
     unit_path.mkdir(parents=True, exist_ok=True)
     if unit.kind == "classifier":
@@ -1396,6 +1444,10 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
             "query": task.query,
             "query_type": task.query_type,
             "reference_method": reference.method,
+            # Near-certain discrete tasks (above NEAR_CERTAIN_PROBABILITY) are reported apart by the analysis
+            "reference_max_probability": (
+                max(reference.probabilities.values()) if reference.probabilities else np.nan
+            ),
             **unit.factors,
             **task.factors,
             **{
@@ -1654,6 +1706,14 @@ NETWORK_FACTORS = {
 }
 REGIME_NETWORK_FACTORS = ["frac_clg", "n_discrete_parents_R"]
 SCALING_FACTORS = ["n_nodes", "frac_clg", "n_train", "n_discrete_parents_R"]
+# Levels of the regime factors that are the base configuration and base evidence (n_rb_ancestors has no base level,
+# since it uses 40-variable networks); keep in sync with inference_analysis.REGIME_BASE_LEVELS
+REGIME_BASE_LEVELS = {
+    "frac_clg": 0.5,
+    "n_discrete_parents_R": 0,
+    "location": "both",
+    "rarity": 0.5,
+}
 EVIDENCE_FACTORS = {
     "location": ["S", "both", "R"],
     "n_rb_ancestors": [0, 2, 5, 10],
@@ -1664,6 +1724,9 @@ EVIDENCE_FACTORS = {
 def _network_factor_config(factor: str, level) -> dict:
     """Configuration of a synthetic network with one factor varied from the base configuration (see ``NETWORK_FACTORS``)"""
     config = asdict(SyntheticConfig())
+    if factor == "n_discrete_parents_R" and level == 0:
+        # delta = 1 is the base configuration (a binary discrete variable that is not a parent of R)
+        return config
     if factor == "n_discrete_parents_R":
         # delta = 4 ** m configurations of the discrete parents of R
         config.update(
@@ -1681,6 +1744,7 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
     common = dict(
         n_reps=args.n_reps,
         n_reference=args.n_reference,
+        n_reference_max=max(args.n_reference_max, args.n_reference),
         n_reference_gibbs=args.n_reference_gibbs,
         reference_burn_in=args.reference_burn_in,
         reference_max_rhat=args.reference_max_rhat,
@@ -1778,8 +1842,29 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
         return units
 
     if experiment == "E3":
+        # The base level of every factor is the same base network and tasks, so they are run once ("base" units) and
+        # inference_analysis uses them as the base level of each factor (REGIME_BASE_LEVELS)
+        for i, seed in enumerate(seeds):
+            units.append(
+                UnitSpec(
+                    f"base_{i}",
+                    "synthetic",
+                    {"factor": "base", "level": "base"},
+                    asdict(SyntheticConfig()),
+                    seed,
+                    base_evidence,
+                    ["clg", "s_continuous"],
+                    args.n_tasks,
+                    all_methods,
+                    sizes,
+                    reference="lw+gibbs",
+                    **common,
+                )
+            )
         for factor in REGIME_NETWORK_FACTORS:
             for level in NETWORK_FACTORS[factor]:
+                if REGIME_BASE_LEVELS.get(factor) == level:
+                    continue
                 for i, seed in enumerate(seeds):
                     units.append(
                         UnitSpec(
@@ -1799,6 +1884,8 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
                     )
         for factor, levels in EVIDENCE_FACTORS.items():
             for level in levels:
+                if REGIME_BASE_LEVELS.get(factor) == level:
+                    continue
                 # Long CLG chains are needed for up to 10 unobserved CLG ancestors
                 config = asdict(
                     SyntheticConfig(n_nodes=40 if factor == "n_rb_ancestors" else 20)
@@ -2048,17 +2135,21 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
             indent=2,
         )
 
-    def _pending(marker: str) -> list[UnitSpec]:
+    def _pending(*markers: str) -> list[UnitSpec]:
+        """Units without any of ``markers``"""
         return [
             u
             for u in units
-            if not (output_path / "units" / _safe_name(u.unit_id) / marker).exists()
+            if not any(
+                (output_path / "units" / _safe_name(u.unit_id) / m).exists()
+                for m in markers
+            )
         ]
 
     gpus = args.gpus if args.gpus is not None else available_gpus()
     failures = []
     if args.stage in ("all", "references"):
-        pending = _pending("references_done")
+        pending = _pending("references_done", "done")
         print(
             f"{experiment} references: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
         )
@@ -2085,14 +2176,17 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
         )
     for unit_id, error in failures:
         print(f"Unit {unit_id} failed:\n{error}")
-    combine_units(output_path)
+    combine_units(output_path, [_safe_name(u.unit_id) for u in units])
     return output_path
 
 
-def combine_units(output_path: Path) -> None:
-    """Concatenates the files of the finished units into the experiment folder"""
+def combine_units(output_path: Path, unit_names: list[str] | None = None) -> None:
+    """Concatenates the files of the finished units into the experiment folder. With ``unit_names``, only those units
+    are combined, so the folders of units of an older definition of the experiment are ignored."""
     unit_paths = sorted(
-        p for p in (output_path / "units").glob("*") if (p / "done").exists()
+        p
+        for p in (output_path / "units").glob("*")
+        if (p / "done").exists() and (unit_names is None or p.name in unit_names)
     )
     results = [
         pd.read_csv(p / "results.csv")
@@ -2141,6 +2235,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--n_reference", type=int, help="Samples of the likelihood weighting reference."
+    )
+    parser.add_argument(
+        "--n_reference_max",
+        type=int,
+        help="Maximum samples of the likelihood weighting reference: it continues past --n_reference while its ESS is "
+        f"below {MIN_REFERENCE_ESS}. Defaults to 10 times --n_reference.",
     )
     parser.add_argument(
         "--n_reference_gibbs",
@@ -2278,6 +2378,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.n_reference_max is None:
+        args.n_reference_max = 10 * args.n_reference
     return args
 
 

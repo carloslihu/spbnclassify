@@ -319,3 +319,118 @@ def test_pair_tests_per_unit() -> None:
     assert row["n_units"] == 6
     np.testing.assert_allclose(row["median_reduction"], (1.1 - 0.6) / 1.1)
     assert row["frac_better"] == 1.0 and row["p_value"] < 0.05
+
+
+def test_regime_base_levels() -> None:
+    """Test that delta = 1 is the base configuration, that the E3 base units are shared by the factors (no duplicated
+    units), and that the base levels of the runner and of the analysis agree."""
+    from src import inference_analysis, inference_experiments
+    from src.inference_experiments import _network_factor_config, build_units, parse_args
+
+    assert _network_factor_config("n_discrete_parents_R", 0) == asdict(SyntheticConfig())
+    assert inference_analysis.REGIME_BASE_LEVELS == inference_experiments.REGIME_BASE_LEVELS
+    assert inference_analysis.NEAR_CERTAIN_PROBABILITY == inference_experiments.NEAR_CERTAIN_PROBABILITY
+    units = build_units("E3", parse_args(["E3"]))
+    signatures = [(json.dumps(u.config, sort_keys=True), u.seed, json.dumps(u.evidence, sort_keys=True)) for u in units]
+    assert len(signatures) == len(set(signatures))
+    base = [u for u in units if u.factors["factor"] == "base"]
+    assert len(base) == 10 and all(u.config == asdict(SyntheticConfig()) for u in base)
+
+
+def test_lw_reference_extends_for_rare_evidence() -> None:
+    """Test that the LW reference keeps sampling while its ESS is low, and that not storing negligible samples does not
+    change it."""
+    import src.inference_experiments as experiments
+
+    bn, _ = generate_synthetic_spbn(SyntheticConfig(n_nodes=8, n_train=300), SEED)
+    prior = bn.sample(2000, seed=SEED)
+    tasks = generate_tasks(bn, 1, ["clg"], EvidenceSpec(n_evidence=4, rarity=0.001), SEED, prior)
+    task = tasks[0]
+    fixed = lw_reference(bn, task, 1000, SEED)
+    assert fixed.n_samples == 1000 and fixed.effective_sample_size < experiments.MIN_REFERENCE_ESS
+    extended = lw_reference(bn, task, 1000, SEED, max_samples=300_000)
+    assert extended.n_samples > 1000
+    assert extended.effective_sample_size >= experiments.MIN_REFERENCE_ESS or extended.n_samples == 300_000
+    assert extended.effective_sample_size > fixed.effective_sample_size
+
+    original = experiments.REFERENCE_PRUNE_LOG_WEIGHT
+    try:
+        experiments.REFERENCE_PRUNE_LOG_WEIGHT = np.inf
+        unpruned = lw_reference(bn, task, 1000, SEED, max_samples=300_000)
+    finally:
+        experiments.REFERENCE_PRUNE_LOG_WEIGHT = original
+    assert unpruned.n_samples == extended.n_samples
+    np.testing.assert_allclose(extended.mean, unpruned.mean, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(extended.effective_sample_size, unpruned.effective_sample_size, rtol=1e-9)
+
+
+def test_primary_endpoint_and_near_certain(tmp_path: Path) -> None:
+    """Test that the paired tests mark one primary test per pair and query type (equal time at the largest budget) with
+    its own Holm correction, and that near-certain discrete tasks are tested apart."""
+    from src.inference_analysis import N_BUDGETS, without_near_certain
+
+    rng = np.random.default_rng(SEED)
+    rows = []
+    for network in range(6):
+        for query_type, max_probability in [("clg", np.nan), ("discrete", 0.999)]:
+            for n_samples in [100, 1000, 10000]:
+                for method, scale in [("LW", 1.0), ("RBLW", 0.5)]:
+                    for rep in range(5):
+                        rows.append({
+                            "task_id": f"network_{network}/{query_type}_0", "query_type": query_type, "method": method,
+                            "n_samples": n_samples, "reference_max_probability": max_probability,
+                            "err_mean": scale * rng.normal() / np.sqrt(n_samples) if query_type == "clg" else np.nan,
+                            "prob_error": scale * abs(rng.normal()) / np.sqrt(n_samples) if query_type == "discrete" else np.nan,
+                            "runtime": 1e-4 * n_samples * (1 + 0.01 * rng.random()),
+                        })
+    results = pd.DataFrame(rows)
+    results["error"] = np.where(results["query_type"] == "discrete", results["prob_error"], results["err_mean"])
+    analyze_comparison(results, tmp_path, 0.01, "test", "test")
+    tests = pd.read_csv(tmp_path / "tables" / "test_paired_tests.csv")
+    primary = tests[tests["endpoint"] == "primary"]
+    assert len(primary) == 2 and primary["level"].str.startswith(f"budget {N_BUDGETS}/").all()
+    np.testing.assert_allclose(primary["p_holm"], holm_correction(primary["p_value"].to_numpy()))
+    without = pd.read_csv(tmp_path / "tables" / "test_paired_tests_without_near_certain.csv")
+    assert set(without["query_type"]) == {"clg"}
+    summary = task_summary(results)
+    assert set(without_near_certain(summary)["query_type"]) == {"clg"}
+
+
+def test_e3_shared_base(tmp_path: Path) -> None:
+    """Test that the E3 analysis uses the shared base units as the base level of every factor."""
+    from src.inference_analysis import analyze_e3
+
+    rng = np.random.default_rng(SEED)
+    rows = []
+    for factor, level in [("base", "base"), ("frac_clg", 0.9), ("location", "R")]:
+        for network in range(6):
+            for n_samples in [100, 1000]:
+                for method, scale in [("LW", 1.0), ("RBLW", 0.5), ("GS", 1.0), ("RBGS", 0.5)]:
+                    for rep in range(3):
+                        rows.append({
+                            "task_id": f"{factor}={level}_{network}/clg_0", "query_type": "clg", "method": method,
+                            "n_samples": n_samples, "factor": factor, "level": level, "n_eff": 50.0,
+                            "err_mean": scale * rng.normal(), "runtime": 1e-4 * n_samples,
+                        })
+    results = pd.DataFrame(rows)
+    results["error"] = results["err_mean"]
+    analyze_e3(results, tmp_path)
+    table = pd.read_csv(tmp_path / "tables" / "E3_regimes.csv")
+    levels = set(zip(table["factor"], table["level"].astype(str)))
+    assert {("frac_clg", "0.5"), ("frac_clg", "0.9"), ("location", "both"), ("location", "R"),
+            ("rarity", "0.5"), ("n_discrete_parents_R", "0")} <= levels
+    assert "base" not in set(table["factor"])
+
+
+def test_reference_stage_skips_finished_units(tmp_path: Path) -> None:
+    """Test that the reference stage does not recompute the references of a finished unit (e.g., one run before the stages
+    were split, which has no references_done marker), so its results stay paired with their references."""
+    from src.inference_experiments import prepare_unit
+
+    unit_path = tmp_path / "finished"
+    unit_path.mkdir()
+    (unit_path / "references.jsonl").write_text("old\n")
+    (unit_path / "done").touch()
+    assert prepare_unit(_small_unit("finished"), unit_path) == -1
+    assert (unit_path / "references.jsonl").read_text() == "old\n"
+    assert not (unit_path / "references_done").exists()
