@@ -1394,6 +1394,24 @@ def _timing_device() -> dict:
     }
 
 
+def _log_progress(unit_id: str, done: int, total: int, start: float) -> None:
+    """Prints the progress of the reference stage of a unit, so a slow unit can be told apart from a frozen one.
+
+    Args:
+        unit_id: The unit.
+        done: Tasks whose reference is finished.
+        total: Tasks of the unit.
+        start: ``time.perf_counter()`` at the start of the unit.
+    """
+    elapsed = time.perf_counter() - start
+    remaining = elapsed / done * (total - done) if done else float("nan")
+    print(
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} {unit_id}: reference {done}/{total} "
+        f"({elapsed / 60:.1f} min, about {remaining / 60:.0f} min left)",
+        flush=True,
+    )
+
+
 def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
     """Reference stage of a unit, which is not timed and can run fully in parallel: builds the network (generated, learned
     or fitted), draws the tasks and computes their references, and writes ``network.pkl``, ``network.json``,
@@ -1422,7 +1440,11 @@ def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
         id_prefix=f"{unit.unit_id}/",
         query_candidates=unit.extra.get("query_candidates"),
     )
-    references = [compute_reference(bn, task, unit, prior) for task in tasks]
+    start = time.perf_counter()
+    references = []
+    for index, task in enumerate(tasks):
+        references.append(compute_reference(bn, task, unit, prior))
+        _log_progress(unit.unit_id, index + 1, len(tasks), start)
 
     _save_network(bn, unit_path / "network.pkl")
     with open(unit_path / "network.json", "w") as f:
@@ -1564,6 +1586,8 @@ def prepare_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     )
     test_rows = test.iloc[test_indices].reset_index(drop=True)
     tasks, references = [], []
+    n_tasks = len(unit.extra["missing_rates"]) * len(test_rows)
+    start = time.perf_counter()
     for missing_rate in unit.extra["missing_rates"]:
         for task_index in range(len(test_rows)):
             row = test_rows.iloc[task_index]
@@ -1593,6 +1617,9 @@ def prepare_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                     model, task, unit.n_reference, unit.seed + 7919
                 )
             )
+            # Every 10% of the tasks, since E7 has many cheap tasks per unit
+            if len(tasks) % max(n_tasks // 10, 1) == 0 or len(tasks) == n_tasks:
+                _log_progress(unit.unit_id, len(tasks), n_tasks, start)
 
     _save_network(model, unit_path / "network.pkl")
     train[model_features].to_csv(unit_path / "train_features.csv", index=False)
