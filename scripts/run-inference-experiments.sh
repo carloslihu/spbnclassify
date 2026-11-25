@@ -5,8 +5,8 @@ Script Name: run-inference-experiments.sh
 
 Description:
     Runs the experiments of the article on Rao-Blackwellized inference in
-    semiparametric Bayesian networks (inference_experiments.py) and their
-    analyses (inference_analysis.py), with one log per experiment and stage.
+    semiparametric Bayesian networks (src/experiments/inference/run.py) and
+    their analyses (src/experiments/inference/analysis.py), with one log per experiment and stage.
 
     1. Reference stage (untimed) of all the experiments IN PARALLEL: builds the
        networks, tasks and reference posteriors. Each experiment uses
@@ -20,21 +20,21 @@ Description:
        next timed stage runs.
 
 Usage (from anywhere):
-    bash src/run-inference-experiments.sh [--quick] [EXPERIMENT ...]
+    bash scripts/run-inference-experiments.sh [--quick] [EXPERIMENT ...]
 
     EXPERIMENT     Any of E1 E2 E3 E4 E5 E7 (default: all, in this order).
     --quick        Smoke run with tiny sizes (results in data/results/inference/quick).
 
     Environment variables:
     REFERENCE_WORKERS  Workers of the reference stage per experiment (default 16).
-    EXTRA_ARGS         Extra arguments for inference_experiments.py of every
+    EXTRA_ARGS         Extra arguments for src/experiments/inference/run.py of every
                        experiment, e.g. EXTRA_ARGS="--n_reps 10".
 
     Examples:
-    bash src/run-inference-experiments.sh                 # everything
-    bash src/run-inference-experiments.sh E1 E2           # only E1 and E2
-    bash src/run-inference-experiments.sh --quick E2      # smoke run of E2
-    nohup bash src/run-inference-experiments.sh > /dev/null 2>&1 &   # in the background
+    bash scripts/run-inference-experiments.sh                 # everything
+    bash scripts/run-inference-experiments.sh E1 E2           # only E1 and E2
+    bash scripts/run-inference-experiments.sh --quick E2      # smoke run of E2
+    nohup bash scripts/run-inference-experiments.sh > /dev/null 2>&1 &   # in the background
 
 Logs:
     logs/inference/<start time>/
@@ -91,7 +91,7 @@ human_time() {
 run_stage() {
     local experiment="$1" stage="$2"
     local stage_log="$LOG_DIR/${experiment}_${stage}.log"
-    local command="python -W ignore -m src.inference_experiments $experiment --stage $stage $QUICK_FLAG $EXTRA_ARGS"
+    local command="python -W ignore -m src.experiments.inference.run $experiment --stage $stage $QUICK_FLAG $EXTRA_ARGS"
     if [ "$stage" = "references" ]; then
         command="$command --reference_workers $REFERENCE_WORKERS"
     fi
@@ -126,7 +126,7 @@ run_analysis() {
     local experiment="$1"
     local analysis_log="$LOG_DIR/${experiment}_analysis.log"
     local start=$(date +%s)
-    $ANALYSIS_CORES python -W ignore -m src.inference_analysis "$experiment" $QUICK_FLAG > "$analysis_log" 2>&1
+    $ANALYSIS_CORES python -W ignore -m src.experiments.inference.analysis "$experiment" $QUICK_FLAG > "$analysis_log" 2>&1
     local status=$?
     log "$experiment analysis finished in $(human_time $(( $(date +%s) - start ))) (exit code $status)"
 }
@@ -178,4 +178,4 @@ log "All done in $(human_time $(( $(date +%s) - TOTAL_START )))"
 # tail -f logs/inference/<start time>/main.log        # progress of the stages
 # tail -f logs/inference/<start time>/E2_runs.log     # progress of the units of a stage
 # nvidia-smi                                          # GPU use
-# pkill -f run-inference-experiments.sh; pkill -f src.inference_experiments   # stop everything (resumable)
+# pkill -f run-inference-experiments.sh; pkill -f src.experiments.inference.run   # stop everything (resumable)

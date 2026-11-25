@@ -1,4 +1,4 @@
-"""Tests of the inference experiments (src/inference_experiments.py) and of their analysis (src/inference_analysis.py)."""
+"""Tests of the inference experiments (src/experiments/inference/run.py) and of their analysis (src/experiments/inference/analysis.py)."""
 
 import json
 from dataclasses import asdict
@@ -10,13 +10,13 @@ import pybnesian as pbn
 import pytest
 from scipy.stats import norm
 from src.bn import SemiParametricBayesianNetwork
-from src.inference_analysis import (
+from src.experiments.inference.analysis import (
     analyze_comparison,
     holm_correction,
     task_summary,
     time_to_epsilon,
 )
-from src.inference_experiments import (
+from src.experiments.inference.run import (
     EvidenceSpec,
     SyntheticConfig,
     Task,
@@ -238,7 +238,7 @@ def test_analyze_comparison(tmp_path: Path) -> None:
 
 def test_reference_check_table(tmp_path: Path) -> None:
     """Test the fraction of discarded tasks and the reasons of the reference checks."""
-    from src.inference_analysis import reference_check_table
+    from src.experiments.inference.analysis import reference_check_table
 
     references = [
         {"task_id": "frac_clg=0.3_0/clg_0", "method": "lw+gibbs", "ok": True, "message": ""},
@@ -258,7 +258,7 @@ def test_reference_check_table(tmp_path: Path) -> None:
 def test_reference_and_run_stages(tmp_path: Path) -> None:
     """Test that the timed stage reuses the network, tasks and references of the reference stage, and that it gives the
     same estimates as running both stages at once (the pickled network is the same network)."""
-    from src.inference_experiments import prepare_unit
+    from src.experiments.inference.run import prepare_unit
 
     unit = _small_unit("staged")
     n_tasks = prepare_unit(unit, tmp_path / "staged")
@@ -306,7 +306,7 @@ def test_worker_slots() -> None:
 
 def test_pair_tests_per_unit() -> None:
     """Test that the paired tests use one value per network (the median of its tasks), not one per task."""
-    from src.inference_analysis import pair_tests
+    from src.experiments.inference.analysis import pair_tests
 
     rows = []
     for network in range(6):
@@ -324,8 +324,9 @@ def test_pair_tests_per_unit() -> None:
 def test_regime_base_levels() -> None:
     """Test that delta = 1 is the base configuration, that the E3 base units are shared by the factors (no duplicated
     units), and that the base levels of the runner and of the analysis agree."""
-    from src import inference_analysis, inference_experiments
-    from src.inference_experiments import _network_factor_config, build_units, parse_args
+    from src.experiments.inference import analysis as inference_analysis
+    from src.experiments.inference import run as inference_experiments
+    from src.experiments.inference.run import _network_factor_config, build_units, parse_args
 
     assert _network_factor_config("n_discrete_parents_R", 0) == asdict(SyntheticConfig())
     assert inference_analysis.REGIME_BASE_LEVELS == inference_experiments.REGIME_BASE_LEVELS
@@ -340,7 +341,7 @@ def test_regime_base_levels() -> None:
 def test_lw_reference_extends_for_rare_evidence() -> None:
     """Test that the LW reference keeps sampling while its ESS is low, and that not storing negligible samples does not
     change it."""
-    import src.inference_experiments as experiments
+    import src.experiments.inference.run as experiments
 
     bn, _ = generate_synthetic_spbn(SyntheticConfig(n_nodes=8, n_train=300), SEED)
     prior = bn.sample(2000, seed=SEED)
@@ -367,7 +368,7 @@ def test_lw_reference_extends_for_rare_evidence() -> None:
 def test_primary_endpoint_and_near_certain(tmp_path: Path) -> None:
     """Test that the paired tests mark one primary test per pair and query type (equal time at the largest budget) with
     its own Holm correction, and that near-certain discrete tasks are tested apart."""
-    from src.inference_analysis import N_BUDGETS, without_near_certain
+    from src.experiments.inference.analysis import N_BUDGETS, without_near_certain
 
     rng = np.random.default_rng(SEED)
     rows = []
@@ -398,7 +399,7 @@ def test_primary_endpoint_and_near_certain(tmp_path: Path) -> None:
 
 def test_e3_shared_base(tmp_path: Path) -> None:
     """Test that the E3 analysis uses the shared base units as the base level of every factor."""
-    from src.inference_analysis import analyze_e3
+    from src.experiments.inference.analysis import analyze_e3
 
     rng = np.random.default_rng(SEED)
     rows = []
@@ -425,7 +426,7 @@ def test_e3_shared_base(tmp_path: Path) -> None:
 def test_reference_stage_skips_finished_units(tmp_path: Path) -> None:
     """Test that the reference stage does not recompute the references of a finished unit (e.g., one run before the stages
     were split, which has no references_done marker), so its results stay paired with their references."""
-    from src.inference_experiments import prepare_unit
+    from src.experiments.inference.run import prepare_unit
 
     unit_path = tmp_path / "finished"
     unit_path.mkdir()

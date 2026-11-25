@@ -1,9 +1,9 @@
-"""Figures, tables and statistical tests of the inference experiments (``inference_experiments.py``).
+"""Figures, tables and statistical tests of the inference experiments (``run.py``).
 
 Reads ``data/results/inference/<experiment>/results.csv`` and writes ``figures/`` (PNG/PDF) and ``tables/`` (CSV and booktabs LaTeX) in the same folder.
 
 Usage (from the library root):
-    python -m src.inference_analysis E2 [--quick] [--epsilon 0.1]
+    python -m src.experiments.inference.analysis E2 [--quick] [--epsilon 0.1]
 """
 
 # region Imports
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-from .utils.model_comparison import (
+from ...utils.model_comparison import (
     compute_friedman_test,
     get_ranking_matrix,
     plot_critical_difference_diagram,
@@ -29,7 +29,8 @@ from .utils.model_comparison import (
 
 # endregion Imports
 
-LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+# src/experiments/<group>/<module>.py -> library root
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parents[3]
 RESULT_PATH = LIBRARY_ROOT_PATH / "data" / "results" / "inference"
 # Each Rao-Blackwellized method and its non-Rao-Blackwellized counterpart (hypotheses H1 and H2)
 PAIRS = [("LW", "RBLW"), ("GS", "RBGS")]
@@ -39,10 +40,10 @@ N_BOOTSTRAP = 2000
 # Number of budgets for the RMSE curves at common wall-clock times
 N_BUDGETS = 12
 # Discrete tasks whose reference gives more than this probability to one category are near-certain: every method tends to
-# be exact on them, so the comparisons are repeated without them (same value as in inference_experiments)
+# be exact on them, so the comparisons are repeated without them (same value as in run.py)
 NEAR_CERTAIN_PROBABILITY = 0.99
 # Base levels of the regime factors of E3, whose units are shared by all the factors ("base" units); keep in sync with
-# inference_experiments.REGIME_BASE_LEVELS
+# run.REGIME_BASE_LEVELS
 REGIME_BASE_LEVELS = {
     "frac_clg": 0.5,
     "n_discrete_parents_R": 0,
@@ -419,7 +420,7 @@ def load_results(experiment_path: Path) -> pd.DataFrame:
     results_file = experiment_path / "results.csv"
     if not results_file.exists():
         raise FileNotFoundError(
-            f"No results in {results_file}; run inference_experiments first."
+            f"No results in {results_file}; run src.experiments.inference.run first."
         )
     return add_error_columns(pd.read_csv(results_file))
 

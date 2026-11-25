@@ -10,13 +10,14 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+# src/experiments/<group>/<module>.py -> library root
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parents[3]
 GRID_SEARCH_CONFIG_PATH = LIBRARY_ROOT_PATH / "data/configs/"
 
-from .data_handler import DataHandler
-from .module import Module
-from .pipeline import ClassifierPipeline
-from .utils import GridSearchArgs
+from ...data_handler import DataHandler
+from ...module import Module
+from ...pipeline import ClassifierPipeline
+from ...utils import GridSearchArgs
 
 # Disable mlflow logging
 # logging.getLogger("mlflow").setLevel(logging.WARNING)

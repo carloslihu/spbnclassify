@@ -5,7 +5,7 @@ Script Name: full-grid-search.sh
 
 Description:
     This script automates the execution of a grid search for machine learning
-    experiments using the grid_search.py Python script. It supports running
+    experiments using src/experiments/classification/grid_search.py. It supports running
     grid searches across all datasets and models, new datasets, or testing new
     models by configuring the COMMAND and LOG_FILE variables. The script logs
     the command execution details, including timestamps and total execution
@@ -31,19 +31,23 @@ Notes:
 '
 
 # region Command definition
+# The Python modules are run from the library root (the parent of this script's folder)
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+mkdir -p logs
+
 # Command for all datasets and models
-COMMAND="python grid_search.py \
+COMMAND="python -m src.experiments.classification.grid_search \
     -c \
     --experiment_name bnc \
     --data_source public \
     --n_splits 10 \
     --n_runs 5 \
     --max_workers 50"
-LOG_FILE="full-grid-search.log"
+LOG_FILE="logs/full-grid-search.log"
 
 # Command for new datasets and models
-# python -m src.grid_search -c --experiment_name bnc_test --data_source public --dataset_name algerian_forest_fires --n_splits 10 --n_runs 1 --max_workers 50
-# COMMAND="python grid_search.py \
+# python -m src.experiments.classification.grid_search -c --experiment_name bnc_test --data_source public --dataset_name algerian_forest_fires --n_splits 10 --n_runs 1 --max_workers 50
+# COMMAND="python -m src.experiments.classification.grid_search \
 #     -c \
 #     --experiment_name bnc_test \
 #     --data_source public \
@@ -51,7 +55,7 @@ LOG_FILE="full-grid-search.log"
 #     --n_splits 10 \
 #     --n_runs 1 \
 #     --max_workers 50"
-# LOG_FILE="grid-search-test.log"
+# LOG_FILE="logs/grid-search-test.log"
 # endregion
 
 # region Command execution
@@ -81,9 +85,9 @@ EXEC_TIME=$((END_TIME - START_TIME))
 
 # endregion
 # NOTE: To run in background use:
-# nohup bash full-grid-search.sh > output.log 2>&1 &
+# nohup bash scripts/full-grid-search.sh > /dev/null 2>&1 &
 
 # NOTE: Useful commands to monitor the process:
-# ps aux | grep grid_search.py # This will show the process ID (PID) and other details
+# ps aux | grep grid_search # This will show the process ID (PID) and other details
 # kill <pid> # Replace <pid> with the actual process ID from the previous command
-# pkill -f grid_search # This will kill all processes that match the name 'grid_search.py'
+# pkill -f grid_search # This will kill all processes that match the name 'grid_search'

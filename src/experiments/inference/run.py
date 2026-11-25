@@ -3,17 +3,17 @@
 Each experiment (E1-E7) writes its raw results to ``data/results/inference/<experiment>/``:
     - ``units/<unit_id>/``: the network, tasks, references and results of each independent unit (a network or a dataset), written when the unit finishes, so an interrupted run resumes by skipping the finished units.
     - ``results.csv``, ``tasks.jsonl``, ``references.jsonl`` and ``networks.csv``: the concatenation of all the units.
-``inference_analysis.py`` builds the figures, tables and statistical tests from these files.
+``analysis.py`` builds the figures, tables and statistical tests from these files.
 
 Usage (from the library root):
-    python -m src.inference_experiments E2 [--quick] [--max_workers 1] [--n_reps 50] ...
+    python -m src.experiments.inference.run E2 [--quick] [--max_workers 1] [--n_reps 50] ...
 """
 
 # region Imports
 import os
 
 # The OpenCL device must be chosen before pybnesian is imported, and the BLAS threads fixed before numpy is imported
-from .utils.opencl_device import (
+from ...utils.opencl_device import (
     assign_worker_device,
     available_gpus,
     opencl_device_name,
@@ -45,19 +45,20 @@ import pybnesian as pbn
 from scipy.special import logsumexp
 from scipy.stats import norm
 
-from .bn import SemiParametricBayesianNetwork
-from .bnc import (
+from ...bn import SemiParametricBayesianNetwork
+from ...bnc import (
     SemiParametricBayesianNetworkAugmentedNaiveBayes,
     SemiParametricNaiveBayes,
     SemiParametricTreeAugmentedNaiveBayes,
 )
-from .data_handler import DATASET_NAME_LIST, DataHandler
-from .utils.constants import TRUE_CLASS_LABEL
+from ...data_handler import DATASET_NAME_LIST, DataHandler
+from ...utils.constants import TRUE_CLASS_LABEL
 
 # endregion Imports
 
 # region Constants
-LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+# src/experiments/<group>/<module>.py -> library root
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parents[3]
 RESULT_PATH = LIBRARY_ROOT_PATH / "data" / "results" / "inference"
 # E6 (SPBNs learned from real data) was removed; the other experiments keep their numbers so that their result folders
 # stay valid. E1, E5 and the rejection ablation of E4 are reported in the appendix of the article.
@@ -1707,7 +1708,7 @@ NETWORK_FACTORS = {
 REGIME_NETWORK_FACTORS = ["frac_clg", "n_discrete_parents_R"]
 SCALING_FACTORS = ["n_nodes", "frac_clg", "n_train", "n_discrete_parents_R"]
 # Levels of the regime factors that are the base configuration and base evidence (n_rb_ancestors has no base level,
-# since it uses 40-variable networks); keep in sync with inference_analysis.REGIME_BASE_LEVELS
+# since it uses 40-variable networks); keep in sync with analysis.REGIME_BASE_LEVELS
 REGIME_BASE_LEVELS = {
     "frac_clg": 0.5,
     "n_discrete_parents_R": 0,
@@ -1843,7 +1844,7 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
 
     if experiment == "E3":
         # The base level of every factor is the same base network and tasks, so they are run once ("base" units) and
-        # inference_analysis uses them as the base level of each factor (REGIME_BASE_LEVELS)
+        # analysis.py uses them as the base level of each factor (REGIME_BASE_LEVELS)
         for i, seed in enumerate(seeds):
             units.append(
                 UnitSpec(

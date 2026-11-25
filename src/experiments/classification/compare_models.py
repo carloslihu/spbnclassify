@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 
-LIBRARY_ROOT_PATH = Path(__file__).resolve().parent.parent
+# src/experiments/<group>/<module>.py -> library root
+LIBRARY_ROOT_PATH = Path(__file__).resolve().parents[3]
 DATA_PATH = LIBRARY_ROOT_PATH / "data"
 PIPELINE_PATH = DATA_PATH / "pipelines" / "SPBNC"
 RESULT_PATH = DATA_PATH / "agg_results"
@@ -13,9 +14,9 @@ RANKING_TABLES_RESULT_PATH = RESULT_PATH / "ranking_tables"
 CD_DIAGRAMS_RESULT_PATH = RESULT_PATH / "cd_diagrams"
 DATASET_DETAIL_PATH = RESULT_PATH / "dataset_details"
 
-from .data_handler import DATASET_NAME_LIST
-from .utils.generic import bn_to_acronym
-from .utils.model_comparison import (
+from ...data_handler import DATASET_NAME_LIST
+from ...utils.generic import bn_to_acronym
+from ...utils.model_comparison import (
     bold_best_cell,
     format_mean_std_cell,
     get_avg_std_metric_matrix,

@@ -151,12 +151,14 @@ Use this space to show useful examples of how a project can be used. Additional 
 _For more examples, please refer to the [Documentation](https://example.com)_ -->
 <!-- TODO Add experiment configuration instructions -->
    ```sh
-   # To execute the experiments and obtain the results
-   cd src
-   bash full-grid-search.sh
+   # To execute the classifier experiments and obtain the results (from the library root)
+   bash scripts/full-grid-search.sh
 
    # To obtain the aggregated results and comparisons
-   python compare_models.py
+   python -m src.experiments.classification.compare_models
+
+   # To run the Rao-Blackwellized inference experiments (E1-E7) with logs, and their analyses
+   bash scripts/run-inference-experiments.sh
    ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
