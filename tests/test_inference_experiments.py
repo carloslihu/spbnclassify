@@ -666,3 +666,28 @@ def test_repair_reference_checks(tmp_path: Path) -> None:
         ok = {row["task_id"]: row["ok"] for row in map(json.loads, f)}
     assert ok == {"a": True, "b": True, "c": False, "d": False, "e": True}
     assert repair_reference_checks([tmp_path]) == 0
+
+
+def test_run_unit_split_by_device(tmp_path: Path) -> None:
+    """Test that the GPU and CPU parts of the timed stage give the same results as running every method at once."""
+    unit = _small_unit("split")
+    assert run_unit(unit, tmp_path / "split", "cpu") > 0
+    path = tmp_path / "split"
+    assert (path / "done_cpu").exists() and not (path / "done").exists()
+    assert run_unit(unit, path, "cpu") == -1
+    assert run_unit(unit, path, "gpu") > 0
+    assert (path / "done").exists()
+
+    run_unit(_small_unit("split"), tmp_path / "together")
+    columns = ["task_id", "method", "n_samples", "seed", "mean", "std", "n_eff"]
+    split = pd.read_csv(path / "results.csv")
+    together = pd.read_csv(tmp_path / "together" / "results.csv")
+    split, together = (
+        df[[c for c in columns if c in df]]
+        .sort_values(["task_id", "method", "n_samples", "seed"])
+        .reset_index(drop=True)
+        for df in (split, together)
+    )
+    pd.testing.assert_frame_equal(split, together)
+    network = json.loads((path / "network.json").read_text())
+    assert "gpu_runs_device" in network and "cpu_runs_cpu_cores" in network

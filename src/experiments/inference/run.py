@@ -7,7 +7,11 @@ Each experiment (E1-E7) writes its raw results to ``data/results/inference/<expe
         - ``network.json``: its description, with the timing device added by the timed stage.
         - ``train_features.csv`` and ``test_rows.csv`` (E7): the training features of the imputers and the test instances.
         - ``tasks.jsonl``, ``references.jsonl`` and ``results.csv``: as below, for this unit only.
-        - ``references_done`` and ``done``: empty markers of the finished reference and timed stages.
+        - ``results_gpu.csv`` and ``results_cpu.csv``: the runs of the LW family (GPU workers) and of the Gibbs family and
+          imputation (CPU workers), the two parts of the timed stage, concatenated in ``results.csv``.
+        - ``timing_gpu.json`` and ``timing_cpu.json``: the GPU and cores of the worker of each part.
+        - ``references_done``, ``done_gpu``, ``done_cpu`` and ``done``: empty markers of the finished reference stage,
+          parts of the timed stage, and unit.
     - ``results.csv``, ``tasks.jsonl``, ``references.jsonl`` and ``networks.csv``: the concatenation of all the units.
         - ``networks.csv``: one row per unit, with the realized structure (``n_nodes``, ``n_ckde``, ``n_clg``, ``n_rb``,
           ``frac_rb``, ``n_delta``, ``mean_ckde_size``), the generator settings (``config_*``), ``network_seed``, the
@@ -22,7 +26,7 @@ Each experiment (E1-E7) writes its raw results to ``data/results/inference/<expe
 ``analysis.py`` builds the figures, tables and statistical tests from these files.
 
 Usage (from the library root):
-    python -m src.experiments.inference.run E2 [--quick] [--max_workers 1] [--n_reps 50] ...
+    python -m src.experiments.inference.run E2 [--quick] [--max_workers 1] [--cpu_workers 15] [--n_reps 20] ...
 """
 
 # region Imports
@@ -51,7 +55,7 @@ import re
 import time
 import traceback
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -131,11 +135,17 @@ REFERENCE_PRUNE_LOG_WEIGHT = 40.0
 # A discrete task whose reference gives more than this probability to one category is near-certain (reported apart)
 NEAR_CERTAIN_PROBABILITY = 0.99
 MAX_REFERENCE_RHAT = 1.01
-# Differences below this are numerically identical estimates, e.g., of a near-certain class, whose Monte Carlo standard
-# errors are 0, so the 3-MCSE tolerance is 0 or undefined,
+# Differences below this are numerically identical estimates, e.g., of a near-certain class,
+# whose Monte Carlo standard errors are 0, so the 3-MCSE tolerance is 0 or undefined
 REFERENCE_AGREEMENT_ATOL = 1e-9
 # Default parallel workers of the (untimed) reference stage
 DEFAULT_REFERENCE_WORKERS = 16
+# Device whose time dominates each method family: LW and RB-LW evaluate the CKDE-CPDs on the GPU, while GS and RB-GS
+# update the chains with mixtures on the CPU, so the timed stage runs each family on its own workers,
+METHOD_DEVICE = {"lw": "gpu", "gibbs": "cpu"}
+# The timed stage uses the first cores (one per GPU worker, then one per CPU worker), and the launcher runs the analyses
+# on the others,
+TIMED_CORES = 16
 # endregion Constants
 
 
@@ -1520,22 +1530,117 @@ def prepare_unit(unit: UnitSpec, unit_path: Path) -> int:
     return len(tasks)
 
 
-def run_unit(unit: UnitSpec, unit_path: Path) -> int:
-    """Timed stage of a unit: runs the inference methods on the tasks of ``prepare_unit`` (computing them first if needed)
-    and writes ``results.csv``. The ``done`` marker is written last, so an interrupted stage is run again. Returns the
-    number of result rows (-1 if the unit was already done)."""
+def _unit_devices(unit: UnitSpec) -> list[str]:
+    """Devices of the timed stage of a unit (see ``METHOD_DEVICE``).
+
+    Args:
+        unit: The unit.
+
+    Returns:
+        list[str]: "cpu" and/or "gpu"; the imputation baselines of E7 run on the CPU.
+    """
+    devices = {METHOD_DEVICE[METHODS[m]["method"]] for m in unit.methods}
+    if unit.kind == "classifier":
+        devices.add("cpu")
+    return sorted(devices)
+
+
+def _runs_on(method_name: str, device: str | None) -> bool:
+    """Whether a method belongs to the part of the timed stage of ``device`` (None: every method)."""
+    return device is None or METHOD_DEVICE[METHODS[method_name]["method"]] == device
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    """Writes a file through a temporary one, so two processes that write the same content never leave it truncated."""
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(text)
+    os.replace(temporary, path)
+
+
+def _finish_runs(
+    unit: UnitSpec, unit_path: Path, rows: list[dict], device: str | None
+) -> None:
+    """Writes the results of the timed stage of a unit, or of its part on ``device``.
+
+    With a device, its rows go to ``results_<device>.csv``, its timing device to ``timing_<device>.json`` and its marker
+    ``done_<device>`` is written; once every device of the unit is done, their results are concatenated in
+    ``results.csv`` and the ``done`` marker is written.
+
+    Args:
+        unit: The unit.
+        unit_path: Its folder.
+        rows: The result rows of the methods that ran.
+        device: "cpu", "gpu" or None (every method in one process).
+    """
+    if device is None:
+        pd.DataFrame(rows).to_csv(unit_path / "results.csv", index=False)
+        info = json.loads((unit_path / "network.json").read_text())
+        # The device that times the runs, which may differ from the one of the reference stage
+        info.update(_timing_device())
+        _write_atomically(
+            unit_path / "network.json",
+            json.dumps(info, default=_json_default, indent=2),
+        )
+        (unit_path / "done").touch()
+        return
+    pd.DataFrame(rows).to_csv(unit_path / f"results_{device}.csv", index=False)
+    (unit_path / f"timing_{device}.json").write_text(json.dumps(_timing_device()))
+    (unit_path / f"done_{device}").touch()
+    devices = _unit_devices(unit)
+    if not all((unit_path / f"done_{d}").exists() for d in devices):
+        return
+    frames = [
+        pd.read_csv(unit_path / f"results_{d}.csv")
+        for d in devices
+        if (unit_path / f"results_{d}.csv").stat().st_size > 1
+    ]
+    results = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    _write_atomically(unit_path / "results.csv", results.to_csv(index=False))
+    info = json.loads((unit_path / "network.json").read_text())
+    for d in devices:
+        timing = json.loads((unit_path / f"timing_{d}.json").read_text())
+        info.update({f"{d}_runs_{key}": value for key, value in timing.items()})
+    # The GPU of the LW family is the timing device of networks.csv, as before the split,
+    info.update(
+        json.loads(
+            (
+                unit_path / f"timing_{'gpu' if 'gpu' in devices else 'cpu'}.json"
+            ).read_text()
+        )
+    )
+    _write_atomically(
+        unit_path / "network.json", json.dumps(info, default=_json_default, indent=2)
+    )
+    (unit_path / "done").touch()
+
+
+def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
+    """Timed stage of a unit: runs the inference methods on the tasks of ``prepare_unit`` (computing them first if
+    needed) and writes ``results.csv``. The ``done`` marker is written last, so an interrupted stage is run again.
+
+    Args:
+        unit: The unit.
+        unit_path: Its folder.
+        device: Run only the methods of this device ("gpu": LW family, "cpu": Gibbs family and imputation), so that both
+            parts run on their own workers at the same time (see ``_finish_runs``). None runs every method.
+
+    Returns:
+        int: Number of result rows (-1 if the unit, or its part on ``device``, was already done or has nothing to run).
+    """
     if (unit_path / "done").exists():
+        return -1
+    if device is not None and (
+        device not in _unit_devices(unit) or (unit_path / f"done_{device}").exists()
+    ):
         return -1
     prepare_unit(unit, unit_path)
     if unit.kind == "classifier":
-        rows = run_classifier_unit(unit, unit_path)
-        (unit_path / "done").touch()
-        return rows
+        rows = run_classifier_unit(unit, unit_path, device)
+        _finish_runs(unit, unit_path, rows, device)
+        return len(rows)
 
     bn = _load_network(unit_path / "network.pkl")
     info = json.loads((unit_path / "network.json").read_text())
-    # The device that times the runs, which may differ from the one of the reference stage
-    info.update(_timing_device())
     tasks = [Task(**row) for row in _read_jsonl(unit_path / "tasks.jsonl")]
     references = {
         row.pop("task_id"): Reference(**row)
@@ -1569,6 +1674,8 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
             },
         }
         for method_name in unit.methods:
+            if not _runs_on(method_name, device):
+                continue
             family = METHODS[method_name]["method"]
             for n_samples in unit.sample_sizes[family]:
                 for rep in range(unit.n_reps):
@@ -1584,11 +1691,18 @@ def run_unit(unit: UnitSpec, unit_path: Path) -> int:
                     )
                     result_rows.append({**base, **row})
 
-    pd.DataFrame(result_rows).to_csv(unit_path / "results.csv", index=False)
-    with open(unit_path / "network.json", "w") as f:
-        json.dump(info, f, default=_json_default, indent=2)
-    (unit_path / "done").touch()
+    _finish_runs(unit, unit_path, result_rows, device)
     return len(result_rows)
+
+
+def run_unit_gpu(unit: UnitSpec, unit_path: Path) -> int:
+    """GPU part of the timed stage (LW family), see ``run_unit``."""
+    return run_unit(unit, unit_path, "gpu")
+
+
+def run_unit_cpu(unit: UnitSpec, unit_path: Path) -> int:
+    """CPU part of the timed stage (Gibbs family and imputation), see ``run_unit``."""
+    return run_unit(unit, unit_path, "cpu")
 
 
 # endregion Experiment units
@@ -1696,7 +1810,9 @@ def prepare_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     return len(tasks)
 
 
-def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
+def run_classifier_unit(
+    unit: UnitSpec, unit_path: Path, device: str | None = None
+) -> list[dict]:
     """Timed stage of E7: class posterior of an SPBN classifier with features missing completely at random, estimated
     with the inference methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior
     of the classifier (on the tasks and references of ``prepare_classifier_unit``).
@@ -1706,13 +1822,19 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
     - RB vs non-RB inference (the paper's claim), through the error of the class posterior with respect to the reference.
     - Inference vs imputation (whether inference is needed at all), through the log-loss, Brier score and accuracy with
       respect to the true labels.
+
+    Args:
+        unit: The unit.
+        unit_path: Its folder.
+        device: Run only the methods of this device (the imputation baselines run on the CPU), see ``run_unit``.
+
+    Returns:
+        list[dict]: The result rows.
     """
     from sklearn.impute import KNNImputer
 
     dataset_name, model_name = unit.config["dataset"], unit.config["model"]
     model = _load_network(unit_path / "network.pkl")
-    info = json.loads((unit_path / "network.json").read_text())
-    info.update(_timing_device())
     model_features = list(model.feature_names_in_)
     network_features = [f for f in model_features if f in model.nodes()]
     classes = [str(c) for c in model.classes_]
@@ -1764,6 +1886,8 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
             return scores
 
         for method_name in unit.methods:
+            if not _runs_on(method_name, device):
+                continue
             family = METHODS[method_name]["method"]
             for n_samples in unit.sample_sizes[family]:
                 for rep in range(unit.n_reps):
@@ -1781,6 +1905,8 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                     result.pop("prob_error", None)
                     rows.append({**base, **result, **_scores(probabilities)})
         for imputer_name, imputer in imputers.items():
+            if device == "gpu":
+                break
             x = pd.DataFrame(
                 [row[model_features].to_numpy(dtype=float)], columns=model_features
             )
@@ -1803,10 +1929,7 @@ def run_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
                 }
             )
 
-    pd.DataFrame(rows).to_csv(unit_path / "results.csv", index=False)
-    with open(unit_path / "network.json", "w") as f:
-        json.dump(info, f, default=_json_default, indent=2)
-    return len(rows)
+    return rows
 
 
 # endregion Real datasets (E7)
@@ -2150,7 +2273,12 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
 
 
 # region Execution
-STAGE_FUNCTIONS = {"references": prepare_unit, "runs": run_unit}
+STAGE_FUNCTIONS = {
+    "references": prepare_unit,
+    "runs": run_unit,
+    "runs_gpu": run_unit_gpu,
+    "runs_cpu": run_unit_cpu,
+}
 
 
 def _run_stage_safely(
@@ -2172,11 +2300,24 @@ def _execute_stage(
     output_path: Path,
     n_workers: int,
     gpus: list[str],
-    pin_cores: bool,
+    cores: list[int] | None = None,
 ) -> list[tuple[str, str]]:
-    """Runs a stage on the units, sequentially or with ``n_workers`` spawned processes. Each worker gets its own GPU
-    (round-robin over ``gpus``) and, with ``pin_cores``, its own CPU core, so that parallel timed runs do not compete for
-    the same devices. Returns the failed units with their tracebacks."""
+    """Runs a stage on the units, in this process or with ``n_workers`` spawned processes.
+
+    Each worker gets its own GPU (round-robin over ``gpus``) and, with ``cores``, its own CPU core, so that parallel
+    timed runs do not compete for the same devices.
+
+    Args:
+        stage: A key of ``STAGE_FUNCTIONS``.
+        units: The units.
+        output_path: The experiment folder.
+        n_workers: Parallel processes; with 1 and no ``cores``, the units run in this process.
+        gpus: GPUs of the workers.
+        cores: CPU cores of the workers (one each), or None to leave them unpinned.
+
+    Returns:
+        list[tuple[str, str]]: The failed units with their tracebacks.
+    """
     label = "references" if stage == "references" else "rows"
     failures = []
 
@@ -2188,7 +2329,9 @@ def _execute_stage(
         if error:
             failures.append((unit_id, error))
 
-    if n_workers <= 1:
+    if not units:
+        return failures
+    if n_workers <= 1 and not cores:
         for index, unit in enumerate(units):
             _report(
                 index,
@@ -2198,12 +2341,8 @@ def _execute_stage(
             )
         return failures
 
-    cores = (
-        sorted(os.sched_getaffinity(0))
-        if pin_cores and hasattr(os, "sched_getaffinity")
-        else None
-    )
-    if stage == "runs" and gpus and n_workers > len(gpus):
+    n_workers = max(n_workers, 1)
+    if stage in ("runs", "runs_gpu") and gpus and n_workers > len(gpus):
         warnings.warn(
             f"{n_workers} workers share {len(gpus)} GPUs: the runtimes of the workers on the same GPU are not independent.",
             RuntimeWarning,
@@ -2277,7 +2416,6 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
             output_path,
             args.reference_workers,
             gpus,
-            pin_cores=False,
         )
     if args.stage in ("all", "runs"):
         pending = _pending("done")
@@ -2289,14 +2427,43 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
         print(
             f"{experiment} runs: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
         )
-        failures += _execute_stage(
-            "runs",
-            pending,
-            output_path,
-            args.max_workers,
-            gpus,
-            pin_cores=not args.no_pin,
+        # The LW family (GPU workers, one per GPU) and the Gibbs family (CPU workers) run at the same time on disjoint
+        # cores. Each pair of methods is timed in the same worker, so the load of the other workers affects both alike,
+        all_cores = (
+            sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
         )
+        parts = {
+            "gpu": (args.max_workers, all_cores[: args.max_workers]),
+            "cpu": (
+                args.cpu_workers,
+                all_cores[args.max_workers : args.max_workers + args.cpu_workers],
+            ),
+        }
+        with ThreadPoolExecutor(max_workers=len(parts)) as threads:
+            jobs = []
+            for device, (n_workers, cores) in parts.items():
+                part_units = [
+                    u
+                    for u in pending
+                    if device in _unit_devices(u)
+                    and not (
+                        output_path / "units" / _safe_name(u.unit_id) / f"done_{device}"
+                    ).exists()
+                ]
+                print(f"{experiment} runs on {device}: {len(part_units)} units.")
+                jobs.append(
+                    threads.submit(
+                        _execute_stage,
+                        f"runs_{device}",
+                        part_units,
+                        output_path,
+                        n_workers,
+                        gpus,
+                        None if args.no_pin or not cores else cores,
+                    )
+                )
+            for job in jobs:
+                failures += job.result()
     for unit_id, error in failures:
         print(f"Unit {unit_id} failed:\n{error}")
     combine_units(output_path, [_safe_name(u.unit_id) for u in units])
@@ -2411,8 +2578,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max_workers",
         type=int,
-        help="Parallel units of the timed stage; each worker gets its own GPU and CPU core. Defaults to one worker per "
-        "GPU (1 without GPUs).",
+        help="Parallel units of the GPU part of the timed stage (LW family); each worker gets its own GPU and CPU core. "
+        "Defaults to one worker per GPU (1 without GPUs).",
+    )
+    parser.add_argument(
+        "--cpu_workers",
+        type=int,
+        help="Parallel units of the CPU part of the timed stage (Gibbs family and imputation), each pinned to its own "
+        f"core. Defaults to {TIMED_CORES} minus --max_workers, so the timed stage uses the first {TIMED_CORES} cores.",
     )
     parser.add_argument(
         "--reference_workers",
@@ -2443,6 +2616,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.max_workers = max(
             len(args.gpus if args.gpus is not None else available_gpus()), 1
         )
+    if args.cpu_workers is None:
+        args.cpu_workers = max(
+            min(TIMED_CORES, os.cpu_count() or 1) - args.max_workers, 1
+        )
     if args.reference_workers is None:
         # The reference stage is not timed, so its workers can share the GPUs
         args.reference_workers = min(DEFAULT_REFERENCE_WORKERS, os.cpu_count() or 1)
@@ -2452,7 +2629,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     defaults = dict(
         n_networks=10 if args.experiment in ("E1", "E2") else 5,
         n_tasks=5 if args.experiment != "E7" else 50,
-        n_reps=50 if args.experiment in ("E1", "E2", "E4") else 20,
+        # The statistical unit is the network, so 20 repetitions (RMSE of a task within about 16%) are enough,
+        n_reps=20,
         sample_sizes=[100, 1_000, 10_000, 100_000],
         gibbs_sample_sizes=[100, 1_000, 10_000],
         n_reference=10_000_000,
@@ -2469,7 +2647,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     if args.experiment == "E3":
         # Tasks of the same network are correlated, so E3 uses more networks with fewer tasks each (tested per network)
-        defaults.update(n_networks=10, n_tasks=3)
+        # 170 units: 10 repetitions and N up to 10**4 (LW family) and 10**3 (Gibbs family) keep it affordable, since
+        # the relative RMSE reduction barely depends on N,
+        defaults.update(
+            n_networks=10,
+            n_tasks=3,
+            n_reps=10,
+            sample_sizes=[100, 1_000, 10_000],
+            gibbs_sample_sizes=[100, 1_000],
+        )
     if args.experiment == "E7":
         # One stratified reference per test instance, missing rate and classifier: 10**6 samples per class keeps it affordable
         defaults.update(n_reference=1_000_000)
