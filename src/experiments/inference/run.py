@@ -47,6 +47,7 @@ import itertools
 import json
 import multiprocessing
 import pickle
+import re
 import time
 import traceback
 import warnings
@@ -130,6 +131,9 @@ REFERENCE_PRUNE_LOG_WEIGHT = 40.0
 # A discrete task whose reference gives more than this probability to one category is near-certain (reported apart)
 NEAR_CERTAIN_PROBABILITY = 0.99
 MAX_REFERENCE_RHAT = 1.01
+# Differences below this are numerically identical estimates, e.g., of a near-certain class, whose Monte Carlo standard
+# errors are 0, so the 3-MCSE tolerance is 0 or undefined,
+REFERENCE_AGREEMENT_ATOL = 1e-9
 # Default parallel workers of the (untimed) reference stage
 DEFAULT_REFERENCE_WORKERS = 16
 # endregion Constants
@@ -775,6 +779,64 @@ def gibbs_reference(
     )
 
 
+def references_agree(difference: float, tolerance: float) -> bool:
+    """Whether the reference and its check agree.
+
+    Args:
+        difference: Absolute difference of their means (continuous queries) or maximum absolute difference of their
+            class probabilities (discrete queries).
+        tolerance: 3 combined Monte Carlo standard errors.
+
+    Returns:
+        bool: True if the difference is within the tolerance, or below ``REFERENCE_AGREEMENT_ATOL``.
+    """
+    if difference <= REFERENCE_AGREEMENT_ATOL:
+        return True
+    return bool(np.isfinite(tolerance) and difference <= tolerance)
+
+
+# Message of a check that failed because the reference and its check differ, as written by ``checked_reference``,
+CHECK_DISAGREEMENT_PATTERN = re.compile(
+    r"^LW and \S+ references differ by (?P<difference>\S+) > (?P<tolerance>\S+)$"
+)
+
+
+def repair_reference_checks(unit_paths: list[Path]) -> int:
+    """Re-evaluates the failed agreement checks of finished reference stages with ``references_agree``, and rewrites the
+    ``references.jsonl`` of the units whose verdict changes.
+
+    Before ``REFERENCE_AGREEMENT_ATOL`` existed, identical near-certain estimates (Monte Carlo standard errors of 0, so a
+    tolerance of 0 or NaN) were discarded. The message of a failed check records the difference and the tolerance, so
+    the verdict can be corrected without recomputing the references. Other failures (low ESS, Gibbs not converged) are
+    left as they are.
+
+    Args:
+        unit_paths: Unit folders; those without ``references.jsonl`` are skipped.
+
+    Returns:
+        int: Number of references whose check now passes.
+    """
+    repaired = 0
+    for unit_path in unit_paths:
+        path = unit_path / "references.jsonl"
+        if not path.exists():
+            continue
+        rows = _read_jsonl(path)
+        changed = False
+        for row in rows:
+            match = CHECK_DISAGREEMENT_PATTERN.match(row.get("message", ""))
+            if row.get("ok") or match is None:
+                continue
+            if references_agree(float(match["difference"]), float(match["tolerance"])):
+                row["ok"] = True
+                row["message"] = f"repaired: {row['message']}"
+                changed = True
+                repaired += 1
+        if changed:
+            _write_jsonl(path, rows)
+    return repaired
+
+
 def checked_reference(
     bn: SemiParametricBayesianNetwork,
     task: Task,
@@ -825,7 +887,7 @@ def checked_reference(
         )
     else:
         difference = abs(reference.mean - check.mean)
-    if not np.isfinite(tolerance) or difference > tolerance:
+    if not references_agree(difference, tolerance):
         reference.ok = False
         reference.message = f"LW and {check.method} references differ by {difference:.4g} > {tolerance:.4g}"
     return reference
@@ -2219,6 +2281,11 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
         )
     if args.stage in ("all", "runs"):
         pending = _pending("done")
+        repaired = repair_reference_checks(
+            [output_path / "units" / _safe_name(u.unit_id) for u in pending]
+        )
+        if repaired:
+            print(f"{experiment}: {repaired} wrongly failed reference checks repaired.")
         print(
             f"{experiment} runs: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
         )

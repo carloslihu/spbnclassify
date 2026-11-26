@@ -29,6 +29,8 @@ from src.experiments.inference.run import (
     kde_estimate,
     lw_reference,
     mixture_estimate,
+    references_agree,
+    repair_reference_checks,
     run_unit,
     stratified_class_reference,
 )
@@ -51,36 +53,59 @@ def test_generator_partition(frac_clg: float) -> None:
 
 def test_generator_discrete_parents_of_R() -> None:
     """Test the number of configurations delta of the discrete parents of R."""
-    config = SyntheticConfig(n_nodes=10, n_discrete=2, n_categories=4, n_discrete_parents_R=2, n_train=500)
+    config = SyntheticConfig(
+        n_nodes=10, n_discrete=2, n_categories=4, n_discrete_parents_R=2, n_train=500
+    )
     _, info = generate_synthetic_spbn(config, SEED)
     assert info["n_delta"] == 16
     # 64 configurations: the balanced design gives every configuration training data, so plain LW samples finite values
-    config = SyntheticConfig(n_nodes=10, n_discrete=3, n_categories=4, n_discrete_parents_R=3, n_train=1000)
+    config = SyntheticConfig(
+        n_nodes=10, n_discrete=3, n_categories=4, n_discrete_parents_R=3, n_train=1000
+    )
     bn, info = generate_synthetic_spbn(config, SEED)
     assert info["n_delta"] == 64
     samples = bn.sample(2000, seed=SEED)
-    assert np.all(np.isfinite(samples[bn._rb_nodes(bn._sampled_nodes())].to_numpy(dtype=float)))
+    assert np.all(
+        np.isfinite(samples[bn._rb_nodes(bn._sampled_nodes())].to_numpy(dtype=float))
+    )
 
 
 def test_task_evidence_spec() -> None:
     """Test the evidence location and the number of unobserved CLG ancestors of the evidence on R."""
-    bn, _ = generate_synthetic_spbn(SyntheticConfig(n_nodes=20, chain_prob=1.0, n_train=300), SEED)
+    bn, _ = generate_synthetic_spbn(
+        SyntheticConfig(n_nodes=20, chain_prob=1.0, n_train=300), SEED
+    )
     prior = bn.sample(500, seed=SEED)
     sampled = bn._sampled_nodes()
     for location in ["S", "R"]:
-        tasks = generate_tasks(bn, 3, ["clg"], EvidenceSpec(n_evidence=2, location=location), SEED, prior)
+        tasks = generate_tasks(
+            bn, 3, ["clg"], EvidenceSpec(n_evidence=2, location=location), SEED, prior
+        )
         for task in tasks:
             assert all((node in sampled) == (location == "S") for node in task.evidence)
             assert task.query not in task.evidence
-    tasks = generate_tasks(bn, 3, ["s_continuous"], EvidenceSpec(n_evidence=3, n_rb_ancestors=2), SEED, prior)
-    assert tasks and all(task.factors["n_unobserved_rb_ancestors"] == 2 for task in tasks)
+    tasks = generate_tasks(
+        bn,
+        3,
+        ["s_continuous"],
+        EvidenceSpec(n_evidence=3, n_rb_ancestors=2),
+        SEED,
+        prior,
+    )
+    assert tasks and all(
+        task.factors["n_unobserved_rb_ancestors"] == 2 for task in tasks
+    )
 
 
 def test_grid_reference_matches_gaussian() -> None:
     """Test that the grid reference of a Gaussian network matches its exact posterior."""
-    bn, _ = generate_synthetic_spbn(SyntheticConfig(n_nodes=4, frac_clg=1.0, n_discrete=0, n_train=500), SEED)
+    bn, _ = generate_synthetic_spbn(
+        SyntheticConfig(n_nodes=4, frac_clg=1.0, n_discrete=0, n_train=500), SEED
+    )
     prior = bn.sample(2000, seed=SEED)
-    tasks = generate_tasks(bn, 1, ["clg"], EvidenceSpec(n_evidence=1, location="R"), SEED, prior)
+    tasks = generate_tasks(
+        bn, 1, ["clg"], EvidenceSpec(n_evidence=1, location="R"), SEED, prior
+    )
     exact = gaussian_reference(bn, tasks[0])
     grid = grid_reference(bn, tasks[0], prior)
     np.testing.assert_allclose(grid.mean, exact.mean, atol=1e-3 * exact.std)
@@ -94,14 +119,23 @@ def test_grid_reference_matches_lw() -> None:
     config = SyntheticConfig(n_nodes=5, frac_clg=0.4, n_discrete=1, n_train=300)
     bn, _ = generate_synthetic_spbn(config, SEED)
     prior = bn.sample(2000, seed=SEED)
-    tasks = generate_tasks(bn, 1, ["clg", "s_continuous", "discrete"], EvidenceSpec(n_evidence=2), SEED, prior)
+    tasks = generate_tasks(
+        bn,
+        1,
+        ["clg", "s_continuous", "discrete"],
+        EvidenceSpec(n_evidence=2),
+        SEED,
+        prior,
+    )
     assert tasks
     for task in tasks:
         grid = grid_reference(bn, task, prior)
         lw = lw_reference(bn, task, 200_000, SEED)
         if task.query_type == "discrete":
             for category, probability in grid.probabilities.items():
-                assert abs(probability - lw.probabilities[category]) < 5 * lw.mcse + 1e-3
+                assert (
+                    abs(probability - lw.probabilities[category]) < 5 * lw.mcse + 1e-3
+                )
         else:
             assert abs(grid.mean - lw.mean) < 5 * lw.mcse + 1e-3
 
@@ -112,14 +146,19 @@ def test_discrete_reference_check() -> None:
     config = SyntheticConfig(n_nodes=5, frac_clg=0.4, n_discrete=1, n_train=300)
     bn, _ = generate_synthetic_spbn(config, SEED)
     prior = bn.sample(2000, seed=SEED)
-    task = generate_tasks(bn, 1, ["discrete"], EvidenceSpec(n_evidence=2), SEED, prior)[0]
+    task = generate_tasks(bn, 1, ["discrete"], EvidenceSpec(n_evidence=2), SEED, prior)[
+        0
+    ]
     reference = checked_reference(bn, task, 50_000, 20_000, SEED)
     assert reference.method == "lw+stratified" and reference.ok, reference.message
     stratified = stratified_class_reference(bn, task, 20_000, SEED)
     assert np.isfinite(stratified.mcse) and stratified.mcse > 0
     grid = grid_reference(bn, task, prior)
     for category, probability in grid.probabilities.items():
-        assert abs(stratified.probabilities[category] - probability) < 5 * stratified.mcse + 1e-3
+        assert (
+            abs(stratified.probabilities[category] - probability)
+            < 5 * stratified.mcse + 1e-3
+        )
 
 
 def test_posterior_estimates() -> None:
@@ -132,21 +171,34 @@ def test_posterior_estimates() -> None:
     mixture = mixture_estimate(weights, means, np.array([0.5, 1.0]), grid)
     mean = np.sum(weights * means)
     np.testing.assert_allclose(mixture["mean"], mean)
-    np.testing.assert_allclose(mixture["std"] ** 2, np.sum(weights * (np.array([0.25, 1.0]) + (means - mean) ** 2)))
+    np.testing.assert_allclose(
+        mixture["std"] ** 2,
+        np.sum(weights * (np.array([0.25, 1.0]) + (means - mean) ** 2)),
+    )
 
     rng = np.random.default_rng(SEED)
     samples = rng.normal(size=500)
     uniform = np.full(500, 1 / 500)
     kde = kde_estimate(uniform, samples, grid)
-    assert kde["bandwidth"] == SemiParametricBayesianNetwork._kde_bandwidth(samples, uniform)
+    assert kde["bandwidth"] == SemiParametricBayesianNetwork._kde_bandwidth(
+        samples, uniform
+    )
     np.testing.assert_allclose(kde["std"] ** 2, samples.var() + kde["bandwidth"] ** 2)
     assert kde["cdf"][0] < 1e-6 and kde["cdf"][-1] > 1 - 1e-6
 
 
 def test_holm_and_time_to_epsilon() -> None:
     """Test the Holm correction and the log-log interpolation of the time to reach a target error."""
-    np.testing.assert_allclose(holm_correction(np.array([0.01, 0.04, 0.03, np.nan])), [0.03, 0.06, 0.06, np.nan])
-    curve = pd.DataFrame({"runtime": [1.0, 10.0, 1000.0], "rmse": [1.0, 1 / np.sqrt(10), 1 / np.sqrt(1000)]})
+    np.testing.assert_allclose(
+        holm_correction(np.array([0.01, 0.04, 0.03, np.nan])),
+        [0.03, 0.06, 0.06, np.nan],
+    )
+    curve = pd.DataFrame(
+        {
+            "runtime": [1.0, 10.0, 1000.0],
+            "rmse": [1.0, 1 / np.sqrt(10), 1 / np.sqrt(1000)],
+        }
+    )
     np.testing.assert_allclose(time_to_epsilon(curve, 0.1), 100.0, rtol=1e-10)
     assert time_to_epsilon(curve, 1e-3) == np.inf
     assert time_to_epsilon(curve, 2.0) == 0.0
@@ -180,9 +232,16 @@ def test_run_unit_and_resume(tmp_path: Path) -> None:
     results = pd.read_csv(tmp_path / "smoke" / "results.csv")
     assert n_rows == len(results) > 0
     assert set(results["method"]) == {"LW", "RBLW", "GS", "RBGS"}
-    references = [json.loads(line) for line in (tmp_path / "smoke" / "references.jsonl").read_text().splitlines()]
+    references = [
+        json.loads(line)
+        for line in (tmp_path / "smoke" / "references.jsonl").read_text().splitlines()
+    ]
     ok_tasks = {r["task_id"] for r in references if r["ok"]}
-    errors = np.where(results["query_type"] == "discrete", results.get("prob_error"), results.get("err_mean"))
+    errors = np.where(
+        results["query_type"] == "discrete",
+        results.get("prob_error"),
+        results.get("err_mean"),
+    )
     assert np.all(np.isfinite(errors[results["task_id"].isin(ok_tasks)]))
     assert run_unit(unit, tmp_path / "smoke") == -1
 
@@ -208,8 +267,18 @@ def test_classifier_unit(tmp_path: Path) -> None:
     )
     run_unit(unit, tmp_path / "iris")
     results = pd.read_csv(tmp_path / "iris" / "results.csv")
-    assert set(results["method"]) == {"LW", "RBLW", "GS", "RBGS", "MeanImpute", "kNNImpute"}
-    assert np.all(np.isfinite(results["log_loss"])) and results["brier"].between(0, 2).all()
+    assert set(results["method"]) == {
+        "LW",
+        "RBLW",
+        "GS",
+        "RBGS",
+        "MeanImpute",
+        "kNNImpute",
+    }
+    assert (
+        np.all(np.isfinite(results["log_loss"]))
+        and results["brier"].between(0, 2).all()
+    )
 
 
 def test_analyze_comparison(tmp_path: Path) -> None:
@@ -220,11 +289,18 @@ def test_analyze_comparison(tmp_path: Path) -> None:
         for n_samples in [100, 1000, 10000]:
             for method, scale in [("LW", 1.0), ("RBLW", 0.5)]:
                 for rep in range(10):
-                    rows.append({
-                        "task_id": f"t{task}", "query_type": "clg", "method": method, "n_samples": n_samples,
-                        "err_mean": scale * rng.normal() / np.sqrt(n_samples), "prob_error": np.nan,
-                        "runtime": 1e-4 * n_samples * (1 + 0.01 * rng.random()), "w1": np.nan,
-                    })
+                    rows.append(
+                        {
+                            "task_id": f"t{task}",
+                            "query_type": "clg",
+                            "method": method,
+                            "n_samples": n_samples,
+                            "err_mean": scale * rng.normal() / np.sqrt(n_samples),
+                            "prob_error": np.nan,
+                            "runtime": 1e-4 * n_samples * (1 + 0.01 * rng.random()),
+                            "w1": np.nan,
+                        }
+                    )
     results = pd.DataFrame(rows)
     results["error"] = results["err_mean"]
     analyze_comparison(results, tmp_path, 0.01, "test", "test")
@@ -241,29 +317,62 @@ def test_reference_check_table(tmp_path: Path) -> None:
     from src.experiments.inference.analysis import reference_check_table
 
     references = [
-        {"task_id": "frac_clg=0.3_0/clg_0", "method": "lw+gibbs", "ok": True, "message": ""},
-        {"task_id": "frac_clg=0.3_1/clg_0", "method": "lw+gibbs", "ok": False, "message": "LW reference ESS 12 < 1000"},
-        {"task_id": "frac_clg=0.3_1/s_continuous_0", "method": "lw+gibbs", "ok": False, "message": "Gibbs check R-hat 1.2 >= 1.01"},
-        {"task_id": "frac_clg=0.5_0/discrete_0", "method": "lw+stratified", "ok": False, "message": "LW and stratified_lw references differ by 0.1 > 0.01"},
+        {
+            "task_id": "frac_clg=0.3_0/clg_0",
+            "method": "lw+gibbs",
+            "ok": True,
+            "message": "",
+        },
+        {
+            "task_id": "frac_clg=0.3_1/clg_0",
+            "method": "lw+gibbs",
+            "ok": False,
+            "message": "LW reference ESS 12 < 1000",
+        },
+        {
+            "task_id": "frac_clg=0.3_1/s_continuous_0",
+            "method": "lw+gibbs",
+            "ok": False,
+            "message": "Gibbs check R-hat 1.2 >= 1.01",
+        },
+        {
+            "task_id": "frac_clg=0.5_0/discrete_0",
+            "method": "lw+stratified",
+            "ok": False,
+            "message": "LW and stratified_lw references differ by 0.1 > 0.01",
+        },
     ]
-    tasks = [{"task_id": r["task_id"], "query_type": r["task_id"].split("/")[1].rsplit("_", 1)[0]} for r in references]
+    tasks = [
+        {
+            "task_id": r["task_id"],
+            "query_type": r["task_id"].split("/")[1].rsplit("_", 1)[0],
+        }
+        for r in references
+    ]
     for name, rows in [("references.jsonl", references), ("tasks.jsonl", tasks)]:
         (tmp_path / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
-    table = reference_check_table(tmp_path, "test").set_index(["configuration", "query_type"])
+    table = reference_check_table(tmp_path, "test").set_index(
+        ["configuration", "query_type"]
+    )
     assert table.loc[("frac_clg=0.3", "clg"), "frac_discarded"] == 0.5
-    assert table.loc[("all", "all"), ["n_low_ess", "n_not_converged", "n_disagreement", "n_kept"]].tolist() == [1, 1, 1, 1]
+    assert table.loc[
+        ("all", "all"), ["n_low_ess", "n_not_converged", "n_disagreement", "n_kept"]
+    ].tolist() == [1, 1, 1, 1]
     assert (tmp_path / "tables" / "test_reference_check.tex").exists()
 
 
 def test_reference_and_run_stages(tmp_path: Path) -> None:
     """Test that the timed stage reuses the network, tasks and references of the reference stage, and that it gives the
-    same estimates as running both stages at once (the pickled network is the same network)."""
+    same estimates as running both stages at once (the pickled network is the same network).
+    """
     from src.experiments.inference.run import prepare_unit
 
     unit = _small_unit("staged")
     n_tasks = prepare_unit(unit, tmp_path / "staged")
     assert n_tasks > 0 and (tmp_path / "staged" / "references_done").exists()
-    assert (tmp_path / "staged" / "network.pkl").exists() and not (tmp_path / "staged" / "done").exists()
+    assert (tmp_path / "staged" / "network.pkl").exists() and not (
+        tmp_path / "staged" / "done"
+    ).exists()
     assert prepare_unit(unit, tmp_path / "staged") == -1
     references_time = (tmp_path / "staged" / "references.jsonl").stat().st_mtime
     run_unit(unit, tmp_path / "staged")
@@ -272,7 +381,9 @@ def test_reference_and_run_stages(tmp_path: Path) -> None:
     run_unit(_small_unit("staged"), tmp_path / "all_at_once")
     staged = pd.read_csv(tmp_path / "staged" / "results.csv")
     all_at_once = pd.read_csv(tmp_path / "all_at_once" / "results.csv")
-    columns = [c for c in ["mean", "std", "w1", "probabilities", "n_eff"] if c in staged]
+    columns = [
+        c for c in ["mean", "std", "w1", "probabilities", "n_eff"] if c in staged
+    ]
     pd.testing.assert_frame_equal(staged[columns], all_at_once[columns])
 
 
@@ -312,10 +423,20 @@ def test_pair_tests_per_unit() -> None:
     for network in range(6):
         for task in range(3):
             for method, rmse in [("LW", 1.0 + 0.1 * task), ("RBLW", 0.5 + 0.1 * task)]:
-                rows.append({"task_id": f"network_{network}/clg_{task}", "query_type": "clg",
-                             "method": method, "n_samples": 100, "rmse": rmse, "runtime": 1.0})
+                rows.append(
+                    {
+                        "task_id": f"network_{network}/clg_{task}",
+                        "query_type": "clg",
+                        "method": method,
+                        "n_samples": 100,
+                        "rmse": rmse,
+                        "runtime": 1.0,
+                    }
+                )
     tests = pair_tests(pd.DataFrame(rows), {})
-    row = tests[(tests["pair"] == "RBLW vs LW") & (tests["comparison"] == "equal N")].iloc[0]
+    row = tests[
+        (tests["pair"] == "RBLW vs LW") & (tests["comparison"] == "equal N")
+    ].iloc[0]
     assert row["n_units"] == 6
     np.testing.assert_allclose(row["median_reduction"], (1.1 - 0.6) / 1.1)
     assert row["frac_better"] == 1.0 and row["p_value"] < 0.05
@@ -326,13 +447,32 @@ def test_regime_base_levels() -> None:
     units), and that the base levels of the runner and of the analysis agree."""
     from src.experiments.inference import analysis as inference_analysis
     from src.experiments.inference import run as inference_experiments
-    from src.experiments.inference.run import _network_factor_config, build_units, parse_args
+    from src.experiments.inference.run import (
+        _network_factor_config,
+        build_units,
+        parse_args,
+    )
 
-    assert _network_factor_config("n_discrete_parents_R", 0) == asdict(SyntheticConfig())
-    assert inference_analysis.REGIME_BASE_LEVELS == inference_experiments.REGIME_BASE_LEVELS
-    assert inference_analysis.NEAR_CERTAIN_PROBABILITY == inference_experiments.NEAR_CERTAIN_PROBABILITY
+    assert _network_factor_config("n_discrete_parents_R", 0) == asdict(
+        SyntheticConfig()
+    )
+    assert (
+        inference_analysis.REGIME_BASE_LEVELS
+        == inference_experiments.REGIME_BASE_LEVELS
+    )
+    assert (
+        inference_analysis.NEAR_CERTAIN_PROBABILITY
+        == inference_experiments.NEAR_CERTAIN_PROBABILITY
+    )
     units = build_units("E3", parse_args(["E3"]))
-    signatures = [(json.dumps(u.config, sort_keys=True), u.seed, json.dumps(u.evidence, sort_keys=True)) for u in units]
+    signatures = [
+        (
+            json.dumps(u.config, sort_keys=True),
+            u.seed,
+            json.dumps(u.evidence, sort_keys=True),
+        )
+        for u in units
+    ]
     assert len(signatures) == len(set(signatures))
     base = [u for u in units if u.factors["factor"] == "base"]
     assert len(base) == 10 and all(u.config == asdict(SyntheticConfig()) for u in base)
@@ -345,13 +485,21 @@ def test_lw_reference_extends_for_rare_evidence() -> None:
 
     bn, _ = generate_synthetic_spbn(SyntheticConfig(n_nodes=8, n_train=300), SEED)
     prior = bn.sample(2000, seed=SEED)
-    tasks = generate_tasks(bn, 1, ["clg"], EvidenceSpec(n_evidence=4, rarity=0.001), SEED, prior)
+    tasks = generate_tasks(
+        bn, 1, ["clg"], EvidenceSpec(n_evidence=4, rarity=0.001), SEED, prior
+    )
     task = tasks[0]
     fixed = lw_reference(bn, task, 1000, SEED)
-    assert fixed.n_samples == 1000 and fixed.effective_sample_size < experiments.MIN_REFERENCE_ESS
+    assert (
+        fixed.n_samples == 1000
+        and fixed.effective_sample_size < experiments.MIN_REFERENCE_ESS
+    )
     extended = lw_reference(bn, task, 1000, SEED, max_samples=300_000)
     assert extended.n_samples > 1000
-    assert extended.effective_sample_size >= experiments.MIN_REFERENCE_ESS or extended.n_samples == 300_000
+    assert (
+        extended.effective_sample_size >= experiments.MIN_REFERENCE_ESS
+        or extended.n_samples == 300_000
+    )
     assert extended.effective_sample_size > fixed.effective_sample_size
 
     original = experiments.REFERENCE_PRUNE_LOG_WEIGHT
@@ -362,7 +510,9 @@ def test_lw_reference_extends_for_rare_evidence() -> None:
         experiments.REFERENCE_PRUNE_LOG_WEIGHT = original
     assert unpruned.n_samples == extended.n_samples
     np.testing.assert_allclose(extended.mean, unpruned.mean, rtol=1e-9, atol=1e-12)
-    np.testing.assert_allclose(extended.effective_sample_size, unpruned.effective_sample_size, rtol=1e-9)
+    np.testing.assert_allclose(
+        extended.effective_sample_size, unpruned.effective_sample_size, rtol=1e-9
+    )
 
 
 def test_primary_endpoint_and_near_certain(tmp_path: Path) -> None:
@@ -377,21 +527,43 @@ def test_primary_endpoint_and_near_certain(tmp_path: Path) -> None:
             for n_samples in [100, 1000, 10000]:
                 for method, scale in [("LW", 1.0), ("RBLW", 0.5)]:
                     for rep in range(5):
-                        rows.append({
-                            "task_id": f"network_{network}/{query_type}_0", "query_type": query_type, "method": method,
-                            "n_samples": n_samples, "reference_max_probability": max_probability,
-                            "err_mean": scale * rng.normal() / np.sqrt(n_samples) if query_type == "clg" else np.nan,
-                            "prob_error": scale * abs(rng.normal()) / np.sqrt(n_samples) if query_type == "discrete" else np.nan,
-                            "runtime": 1e-4 * n_samples * (1 + 0.01 * rng.random()),
-                        })
+                        rows.append(
+                            {
+                                "task_id": f"network_{network}/{query_type}_0",
+                                "query_type": query_type,
+                                "method": method,
+                                "n_samples": n_samples,
+                                "reference_max_probability": max_probability,
+                                "err_mean": (
+                                    scale * rng.normal() / np.sqrt(n_samples)
+                                    if query_type == "clg"
+                                    else np.nan
+                                ),
+                                "prob_error": (
+                                    scale * abs(rng.normal()) / np.sqrt(n_samples)
+                                    if query_type == "discrete"
+                                    else np.nan
+                                ),
+                                "runtime": 1e-4 * n_samples * (1 + 0.01 * rng.random()),
+                            }
+                        )
     results = pd.DataFrame(rows)
-    results["error"] = np.where(results["query_type"] == "discrete", results["prob_error"], results["err_mean"])
+    results["error"] = np.where(
+        results["query_type"] == "discrete", results["prob_error"], results["err_mean"]
+    )
     analyze_comparison(results, tmp_path, 0.01, "test", "test")
     tests = pd.read_csv(tmp_path / "tables" / "test_paired_tests.csv")
     primary = tests[tests["endpoint"] == "primary"]
-    assert len(primary) == 2 and primary["level"].str.startswith(f"budget {N_BUDGETS}/").all()
-    np.testing.assert_allclose(primary["p_holm"], holm_correction(primary["p_value"].to_numpy()))
-    without = pd.read_csv(tmp_path / "tables" / "test_paired_tests_without_near_certain.csv")
+    assert (
+        len(primary) == 2
+        and primary["level"].str.startswith(f"budget {N_BUDGETS}/").all()
+    )
+    np.testing.assert_allclose(
+        primary["p_holm"], holm_correction(primary["p_value"].to_numpy())
+    )
+    without = pd.read_csv(
+        tmp_path / "tables" / "test_paired_tests_without_near_certain.csv"
+    )
     assert set(without["query_type"]) == {"clg"}
     summary = task_summary(results)
     assert set(without_near_certain(summary)["query_type"]) == {"clg"}
@@ -406,26 +578,46 @@ def test_e3_shared_base(tmp_path: Path) -> None:
     for factor, level in [("base", "base"), ("frac_clg", 0.9), ("location", "R")]:
         for network in range(6):
             for n_samples in [100, 1000]:
-                for method, scale in [("LW", 1.0), ("RBLW", 0.5), ("GS", 1.0), ("RBGS", 0.5)]:
+                for method, scale in [
+                    ("LW", 1.0),
+                    ("RBLW", 0.5),
+                    ("GS", 1.0),
+                    ("RBGS", 0.5),
+                ]:
                     for rep in range(3):
-                        rows.append({
-                            "task_id": f"{factor}={level}_{network}/clg_0", "query_type": "clg", "method": method,
-                            "n_samples": n_samples, "factor": factor, "level": level, "n_eff": 50.0,
-                            "err_mean": scale * rng.normal(), "runtime": 1e-4 * n_samples,
-                        })
+                        rows.append(
+                            {
+                                "task_id": f"{factor}={level}_{network}/clg_0",
+                                "query_type": "clg",
+                                "method": method,
+                                "n_samples": n_samples,
+                                "factor": factor,
+                                "level": level,
+                                "n_eff": 50.0,
+                                "err_mean": scale * rng.normal(),
+                                "runtime": 1e-4 * n_samples,
+                            }
+                        )
     results = pd.DataFrame(rows)
     results["error"] = results["err_mean"]
     analyze_e3(results, tmp_path)
     table = pd.read_csv(tmp_path / "tables" / "E3_regimes.csv")
     levels = set(zip(table["factor"], table["level"].astype(str)))
-    assert {("frac_clg", "0.5"), ("frac_clg", "0.9"), ("location", "both"), ("location", "R"),
-            ("rarity", "0.5"), ("n_discrete_parents_R", "0")} <= levels
+    assert {
+        ("frac_clg", "0.5"),
+        ("frac_clg", "0.9"),
+        ("location", "both"),
+        ("location", "R"),
+        ("rarity", "0.5"),
+        ("n_discrete_parents_R", "0"),
+    } <= levels
     assert "base" not in set(table["factor"])
 
 
 def test_reference_stage_skips_finished_units(tmp_path: Path) -> None:
     """Test that the reference stage does not recompute the references of a finished unit (e.g., one run before the stages
-    were split, which has no references_done marker), so its results stay paired with their references."""
+    were split, which has no references_done marker), so its results stay paired with their references.
+    """
     from src.experiments.inference.run import prepare_unit
 
     unit_path = tmp_path / "finished"
@@ -435,3 +627,42 @@ def test_reference_stage_skips_finished_units(tmp_path: Path) -> None:
     assert prepare_unit(_small_unit("finished"), unit_path) == -1
     assert (unit_path / "references.jsonl").read_text() == "old\n"
     assert not (unit_path / "references_done").exists()
+
+
+def test_references_agree_with_zero_tolerance() -> None:
+    """Identical near-certain estimates (MCSE 0, so tolerance 0 or NaN) agree; real differences still fail."""
+    assert references_agree(1e-14, float("nan"))
+    assert references_agree(6e-203, 0.0)
+    assert references_agree(0.01, 0.02)
+    assert not references_agree(0.03, 0.02)
+    assert not references_agree(0.01, float("nan"))
+
+
+def test_repair_reference_checks(tmp_path: Path) -> None:
+    """Only the checks failed by identical estimates are repaired; real disagreements and other failures stay."""
+    rows = [
+        {
+            "task_id": "a",
+            "ok": False,
+            "message": "LW and stratified_lw references differ by 1.377e-14 > nan",
+        },
+        {
+            "task_id": "b",
+            "ok": False,
+            "message": "LW and stratified_lw references differ by 6.249e-203 > 0",
+        },
+        {
+            "task_id": "c",
+            "ok": False,
+            "message": "LW and gibbs references differ by 0.05 > 0.01",
+        },
+        {"task_id": "d", "ok": False, "message": "LW reference ESS 12 < 1000"},
+        {"task_id": "e", "ok": True, "message": ""},
+    ]
+    with open(tmp_path / "references.jsonl", "w") as f:
+        f.writelines(json.dumps(row) + "\n" for row in rows)
+    assert repair_reference_checks([tmp_path, tmp_path / "missing"]) == 2
+    with open(tmp_path / "references.jsonl") as f:
+        ok = {row["task_id"]: row["ok"] for row in map(json.loads, f)}
+    assert ok == {"a": True, "b": True, "c": False, "d": False, "e": True}
+    assert repair_reference_checks([tmp_path]) == 0
