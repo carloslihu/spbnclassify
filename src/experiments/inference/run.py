@@ -2524,8 +2524,25 @@ def build_units(experiment: str, args: argparse.Namespace) -> list[UnitSpec]:
 
 
 # region Execution
+def prepare_unit_if_unstarted(unit: UnitSpec, unit_path: Path) -> int:
+    """Reference stage of a unit unless another process has started it (its folder exists), so a second process can
+    help a running reference stage from the other end of the list of units (``--help_references``).
+
+    Args:
+        unit: The unit.
+        unit_path: Its folder.
+
+    Returns:
+        int: Number of tasks, or -1 if the unit was started or done by another process.
+    """
+    if unit_path.exists():
+        return -1
+    return prepare_unit(unit, unit_path)
+
+
 STAGE_FUNCTIONS = {
     "references": prepare_unit,
+    "references_unstarted": prepare_unit_if_unstarted,
     "runs": run_unit,
     "runs_gpu": run_unit_gpu,
     "runs_cpu": run_unit_cpu,
@@ -2669,11 +2686,20 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
     failures = []
     if args.stage in ("all", "references"):
         pending = _pending("references_done", "done")
+        if args.help_references:
+            # Helps another reference stage that runs the units in order: from the last unit backwards, skipping the
+            # units that it has started, so both only overlap on the few units that they reach at the same time,
+            pending = [
+                u
+                for u in reversed(pending)
+                if not (output_path / "units" / _safe_name(u.unit_id)).exists()
+            ]
         print(
-            f"{experiment} references: {len(units) - len(pending)}/{len(units)} units already done, running {len(pending)}."
+            f"{experiment} references: {len(units) - len(pending)}/{len(units)} units already done or started, "
+            f"running {len(pending)}."
         )
         failures += _execute_stage(
-            "references",
+            "references_unstarted" if args.help_references else "references",
             pending,
             output_path,
             args.reference_workers,
@@ -2874,6 +2900,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gpus",
         nargs="+",
         help="GPUs (indices or UUIDs) for the workers. Defaults to the CUDA_VISIBLE_DEVICES set before the run, or all GPUs.",
+    )
+    parser.add_argument(
+        "--help_references",
+        action="store_true",
+        help="Help a reference stage that is already running: take the pending units from the last one backwards and "
+        "skip the units that another process has started. Use with --stage references.",
     )
     parser.add_argument(
         "--no_pin",

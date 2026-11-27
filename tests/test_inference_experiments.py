@@ -741,3 +741,14 @@ def test_run_method_gibbs_checkpoints() -> None:
         for key in ["mean", "std", "w1", "n_eff", "rhat", "mean_exact_rate"]:
             assert row[key] == pytest.approx(separate[key], nan_ok=True)
         assert row["kernel_evaluations"] == separate["kernel_evaluations"]
+
+
+def test_prepare_unit_if_unstarted(tmp_path: Path) -> None:
+    """Test that a helping reference stage skips the units that another process has started."""
+    from src.experiments.inference.run import prepare_unit_if_unstarted
+
+    (tmp_path / "started").mkdir()
+    assert prepare_unit_if_unstarted(_small_unit("started"), tmp_path / "started") == -1
+    assert not (tmp_path / "started" / "references_done").exists()
+    assert prepare_unit_if_unstarted(_small_unit("free"), tmp_path / "free") > 0
+    assert (tmp_path / "free" / "references_done").exists()
