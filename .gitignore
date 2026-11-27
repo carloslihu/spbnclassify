@@ -216,6 +216,7 @@ __marimo__/
 *.pdf
 *.pkl
 *.txt
+*.nfs*
 
 # Ignore output directories
 src/out/

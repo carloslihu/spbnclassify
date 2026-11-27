@@ -1,5 +1,7 @@
 import json
+import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -508,6 +510,8 @@ class SemiParametricBayesianNetwork(
         max_rejection_tries: int = 10,
         rao_blackwellize: bool = True,
         block_moves: bool = True,
+        checkpoints: list[int] | None = None,
+        checkpoint_callback: Callable[[int], dict] | None = None,
     ) -> dict[str, dict]:
         """
         Performs inference on the Bayesian network using the provided evidence, with likelihood weighting (``method="lw"``) or collapsed Gibbs sampling (``method="gibbs"``).
@@ -530,6 +534,10 @@ class SemiParametricBayesianNetwork(
                 baseline: everything else (seeding, sweeps, diagnostics) is identical. Defaults to True.
             block_moves (bool, optional): If False, the block moves of the discrete nodes are disabled (ablation of RBGS). Only used when method="gibbs"
                 and ``rao_blackwellize=True`` (standard Gibbs sampling never uses them). Defaults to True.
+            checkpoints (list[int] | None, optional): Numbers of samples at which the results of the Gibbs chains are also returned, in
+                ``infer_dict["checkpoints"]`` (see ``_infer_gibbs``). Only used when method="gibbs". Defaults to None.
+            checkpoint_callback (Callable[[int], dict] | None, optional): Called with each checkpoint; the dict it returns is stored with the
+                checkpoint. Only used when method="gibbs". Defaults to None.
         Returns:
             dict[str, dict]: A dictionary containing the structure of the Bayesian network (list of arcs), the evidence, the method, ``rao_blackwellize`` and the parameters of the inference results.
             The parameters include the normalized weights (uniform for Gibbs sampling), the assignments, the posterior std of the Rao-Blackwellized nodes (``posterior_std``) and the diagnostics of the method:
@@ -552,6 +560,8 @@ class SemiParametricBayesianNetwork(
                 max_rejection_tries,
                 rao_blackwellize,
                 block_moves,
+                checkpoints,
+                checkpoint_callback,
             )
         else:
             raise ValueError(
@@ -1455,6 +1465,8 @@ class SemiParametricBayesianNetwork(
         max_rejection_tries: int,
         rao_blackwellize: bool = True,
         block_moves: bool = True,
+        checkpoints: list[int] | None = None,
+        checkpoint_callback: Callable[[int], dict] | None = None,
     ) -> dict[str, dict]:
         """
         Performs collapsed (Rao-Blackwellized) Gibbs sampling inference on the Bayesian network using the provided evidence.
@@ -1477,6 +1489,14 @@ class SemiParametricBayesianNetwork(
             rao_blackwellize (bool, optional): If False, plain (standard) Gibbs sampling: every node is sampled (S = X, R = ∅) with single-site
                 updates only, i.e. without the block moves of the discrete nodes. Defaults to True.
             block_moves (bool, optional): If False, the block moves of the discrete nodes are disabled. Defaults to True.
+            checkpoints (list[int] | None, optional): Numbers of samples N_k at which the results are also computed, as if the chains had
+                stopped there: since the chains are the same, they equal the results of separate runs with ``n_samples=N_k`` and the same
+                seed, so one run gives the results of several sample sizes. The chains run up to the largest of ``n_samples`` and the
+                checkpoints. ``infer_dict["checkpoints"][N_k]`` holds ``parameters`` (as in the returned dict) and ``runtime``, the seconds of
+                a separate run: the time since the start of this call, without the time spent computing the results of earlier
+                checkpoints. Defaults to None.
+            checkpoint_callback (Callable[[int], dict] | None, optional): Called with N_k when the chains reach each checkpoint, before its
+                results are computed; the dict it returns is stored as ``infer_dict["checkpoints"][N_k]["callback"]``. Defaults to None.
         Returns:
             dict[str, dict]: The inference results (see ``infer``). The parameters include the (uniform) weights and:
                 - ``exact_rate`` (per sampled node): the fraction of exact draws from the full conditional.
@@ -1491,6 +1511,7 @@ class SemiParametricBayesianNetwork(
             The diagnostics are NaN with fewer than 4 kept sweeps per chain (and R-hat with fewer than 2 chains or constant values).
             A RuntimeWarning is emitted if any R-hat exceeds ``MAX_RHAT`` or any bulk effective sample size is below ``MIN_EFFECTIVE_SAMPLE_SIZE``.
         """
+        start = time.perf_counter()
         rng = np.random.default_rng(seed)
 
         def _next_seed() -> int:
@@ -1535,12 +1556,22 @@ class SemiParametricBayesianNetwork(
                 else values.to_numpy(dtype=float)
             )
 
+        checkpoints = sorted(set(checkpoints or []))
+        n_samples = max([n_samples, *checkpoints])
         n_kept_sweeps = int(np.ceil(n_samples / n_chains))
         n_sweeps = burn_in + n_kept_sweeps * thinning
+        # Checkpoints by number of kept sweeps (several numbers of samples can share one)
+        checkpoint_sweeps = {}
+        for n_checkpoint in checkpoints:
+            checkpoint_sweeps.setdefault(
+                int(np.ceil(n_checkpoint / n_chains)), []
+            ).append(n_checkpoint)
         exact = {node: 0 for node in free_nodes}
         changed = {node: 0 for node in free_nodes}
         block_accepted = {node: 0 for node in context["blocks"]}
         kept_states = []
+        results_time = 0.0
+        checkpoint_results = {}
 
         for sweep in range(n_sweeps):
             for node in free_nodes:
@@ -1562,7 +1593,94 @@ class SemiParametricBayesianNetwork(
 
             if sweep >= burn_in and (sweep - burn_in) % thinning == thinning - 1:
                 kept_states.append(state.copy())
+                for n_checkpoint in checkpoint_sweeps.get(len(kept_states), []):
+                    callback = (
+                        checkpoint_callback(n_checkpoint) if checkpoint_callback else {}
+                    )
+                    results_start = time.perf_counter()
+                    parameters = self._gibbs_results(
+                        kept_states,
+                        n_checkpoint,
+                        n_chains,
+                        sweep + 1,
+                        exact,
+                        changed,
+                        block_accepted,
+                        evidence,
+                        sampled,
+                        sampled_order,
+                        topo_order,
+                        context,
+                        free_nodes,
+                        warn=False,
+                    )
+                    results_end = time.perf_counter()
+                    checkpoint_results[n_checkpoint] = {
+                        "parameters": parameters,
+                        # As a separate run: sampling up to here plus the results of this checkpoint only
+                        "runtime": results_end - start - results_time,
+                        "callback": callback,
+                    }
+                    results_time += results_end - results_start
 
+        infer_dict["parameters"] = self._gibbs_results(
+            kept_states,
+            n_samples,
+            n_chains,
+            n_sweeps,
+            exact,
+            changed,
+            block_accepted,
+            evidence,
+            sampled,
+            sampled_order,
+            topo_order,
+            context,
+            free_nodes,
+        )
+        if checkpoints:
+            infer_dict["checkpoints"] = checkpoint_results
+        return infer_dict
+
+    def _gibbs_results(
+        self,
+        kept_states: list[pd.DataFrame],
+        n_samples: int,
+        n_chains: int,
+        n_sweeps: int,
+        exact: dict[str, int],
+        changed: dict[str, int],
+        block_accepted: dict[str, int],
+        evidence: dict,
+        sampled: set[str],
+        sampled_order: list[str],
+        topo_order: list[str],
+        context: dict,
+        free_nodes: list[str],
+        warn: bool = True,
+    ) -> dict:
+        """Parameters of the Gibbs sampling results (see ``_infer_gibbs``) from the sweeps kept so far.
+
+        Args:
+            kept_states: The kept sweeps, each with one row per chain.
+            n_samples: Number of samples to return (the first ones, sweep by sweep).
+            n_chains: Number of chains.
+            n_sweeps: Sweeps run so far (including burn-in), for the rates.
+            exact: Exact draws per node so far.
+            changed: Updates that changed the value per node so far.
+            block_accepted: Accepted block moves per node so far.
+            evidence: The evidence.
+            sampled: The sampled nodes S.
+            sampled_order: S in topological order.
+            topo_order: All nodes in topological order.
+            context: The Gibbs context (``_gibbs_context``).
+            free_nodes: The unobserved nodes of S.
+            warn: Whether to warn about the convergence diagnostics.
+
+        Returns:
+            dict: The parameters of the inference results.
+        """
+        discrete_nodes = context["discrete"]
         # The chains sample p(S | e), so the Rao-Blackwellized nodes only need p(R | S, e) and the evidence likelihood is not a weight.
         all_assignments = pd.concat(kept_states, ignore_index=True)[sampled_order]
         _, all_assignments, posterior_std = self._rao_blackwellize_clg(
@@ -1601,12 +1719,12 @@ class SemiParametricBayesianNetwork(
             effective_sample_size[node] = kept_fraction * node_ess
             tail_effective_sample_size[node] = kept_fraction * node_tail_ess
         # Without free sampled nodes every row is the exact posterior, so there is nothing to diagnose
-        if len(free_nodes) > 0:
+        if warn and len(free_nodes) > 0:
             self._warn_diagnostics(rhat, effective_sample_size)
 
         # MCMC samples are equally weighted.
         weights = np.full(len(assignments), 1.0 / len(assignments))
-        infer_dict["parameters"] = {
+        return {
             "weights": weights,
             "assignments": assignments,
             "posterior_std": posterior_std,
@@ -1624,4 +1742,3 @@ class SemiParametricBayesianNetwork(
             "effective_sample_size": effective_sample_size,
             "tail_effective_sample_size": tail_effective_sample_size,
         }
-        return infer_dict

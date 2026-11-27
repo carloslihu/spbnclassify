@@ -717,3 +717,27 @@ def test_run_unit_cpu_shards(tmp_path: Path) -> None:
         )
     )
     pd.testing.assert_frame_equal(sharded, together)
+
+
+def test_run_method_gibbs_checkpoints() -> None:
+    """Test that a Gibbs method run once for several sample sizes gives the same rows as separate runs."""
+    from src.experiments.inference.run import GIBBS_DEFAULTS, ckde_sizes, run_method
+
+    config = SyntheticConfig(n_nodes=8, n_train=200)
+    bn, _ = generate_synthetic_spbn(config, SEED)
+    prior = bn.sample(500, seed=SEED)
+    task = generate_tasks(bn, 1, ["clg"], EvidenceSpec(n_evidence=2), SEED, prior)[0]
+    reference = lw_reference(bn, task, 20_000, SEED)
+    options = {**GIBBS_DEFAULTS, "n_chains": 10, "burn_in": 5}
+    sizes = ckde_sizes(bn)
+    rows = run_method(bn, task, "RBGS", [50, 200], 0, reference, sizes, options)
+    assert [row["n_samples"] for row in rows] == [50, 200]
+    assert rows[0]["runtime"] <= rows[1]["runtime"]
+    assert rows[0]["kernel_evaluations"] <= rows[1]["kernel_evaluations"]
+    for row in rows:
+        separate = run_method(
+            bn, task, "RBGS", row["n_samples"], 0, reference, sizes, options
+        )
+        for key in ["mean", "std", "w1", "n_eff", "rhat", "mean_exact_rate"]:
+            assert row[key] == pytest.approx(separate[key], nan_ok=True)
+        assert row["kernel_evaluations"] == separate["kernel_evaluations"]

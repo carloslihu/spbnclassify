@@ -1097,7 +1097,9 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
             cov=joint_cov[np.ix_(evidence_index, evidence_index)],
         )
         rb = bn.infer(evidence=evidence, n_samples=10, seed=SEED)
-        np.testing.assert_allclose(rb["parameters"]["log_evidence"], expected, rtol=1e-8)
+        np.testing.assert_allclose(
+            rb["parameters"]["log_evidence"], expected, rtol=1e-8
+        )
         plain = bn.infer(
             evidence=evidence, n_samples=50000, seed=SEED, rao_blackwellize=False
         )
@@ -1143,6 +1145,42 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         assert without_blocks["block_moves"] is False
         assert set(with_blocks["parameters"]["block_acceptance_rate"]) == {"C"}
         assert without_blocks["parameters"]["block_acceptance_rate"] == {}
+
+    def test_infer_gibbs_checkpoints(self) -> None:
+        """Test that the checkpoints of one Gibbs run equal separate runs with the same seed, and that their runtimes grow."""
+        bn = self._toy_bn({"B": pbn.CKDEType(), "C": pbn.CKDEType()}, with_label=True)
+        kwargs = dict(
+            evidence={"D": 0.3}, method="gibbs", n_chains=10, burn_in=5, seed=SEED
+        )
+        calls = []
+        result = bn.infer(
+            **kwargs,
+            n_samples=30,
+            checkpoints=[30, 100, 200],
+            checkpoint_callback=lambda n: calls.append(n) or {"n": n},
+        )
+        assert calls == [30, 100, 200]
+        checkpoints = result["checkpoints"]
+        assert checkpoints[200]["runtime"] >= checkpoints[30]["runtime"] > 0
+        assert checkpoints[100]["callback"] == {"n": 100}
+        for n_samples in [30, 100, 200]:
+            separate = bn.infer(**kwargs, n_samples=n_samples)["parameters"]
+            parameters = checkpoints[n_samples]["parameters"]
+            pd.testing.assert_frame_equal(
+                parameters["assignments"], separate["assignments"]
+            )
+            for key in [
+                "rhat",
+                "effective_sample_size",
+                "exact_rate",
+                "acceptance_rate",
+            ]:
+                assert parameters[key] == pytest.approx(separate[key], nan_ok=True)
+        # The main results are those of the largest number of samples
+        pd.testing.assert_frame_equal(
+            result["parameters"]["assignments"],
+            checkpoints[200]["parameters"]["assignments"],
+        )
 
     def test_rao_blackwellize_clg_evidence_logl(self) -> None:
         """Test the evidence log-likelihood of Rao-Blackwellized CLG nodes against closed-form Gaussian densities."""
@@ -1259,7 +1297,8 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
 
     def test_infer_lw_without_rao_blackwellization(self) -> None:
         """Test plain likelihood weighting: every node is sampled, the weights are the evidence likelihood of all the
-        evidence nodes (LG ones included), and the posterior means converge to the brute-force reference."""
+        evidence nodes (LG ones included), and the posterior means converge to the brute-force reference.
+        """
         bn = self._toy_bn({"B": pbn.CKDEType(), "F": pbn.CKDEType()})
         evidence = {"F": 0.9, "D": 1.0}
         lw = bn.infer(
@@ -1760,9 +1799,7 @@ class TestSemiParametricBayesianNetwork(BaseTestBayesianNetwork):
         posterior_std = gs["parameters"]["posterior_std"]["X"]
         assert len(gs["parameters"]["assignments"]) == 1050
         assert isinstance(posterior_std, np.ndarray) and len(posterior_std) == 1050
-        actual = bn.posterior(
-            "X", {"K": k_value}, point, infer_dict=gs, method="gibbs"
-        )
+        actual = bn.posterior("X", {"K": k_value}, point, infer_dict=gs, method="gibbs")
         assert np.isfinite(actual) and actual > 0
 
     def test_infer_gibbs_hybrid_matches_LW(self) -> None:

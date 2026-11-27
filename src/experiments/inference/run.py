@@ -59,6 +59,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from typing import overload
 
 import numpy as np
 import pandas as pd
@@ -1299,6 +1300,7 @@ def count_kernel_evaluations():
         SemiParametricBayesianNetwork._conditional_mixture = original
 
 
+@overload
 def run_method(
     bn: SemiParametricBayesianNetwork,
     task: Task,
@@ -1308,23 +1310,169 @@ def run_method(
     reference: Reference,
     sizes: dict[str, float],
     gibbs_options: dict,
-) -> dict:
-    """Runs one inference method on one task and returns the result row:
-    runtime, kernel evaluations, posterior estimate, errors with respect to the reference and diagnostics.
+) -> dict: ...
 
-    The repetition seed is shared by all the methods, so likelihood weighting and RBLW draw the same values of the sampled variables (common random numbers) and the comparisons are paired.
+
+@overload
+def run_method(
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    method_name: str,
+    n_samples: list[int],
+    seed: int,
+    reference: Reference,
+    sizes: dict[str, float],
+    gibbs_options: dict,
+) -> list[dict]: ...
+
+
+def run_method(
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    method_name: str,
+    n_samples: int | list[int],
+    seed: int,
+    reference: Reference,
+    sizes: dict[str, float],
+    gibbs_options: dict,
+) -> dict | list[dict]:
+    """Runs one inference method on one task and returns the result row: runtime, kernel evaluations, posterior
+    estimate, errors with respect to the reference and diagnostics.
+
+    The repetition seed is shared by all the methods, so likelihood weighting and RBLW draw the same values of the
+    sampled variables (common random numbers) and the comparisons are paired.
+
+    Args:
+        bn: The network.
+        task: The task.
+        method_name: A key of ``METHODS``.
+        n_samples: Number of samples, or a list of them. With a list, a Gibbs method runs its chains once up to the
+            largest and records the results and the runtime at the others (``checkpoints`` of ``infer``), which are the
+            same as separate runs with the same seed; likelihood weighting runs once per number of samples.
+        seed: The repetition seed.
+        reference: The reference posterior of the task.
+        sizes: Kernels per CKDE-CPD (``ckde_sizes``).
+        gibbs_options: Options of the Gibbs samplers.
+
+    Returns:
+        dict | list[dict]: The result row, or one row per number of samples if ``n_samples`` is a list.
     """
+    if isinstance(n_samples, list):
+        if METHODS[method_name]["method"] != "gibbs":
+            return [
+                _run_once(
+                    bn, task, method_name, n, seed, reference, sizes, gibbs_options
+                )
+                for n in n_samples
+            ]
+        return _run_gibbs_checkpoints(
+            bn, task, method_name, n_samples, seed, reference, sizes, gibbs_options
+        )
+    return _run_once(
+        bn, task, method_name, n_samples, seed, reference, sizes, gibbs_options
+    )
+
+
+def _run_once(
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    method_name: str,
+    n_samples: int,
+    seed: int,
+    reference: Reference,
+    sizes: dict[str, float],
+    gibbs_options: dict,
+) -> dict:
+    """One run of a method with ``n_samples`` samples (see ``run_method``)."""
     spec = dict(METHODS[method_name])
-    estimator = spec.pop("estimator", "default")
-    kwargs = {"evidence": task.evidence, "n_samples": n_samples, "seed": seed, **spec}
+    kwargs = {"evidence": task.evidence, "n_samples": n_samples, "seed": seed}
     if spec["method"] == "gibbs":
         kwargs = {**gibbs_options, **kwargs}
+    spec_kwargs = {k: v for k, v in spec.items() if k != "estimator"}
     with warnings.catch_warnings(), count_kernel_evaluations() as counter:
         warnings.simplefilter("ignore", RuntimeWarning)
         start = time.perf_counter()
-        infer_dict = bn.infer(**kwargs)
+        # The options of the method (e.g., max_rejection_tries) take precedence over the Gibbs defaults,
+        infer_dict = bn.infer(**{**kwargs, **spec_kwargs})
         runtime = time.perf_counter() - start
+    return _result_row(
+        bn,
+        task,
+        method_name,
+        n_samples,
+        seed,
+        reference,
+        sizes,
+        infer_dict,
+        runtime,
+        counter[0],
+        kwargs.get("n_chains", 0),
+    )
 
+
+def _run_gibbs_checkpoints(
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    method_name: str,
+    sample_sizes: list[int],
+    seed: int,
+    reference: Reference,
+    sizes: dict[str, float],
+    gibbs_options: dict,
+) -> list[dict]:
+    """Runs a Gibbs method once up to the largest number of samples and returns one result row per number of samples,
+    from the checkpoints of the chains (see ``run_method``)."""
+    spec = {k: v for k, v in METHODS[method_name].items() if k != "estimator"}
+    kwargs = {
+        **gibbs_options,
+        "evidence": task.evidence,
+        "n_samples": max(sample_sizes),
+        "seed": seed,
+    }
+    with warnings.catch_warnings(), count_kernel_evaluations() as counter:
+        warnings.simplefilter("ignore", RuntimeWarning)
+        infer_dict = bn.infer(
+            **{**kwargs, **spec},
+            checkpoints=sample_sizes,
+            checkpoint_callback=lambda _: {"kernel_evaluations": counter[0]},
+        )
+    rows = []
+    for n_samples in sample_sizes:
+        checkpoint = infer_dict["checkpoints"][n_samples]
+        rows.append(
+            _result_row(
+                bn,
+                task,
+                method_name,
+                n_samples,
+                seed,
+                reference,
+                sizes,
+                {**infer_dict, "parameters": checkpoint["parameters"]},
+                checkpoint["runtime"],
+                checkpoint["callback"]["kernel_evaluations"],
+                kwargs["n_chains"],
+            )
+        )
+    return rows
+
+
+def _result_row(
+    bn: SemiParametricBayesianNetwork,
+    task: Task,
+    method_name: str,
+    n_samples: int,
+    seed: int,
+    reference: Reference,
+    sizes: dict[str, float],
+    infer_dict: dict,
+    runtime: float,
+    counted_kernel_evaluations: int,
+    n_chains: int,
+) -> dict:
+    """Result row of one run (see ``run_method``) from its inference results and cost."""
+    spec = METHODS[method_name]
+    estimator = spec.get("estimator", "default")
     parameters = infer_dict["parameters"]
     sampled = bn._sampled_nodes(spec["rao_blackwellize"])
     ckde_cost = sum(size for node, size in sizes.items() if node in sampled)
@@ -1333,7 +1481,7 @@ def run_method(
         kernel_evaluations = n_samples * ckde_cost
     else:
         # The chains are initialized by forward sampling with the CKDE-CPDs of pybnesian
-        kernel_evaluations = counter[0] + kwargs["n_chains"] * sum(
+        kernel_evaluations = counted_kernel_evaluations + n_chains * sum(
             size
             for node, size in sizes.items()
             if node in sampled and node not in task.evidence
@@ -1743,19 +1891,19 @@ def run_unit(
             if not _runs_on(method_name, device):
                 continue
             family = METHODS[method_name]["method"]
-            for n_samples in unit.sample_sizes[family]:
-                for rep in range(unit.n_reps):
-                    row = run_method(
-                        bn,
-                        task,
-                        method_name,
-                        n_samples,
-                        rep,
-                        reference,
-                        sizes,
-                        gibbs_options,
-                    )
-                    result_rows.append({**base, **row})
+            for rep in range(unit.n_reps):
+                # One call per repetition: a Gibbs method runs its chains once for all the sample sizes
+                rows = run_method(
+                    bn,
+                    task,
+                    method_name,
+                    list(unit.sample_sizes[family]),
+                    rep,
+                    reference,
+                    sizes,
+                    gibbs_options,
+                )
+                result_rows.extend({**base, **row} for row in rows)
 
     _finish_runs(unit, unit_path, result_rows, device, shard)
     return len(result_rows)
@@ -1965,18 +2113,17 @@ def run_classifier_unit(
             if not _runs_on(method_name, device):
                 continue
             family = METHODS[method_name]["method"]
-            for n_samples in unit.sample_sizes[family]:
-                for rep in range(unit.n_reps):
-                    result = run_method(
-                        model,
-                        task,
-                        method_name,
-                        n_samples,
-                        rep,
-                        reference,
-                        sizes,
-                        gibbs_options,
-                    )
+            for rep in range(unit.n_reps):
+                for result in run_method(
+                    model,
+                    task,
+                    method_name,
+                    list(unit.sample_sizes[family]),
+                    rep,
+                    reference,
+                    sizes,
+                    gibbs_options,
+                ):
                     probabilities = json.loads(result.pop("probabilities"))
                     result.pop("prob_error", None)
                     rows.append({**base, **result, **_scores(probabilities)})

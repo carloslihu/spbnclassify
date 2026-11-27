@@ -12,9 +12,10 @@ Description:
        networks, tasks and reference posteriors. Each experiment uses
        REFERENCE_WORKERS processes, which share the GPUs.
     2. Timed stage of each experiment ONE AFTER ANOTHER, once all the
-       references are ready: each one already uses one worker per GPU, pinned
-       to its own CPU core, so running two timed stages at once, or a timed
-       stage next to reference workers, would distort the runtimes.
+       references are ready: each one runs the LW family on one worker per GPU
+       and the Gibbs family on CPU workers, each pinned to its own core of the
+       affinity of the launcher. To run two launchers at once (timed lanes), give
+       each its own GPUs (CUDA_VISIBLE_DEVICES) and cores (taskset -c).
     3. Analysis of each experiment in the background, right after its timed
        stage (CPU only, kept off the cores of the timed workers), while the
        next timed stage runs.
@@ -114,11 +115,14 @@ run_stage() {
     return $status
 }
 
-# The timed workers are pinned to the first cores (one per GPU), so the background analyses use the others
-N_CORES=$(nproc)
+# The timed workers are pinned to the first cores of the launcher's affinity (one per GPU worker, then one per CPU
+# worker), and two timed lanes can run at once on cores 0-15 and 16-31, so the background analyses use the cores above
+# ANALYSIS_FIRST_CORE of the whole machine (nproc --all, since a lane restricts the affinity of the launcher with taskset)
+ANALYSIS_FIRST_CORE="${ANALYSIS_FIRST_CORE:-32}"
+N_CORES=$(nproc --all)
 ANALYSIS_CORES=""
-if command -v taskset > /dev/null && [ "$N_CORES" -gt 16 ]; then
-    ANALYSIS_CORES="taskset -c 16-$((N_CORES - 1))"
+if command -v taskset > /dev/null && [ "$N_CORES" -gt "$ANALYSIS_FIRST_CORE" ]; then
+    ANALYSIS_CORES="taskset -c $ANALYSIS_FIRST_CORE-$((N_CORES - 1))"
 fi
 
 # run_analysis EXPERIMENT: builds the figures and tables of an experiment
