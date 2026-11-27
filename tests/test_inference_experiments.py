@@ -691,3 +691,29 @@ def test_run_unit_split_by_device(tmp_path: Path) -> None:
     pd.testing.assert_frame_equal(split, together)
     network = json.loads((path / "network.json").read_text())
     assert "gpu_runs_device" in network and "cpu_runs_cpu_cores" in network
+
+
+def test_run_unit_cpu_shards(tmp_path: Path) -> None:
+    """Test that the CPU part split in shards of tasks gives the same results as running it at once."""
+    unit = _small_unit("shards")
+    path = tmp_path / "shards"
+    assert run_unit(unit, path, "cpu", (0, 2)) > 0
+    assert (path / "done_cpu_0of2").exists() and not (path / "done_cpu").exists()
+    assert run_unit(unit, path, "cpu", (0, 2)) == -1
+    run_unit(unit, path, "cpu", (1, 2))
+    assert (path / "done_cpu").exists() and not (path / "done").exists()
+    run_unit(unit, path, "gpu")
+    assert (path / "done").exists()
+
+    run_unit(_small_unit("shards"), tmp_path / "together")
+    columns = ["task_id", "method", "n_samples", "seed", "mean", "std", "n_eff"]
+    sharded, together = (
+        df[[c for c in columns if c in df]]
+        .sort_values(["task_id", "method", "n_samples", "seed"])
+        .reset_index(drop=True)
+        for df in (
+            pd.read_csv(path / "results.csv"),
+            pd.read_csv(tmp_path / "together" / "results.csv"),
+        )
+    )
+    pd.testing.assert_frame_equal(sharded, together)

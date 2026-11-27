@@ -63,7 +63,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pybnesian as pbn
-from scipy.special import logsumexp
+from scipy.special import logsumexp, ndtr
 from scipy.stats import norm
 
 from ...bn import SemiParametricBayesianNetwork
@@ -146,6 +146,9 @@ METHOD_DEVICE = {"lw": "gpu", "gibbs": "cpu"}
 # The timed stage uses the first cores (one per GPU worker, then one per CPU worker), and the launcher runs the analyses
 # on the others,
 TIMED_CORES = 16
+# With fewer units than CPU workers, the CPU part of a unit is split by tasks into shards, about two per worker, so the
+# units of small experiments (E2, E4) do not leave workers idle,
+SHARDS_PER_CPU_WORKER = 2
 # endregion Constants
 
 
@@ -1131,20 +1134,47 @@ def stratified_class_reference(
 
 
 # region Posterior estimates and errors
+# Phi(-CDF_REACH) < 1e-17, so the components farther than CDF_REACH scales from a grid point contribute 0 or their full
+# weight to its CDF,
+CDF_REACH = 8.5
+
+
 def _weighted_normal_cdf(
     grid: np.ndarray,
     weights: np.ndarray,
     means: np.ndarray,
     scales: np.ndarray | float,
-    chunk: int = 64,
 ) -> np.ndarray:
-    """sum_j w_j Phi((g - m_j) / s_j) at every grid point, in chunks of the grid to bound the memory"""
-    cdf = np.empty(len(grid))
+    """CDF of a weighted Gaussian mixture, sum_j w_j Phi((g - m_j) / s_j), at every grid point.
+
+    The components are sorted by mean, so each grid point only evaluates Phi for the components within ``CDF_REACH``
+    times the largest scale, and adds the total weight of the components below that window. The result equals the
+    direct sum up to 1e-17 per component.
+
+    Args:
+        grid: Points at which the CDF is evaluated.
+        weights: Normalized weights of the components.
+        means: Means of the components.
+        scales: Standard deviations of the components (one for all, or one each).
+
+    Returns:
+        np.ndarray: The CDF at every grid point.
+    """
     scales = np.broadcast_to(np.asarray(scales, dtype=float), means.shape)
-    for start in range(0, len(grid), chunk):
-        block = grid[start : start + chunk]
-        cdf[start : start + chunk] = (
-            norm.cdf((block[:, None] - means[None, :]) / scales[None, :]) @ weights
+    order = np.argsort(means, kind="stable")
+    means, weights, scales = means[order], weights[order], scales[order]
+    # Components with zero weight do not change the CDF,
+    keep = weights > 0
+    means, weights, scales = means[keep], weights[keep], scales[keep]
+    cumulative = np.concatenate([[0.0], np.cumsum(weights)])
+    reach = CDF_REACH * (float(scales.max()) if len(scales) else 0.0)
+    lows = np.searchsorted(means, grid - reach, side="left")
+    highs = np.searchsorted(means, grid + reach, side="right")
+    cdf = np.empty(len(grid))
+    for index, (point, low, high) in enumerate(zip(grid, lows, highs)):
+        window = slice(low, high)
+        cdf[index] = cumulative[low] + float(
+            ndtr((point - means[window]) / scales[window]) @ weights[window]
         )
     return cdf
 
@@ -1557,8 +1587,18 @@ def _write_atomically(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
+def _read_results(paths: list[Path]) -> pd.DataFrame:
+    """Concatenates result files, skipping the empty ones (units or shards without valid tasks)."""
+    frames = [pd.read_csv(p) for p in paths if p.stat().st_size > 1]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def _finish_runs(
-    unit: UnitSpec, unit_path: Path, rows: list[dict], device: str | None
+    unit: UnitSpec,
+    unit_path: Path,
+    rows: list[dict],
+    device: str | None,
+    shard: tuple[int, int] | None = None,
 ) -> None:
     """Writes the results of the timed stage of a unit, or of its part on ``device``.
 
@@ -1571,6 +1611,9 @@ def _finish_runs(
         unit_path: Its folder.
         rows: The result rows of the methods that ran.
         device: "cpu", "gpu" or None (every method in one process).
+        shard: (index, count) of the shard of the tasks that ran, whose rows go to ``results_<device>_<index>of<count>.csv``
+            with the marker ``done_<device>_<index>of<count>``; once every shard is done, they are concatenated in
+            ``results_<device>.csv``. None if every task ran.
     """
     if device is None:
         pd.DataFrame(rows).to_csv(unit_path / "results.csv", index=False)
@@ -1583,18 +1626,25 @@ def _finish_runs(
         )
         (unit_path / "done").touch()
         return
-    pd.DataFrame(rows).to_csv(unit_path / f"results_{device}.csv", index=False)
+    if shard is not None and shard[1] > 1:
+        index, count = shard
+        pd.DataFrame(rows).to_csv(
+            unit_path / f"results_{device}_{index}of{count}.csv", index=False
+        )
+        (unit_path / f"done_{device}_{index}of{count}").touch()
+        tags = [f"{device}_{i}of{count}" for i in range(count)]
+        if not all((unit_path / f"done_{tag}").exists() for tag in tags):
+            return
+        part = _read_results([unit_path / f"results_{tag}.csv" for tag in tags])
+        _write_atomically(unit_path / f"results_{device}.csv", part.to_csv(index=False))
+    else:
+        pd.DataFrame(rows).to_csv(unit_path / f"results_{device}.csv", index=False)
     (unit_path / f"timing_{device}.json").write_text(json.dumps(_timing_device()))
     (unit_path / f"done_{device}").touch()
     devices = _unit_devices(unit)
     if not all((unit_path / f"done_{d}").exists() for d in devices):
         return
-    frames = [
-        pd.read_csv(unit_path / f"results_{d}.csv")
-        for d in devices
-        if (unit_path / f"results_{d}.csv").stat().st_size > 1
-    ]
-    results = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    results = _read_results([unit_path / f"results_{d}.csv" for d in devices])
     _write_atomically(unit_path / "results.csv", results.to_csv(index=False))
     info = json.loads((unit_path / "network.json").read_text())
     for d in devices:
@@ -1614,7 +1664,12 @@ def _finish_runs(
     (unit_path / "done").touch()
 
 
-def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
+def run_unit(
+    unit: UnitSpec,
+    unit_path: Path,
+    device: str | None = None,
+    shard: tuple[int, int] | None = None,
+) -> int:
     """Timed stage of a unit: runs the inference methods on the tasks of ``prepare_unit`` (computing them first if
     needed) and writes ``results.csv``. The ``done`` marker is written last, so an interrupted stage is run again.
 
@@ -1623,9 +1678,12 @@ def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
         unit_path: Its folder.
         device: Run only the methods of this device ("gpu": LW family, "cpu": Gibbs family and imputation), so that both
             parts run on their own workers at the same time (see ``_finish_runs``). None runs every method.
+        shard: (index, count): run only the tasks whose position modulo ``count`` is ``index``, so the part of a unit on
+            ``device`` can be split over several workers. None runs every task.
 
     Returns:
-        int: Number of result rows (-1 if the unit, or its part on ``device``, was already done or has nothing to run).
+        int: Number of result rows (-1 if the unit, or its part on ``device``, or the shard, was already done or has
+        nothing to run).
     """
     if (unit_path / "done").exists():
         return -1
@@ -1633,10 +1691,16 @@ def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
         device not in _unit_devices(unit) or (unit_path / f"done_{device}").exists()
     ):
         return -1
+    if (
+        device is not None
+        and shard is not None
+        and (unit_path / f"done_{device}_{shard[0]}of{shard[1]}").exists()
+    ):
+        return -1
     prepare_unit(unit, unit_path)
     if unit.kind == "classifier":
-        rows = run_classifier_unit(unit, unit_path, device)
-        _finish_runs(unit, unit_path, rows, device)
+        rows = run_classifier_unit(unit, unit_path, device, shard)
+        _finish_runs(unit, unit_path, rows, device, shard)
         return len(rows)
 
     bn = _load_network(unit_path / "network.pkl")
@@ -1650,7 +1714,9 @@ def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
     gibbs_options = {**GIBBS_DEFAULTS, **unit.gibbs_options}
 
     result_rows = []
-    for task in tasks:
+    for position, task in enumerate(tasks):
+        if shard is not None and position % shard[1] != shard[0]:
+            continue
         reference = references[task.task_id]
         if unit.reference != "none" and not reference.ok:
             continue
@@ -1691,18 +1757,22 @@ def run_unit(unit: UnitSpec, unit_path: Path, device: str | None = None) -> int:
                     )
                     result_rows.append({**base, **row})
 
-    _finish_runs(unit, unit_path, result_rows, device)
+    _finish_runs(unit, unit_path, result_rows, device, shard)
     return len(result_rows)
 
 
-def run_unit_gpu(unit: UnitSpec, unit_path: Path) -> int:
+def run_unit_gpu(
+    unit: UnitSpec, unit_path: Path, shard: tuple[int, int] | None = None
+) -> int:
     """GPU part of the timed stage (LW family), see ``run_unit``."""
-    return run_unit(unit, unit_path, "gpu")
+    return run_unit(unit, unit_path, "gpu", shard)
 
 
-def run_unit_cpu(unit: UnitSpec, unit_path: Path) -> int:
+def run_unit_cpu(
+    unit: UnitSpec, unit_path: Path, shard: tuple[int, int] | None = None
+) -> int:
     """CPU part of the timed stage (Gibbs family and imputation), see ``run_unit``."""
-    return run_unit(unit, unit_path, "cpu")
+    return run_unit(unit, unit_path, "cpu", shard)
 
 
 # endregion Experiment units
@@ -1811,7 +1881,10 @@ def prepare_classifier_unit(unit: UnitSpec, unit_path: Path) -> int:
 
 
 def run_classifier_unit(
-    unit: UnitSpec, unit_path: Path, device: str | None = None
+    unit: UnitSpec,
+    unit_path: Path,
+    device: str | None = None,
+    shard: tuple[int, int] | None = None,
 ) -> list[dict]:
     """Timed stage of E7: class posterior of an SPBN classifier with features missing completely at random, estimated
     with the inference methods, and with mean and k-nearest-neighbors imputation followed by the exact class posterior
@@ -1827,6 +1900,7 @@ def run_classifier_unit(
         unit: The unit.
         unit_path: Its folder.
         device: Run only the methods of this device (the imputation baselines run on the CPU), see ``run_unit``.
+        shard: Run only the tasks of this shard, see ``run_unit``.
 
     Returns:
         list[dict]: The result rows.
@@ -1853,7 +1927,9 @@ def run_classifier_unit(
     }
 
     rows = []
-    for task in tasks:
+    for position, task in enumerate(tasks):
+        if shard is not None and position % shard[1] != shard[0]:
+            continue
         reference = references[task.task_id]
         row = test_rows.iloc[task.factors["test_row"]]
         missing = np.array([f not in task.evidence for f in network_features])
@@ -2282,12 +2358,20 @@ STAGE_FUNCTIONS = {
 
 
 def _run_stage_safely(
-    stage: str, unit: UnitSpec, unit_path: Path
+    stage: str,
+    unit: UnitSpec,
+    unit_path: Path,
+    shard: tuple[int, int] | None = None,
 ) -> tuple[str, int, str]:
+    """Runs a stage on a unit (or a shard of it), returning the traceback instead of raising."""
+    label = (
+        unit.unit_id if shard is None else f"{unit.unit_id} [{shard[0] + 1}/{shard[1]}]"
+    )
     try:
-        return unit.unit_id, STAGE_FUNCTIONS[stage](unit, unit_path), ""
+        arguments = (unit, unit_path) if shard is None else (unit, unit_path, shard)
+        return label, STAGE_FUNCTIONS[stage](*arguments), ""
     except Exception:
-        return unit.unit_id, 0, traceback.format_exc()
+        return label, 0, traceback.format_exc()
 
 
 def _safe_name(unit_id: str) -> str:
@@ -2301,6 +2385,7 @@ def _execute_stage(
     n_workers: int,
     gpus: list[str],
     cores: list[int] | None = None,
+    n_shards: int = 1,
 ) -> list[tuple[str, str]]:
     """Runs a stage on the units, in this process or with ``n_workers`` spawned processes.
 
@@ -2314,31 +2399,38 @@ def _execute_stage(
         n_workers: Parallel processes; with 1 and no ``cores``, the units run in this process.
         gpus: GPUs of the workers.
         cores: CPU cores of the workers (one each), or None to leave them unpinned.
+        n_shards: Number of shards of the tasks of each unit (timed stage only), each run as its own job.
 
     Returns:
         list[tuple[str, str]]: The failed units with their tracebacks.
     """
     label = "references" if stage == "references" else "rows"
     failures = []
+    device = stage.removeprefix("runs_")
+    jobs = []
+    for unit in units:
+        unit_path = output_path / "units" / _safe_name(unit.unit_id)
+        if n_shards <= 1:
+            jobs.append((unit, unit_path, None))
+            continue
+        for index in range(n_shards):
+            if not (unit_path / f"done_{device}_{index}of{n_shards}").exists():
+                jobs.append((unit, unit_path, (index, n_shards)))
 
     def _report(index: int, unit_id: str, count: int, error: str) -> None:
         print(
-            f"[{stage} {index + 1}/{len(units)}] {unit_id}: {count} {label}"
-            + (" FAILED" if error else "")
+            f"[{stage} {index + 1}/{len(jobs)}] {unit_id}: {count} {label}"
+            + (" FAILED" if error else ""),
+            flush=True,
         )
         if error:
             failures.append((unit_id, error))
 
-    if not units:
+    if not jobs:
         return failures
     if n_workers <= 1 and not cores:
-        for index, unit in enumerate(units):
-            _report(
-                index,
-                *_run_stage_safely(
-                    stage, unit, output_path / "units" / _safe_name(unit.unit_id)
-                ),
-            )
+        for index, (unit, unit_path, shard) in enumerate(jobs):
+            _report(index, *_run_stage_safely(stage, unit, unit_path, shard))
         return failures
 
     n_workers = max(n_workers, 1)
@@ -2359,13 +2451,8 @@ def _execute_stage(
         initargs=(slots,),
     ) as executor:
         futures = [
-            executor.submit(
-                _run_stage_safely,
-                stage,
-                unit,
-                output_path / "units" / _safe_name(unit.unit_id),
-            )
-            for unit in units
+            executor.submit(_run_stage_safely, stage, unit, unit_path, shard)
+            for unit, unit_path, shard in jobs
         ]
         for index, future in enumerate(as_completed(futures)):
             _report(index, *future.result())
@@ -2450,7 +2537,21 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
                         output_path / "units" / _safe_name(u.unit_id) / f"done_{device}"
                     ).exists()
                 ]
-                print(f"{experiment} runs on {device}: {len(part_units)} units.")
+                # The shards depend on all the units of the part, not on the pending ones, so a resumed run keeps the
+                # shards that are done,
+                n_part_units = sum(device in _unit_devices(u) for u in units)
+                n_shards = (
+                    max(
+                        1,
+                        -(-SHARDS_PER_CPU_WORKER * n_workers // max(n_part_units, 1)),
+                    )
+                    if device == "cpu"
+                    else 1
+                )
+                print(
+                    f"{experiment} runs on {device}: {len(part_units)} units"
+                    + (f", {n_shards} shards each." if n_shards > 1 else ".")
+                )
                 jobs.append(
                     threads.submit(
                         _execute_stage,
@@ -2460,6 +2561,7 @@ def run_experiment(experiment: str, args: argparse.Namespace) -> Path:
                         n_workers,
                         gpus,
                         None if args.no_pin or not cores else cores,
+                        n_shards,
                     )
                 )
             for job in jobs:
