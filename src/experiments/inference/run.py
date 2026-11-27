@@ -1930,7 +1930,20 @@ def run_unit_cpu(
 def load_dataset(
     dataset_name: str, seed: int, max_train_size: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Train and test partitions of a public dataset (continuous features and ``TRUE_CLASS_LABEL``)"""
+    """Train and test partitions of a public dataset (continuous features and ``TRUE_CLASS_LABEL``).
+
+    Of each pair of exactly collinear features (absolute correlation above ``1 - COLLINEAR_TOLERANCE`` in the training
+    partition, e.g., ``monetary`` = 250 ``frequency`` in blood_transfusion), the later one is dropped: a CPD of one given
+    the other has zero variance, which pybnesian cannot sample (it crashes the process).
+
+    Args:
+        dataset_name: Name of the public dataset.
+        seed: Seed of the partition.
+        max_train_size: Maximum training instances.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: The training and test partitions.
+    """
     handler = DataHandler.from_public_data(
         dataset_name, seed=seed, max_train_data_size=max_train_size
     )
@@ -1939,7 +1952,22 @@ def load_dataset(
     features = [c for c in train.columns if c != TRUE_CLASS_LABEL]
     train[features] = train[features].astype(float)
     test[features] = test[features].astype(float)
+    correlation = train[features].corr().abs().to_numpy()
+    collinear = {
+        features[j]
+        for i in range(len(features))
+        for j in range(i + 1, len(features))
+        if correlation[i, j] > 1 - COLLINEAR_TOLERANCE
+    }
+    if collinear:
+        train = train.drop(columns=sorted(collinear))
+        test = test.drop(columns=sorted(collinear))
     return train, test
+
+
+# Features whose absolute correlation with an earlier one is above 1 - COLLINEAR_TOLERANCE are dropped (see
+# ``load_dataset``),
+COLLINEAR_TOLERANCE = 1e-9
 
 
 CLASSIFIERS = {
@@ -2906,8 +2934,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             gibbs_sample_sizes=[100, 1_000],
         )
     if args.experiment == "E7":
-        # One stratified reference per test instance, missing rate and classifier: 10**6 samples per class keeps it affordable
-        defaults.update(n_reference=1_000_000)
+        # One stratified reference per test instance, missing rate and classifier (200 per unit): 2 * 10**5 samples per
+        # class keep it affordable, and are still far more precise than the N = 10**3 of the methods,
+        defaults.update(n_reference=200_000)
     if args.experiment == "E5":
         defaults.update(
             n_reps=5,
